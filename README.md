@@ -1,144 +1,165 @@
-# miplay-bridge
+# StereoLink 立体声链
 
-把**小米妙播（MiPlay）**上的设备变成 Windows「声音输出」列表里可以直接选择的音频端点，并提供一个网页前端 / **桌面投放面板 exe** 来查看和管理这些设备。
+把本机播放设备组合成一对左右声道：系统声音拆成左 / 右两路，分别推给两台设备（例如两只蓝牙音箱），
+同时在面板里实时显示每条链路的状态。
 
-> 用 Rust 重写。**当前唯一路线：PC 系统声音 → 本机局域网 WAV 流 → 小米云 `play_url` → 音箱自己来拉流。**
->
-> 日常使用推荐 **`miplay-bridge-desktop.exe`（桌面投放面板）**：双击打开，窗口里点投放、看连接和电平，不用开控制台。
+![StereoLink 面板](docs/images/gui.png)
 
----
+- 程序形态：单个 `stereo-link.exe`（EGUI/OpenGL 绘制），没有安装包、没有后台服务、没有网页前端。
+- 采集源是「虚拟声卡」：借机器上已有的已签名虚拟声卡（Steam Streaming Speakers）改设备显示名，
+  Windows 输出列表里出现 **「扬声器 (立体声链设备)」**。任何播放器都不用单独配置。
+- 底层是用户态 WASAPI 实现，不装内核驱动、不留系统服务。
 
-## 路线决定（2026-10-17）
+## 这是什么、怎么工作
 
-用户原话：
+```text
+        Windows 播放器（浏览器 / 音乐播放器 / 视频 / 游戏 …）
+                          │  默认输出 = 「扬声器 (立体声链设备)」
+                          ▼
+        虚拟声卡端点（借用 Steam Streaming Speakers，只改显示名）
+                          │  WASAPI loopback 采集
+                          │  44.1 kHz / 2 ch / 16 bit
+                          ▼
+                   StereoLink 路由引擎
+                    ├── 左声道 → 设备 A（如 Xiaomi Sound-1695）  ≈10 ms 一块
+                    └── 右声道 → 设备 B（如 Xiaomi Sound-5320）
+```
 
-> 不使用AirPlay,使用小米妙播,AirPlay的延迟高,放弃AirPlay的路线,仅使用小米妙播的路线
+- **左 / 右分离**：左声道整份送给设备 A，右声道整份送给设备 B。两路各自独立起流、独立失败：
+  一台设备掉线不影响另一台。
+- **任意本机播放设备**：蓝牙音箱、USB 声卡、耳机、HDMI 输出都可以，只要出现在「本机播放设备」
+  列表里；左右各选一台即可（引擎本身支持任意多路，也支持「双声道混音」单只音箱听完整节目）。
+- **自动切默认输出**：开始路由时自动把 Windows 默认输出切到虚拟声卡，正常退出时切回原设备；
+  面板上也有「切为默认输出 / 恢复原输出」按钮，可关掉自动切换。
+- **虚拟声卡改名**：面板里直接改名字（默认「立体声链设备」），会弹 UAC 提权、写设备名并重启
+  `AudioEndpointBuilder`（约 2–4 秒音频中断），改名前自动备份到 `scripts\backups\`。
+- **播放设备格式设置**：每台设备都可以在面板里直接选采样率 / 位深（44.1 / 48 / 96 kHz，
+  16 / 24 / 32 bit）。选中即生效：不用管理员、不用重启音频服务、不写注册表，改完立刻读回校验。
+- **实测反馈**：每路实时电平、累计发送量、欠载次数；左右自检音；增益、抖动缓冲、左右微调延迟
+  都在面板里可调。
+- **诊断与日志**：面板内置诊断清单（虚拟声卡、默认输出、路由状态等），可一键复制；内嵌日志面板
+  方便排障。
 
-| 路线 | 状态 |
-| --- | --- |
-| LAN 直推 MiPlay 私有协议 | ❌ 不可行（账号绑定的 Lyra / Mi Connect v3 信任层） |
-| RAOP / AirPlay 2 直达 | ❌ **用户否决**（延迟高）。代码保留归档，不再演进 |
-| **云 `play_url` + 本机 HTTP 流** | ✅ **唯一路线**，已人耳确认出声 |
+当前状态：Windows 10 / 11 x64，Rust 1.82+。
 
-详见 `docs/architecture.md`。
+## 延迟
 
-## 目标
+软件侧固定开销约 **80 ms**：抖动缓冲 40 ms + 每路渲染缓冲 40 ms（都可在面板里调小）。剩下的是
+设备/链路自己的延迟：
 
-1. **低延迟** —— 把「PC 出声」到「音箱出声」的延迟压到可接受范围。**当前正在实测拆解各分量**（`research/latency/`）。
-2. **Windows 原生音频端点** —— 妙播设备以独立播放设备出现在 `设置 → 系统 → 声音 → 输出`。
-3. **网页前端** —— 浏览器里查看账号下的妙播设备、在线状态、音量、当前播放，并能直接投放/停止。
-4. **小米账号登录** —— 支持复用已有凭据 / 扫码登录 / 账密登录，凭据本地保存且**绝不入库**。
-
-## 当前状态
-
-| 模块 | 内容 | 状态 |
+| 链路 | 端到端延迟（估计） | 适合 |
 | --- | --- | --- |
-| P0 | 项目骨架、git 版本控制 | ✅ |
-| P0 | 小米云 MiNA 客户端（设备发现 / `play_by_url` / 音量 / ubus）Rust 移植 | ✅ 12 测试 |
-| P0 | 网页前端（设备卡片 + 播放状态 + 音量） | ✅ |
-| P1 | **系统音频回环采集 + 环形缓冲 + 声道分发**（`crates/miplay-audio`） | ✅ 121 测试全绿 |
-| P1 | 虚拟音频端点调研（`research/vad/`） | ✅ 结论明确 |
-| P1 | MiPlay 协议可行性（`research/miplay/`） | ✅ 不可行，已否决 |
-| P1 | 音箱局域网通路探测（`research/lan/`） | ✅ 结论明确 |
-| P2 | **妙播拉流 hub 产品化**（`hub` 子命令 + 网页控制） | 🚧 task-15 |
-| P2 | **延迟实测与瓶颈拆解** | 🚧 task-14 |
-| P2 | **桌面投放面板**（`crates/miplay-desktop`，单 exe = GUI + hub 引擎） | ✅ 真机投放出声 / 28 测试 |
-| P1 | **蓝牙左右分离低延迟模式**（虚拟声卡回环 → 左/右两条 A2DP，≈0.2–0.35s） | ✅ 真机左右声道人耳验证 / 58 音频测试 |
-| P2 | 虚拟端点产品化（零驱动改名 / 自签驱动） | ⏸ 非主路径，待定 |
-| — | ~~AirPlay 2 发送端（`crates/miplay-airplay`）~~ | 📦 已归档 |
+| 蓝牙 A2DP 直连（两只音箱各一路） | 约 0.2–0.35 s | 看视频、听歌、网课 |
+| USB / 有线声卡 | 约 0.08–0.15 s | 看视频、游戏（取决于设备） |
+| 同一对音箱的蓝牙「立体声组合」 | 约 0.2–0.35 s | 只能单房间、且两只箱必须组队 |
+| 游戏 < 0.1 s | 需要有线耳机/声卡 | 蓝牙物理上做不到 |
+
+想在面板里自己量：点「左右自检音」，两只箱会分别响不同频率；看面板上每路电平和欠载次数。
+
+## 快速开始
+
+1. **安装虚拟声卡**（只需一次，管理员权限）：右键仓库根目录的 `安装虚拟声卡.cmd` →
+   「以管理员身份运行」，UAC 确认。成功后「设置 → 系统 → 声音 → 输出」出现
+   「扬声器 (立体声链设备)」。
+2. **把两台播放设备连到本机**：蓝牙音箱在「设置 → 蓝牙和设备」里配对连接；USB 声卡/耳机插上即可。
+3. **双击 `stereo-link.exe`**（或 `dist\stereo-link.exe`）。
+4. 在「本机播放设备」表里给左右声道各选一台设备 → 点「开始路由」。面板会自动把 Windows 默认
+   输出切到虚拟声卡，此时播放器的声音就会流进虚拟声卡、被拆成左右两路。
+5. 需要还原环境时点「停止」或正常关闭面板：路由停止、默认输出切回原来的设备。
+
+> 改名/改格式都会动系统音频设备，第一次操作会弹 UAC。取消 UAC 不会破坏任何东西。
+
+## 构建
+
+```powershell
+cargo build --release -p stereo-link
+# 产物：target\release\stereo-link.exe（约 10 MB）
+```
+
+需要 Rust 1.82+（MSVC 工具链）。`cargo test --workspace` 跑全部单元测试。
+
+## 配置与数据路径
+
+| 路径 | 内容 |
+| --- | --- |
+| `%APPDATA%\stereo-link\config.json` | 面板配置（没有 `APPDATA` 时落在 exe 同目录） |
+| `%TEMP%\stereo-link\switch-audio-default.ps1` | 切换默认输出用的临时脚本（从程序内嵌释放） |
+| `scripts\backups\` | 虚拟声卡改名前的注册表备份 |
+| `C:\Windows\System32\drivers\SteamStreamingSpeakers.sys` | 借用的虚拟声卡驱动本体（Steam 安装） |
+
+`config.json` 主要字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `split.left_endpoint` / `split.right_endpoint` | 左 / 右声道目标端点（名字子串） |
+| `split.source_endpoint` | 采集源；空 = 自动找虚拟声卡端点 |
+| `split.gain` | 增益（0.0–2.0，默认 1.0） |
+| `split.queue_ms` | 每路预排队音频长度（抖动缓冲，毫秒） |
+| `split.left_delay_ms` / `split.right_delay_ms` | 左 / 右额外延迟（0–500 ms，用于对齐两只音箱） |
+| `virtual_card.name` | 虚拟声卡设备名（默认「立体声链设备」） |
+| `virtual_card.endpoint_id` | 记住的虚拟声卡端点 id；改名后靠它继续识别（一般不用手改） |
+| `virtual_card.auto_switch_default` | 开始路由时是否自动把默认输出切成虚拟声卡 |
+| `virtual_card.previous_output` | 切换前的默认输出端点 id，用于退出时切回 |
+| `show_log` / `tone_seconds` / `auto_start` | 日志面板、自检音时长、启动时自动开始路由 |
+
+`scripts\backups\` 里的备份包含本机的设备实例路径，属于本机数据，不要提交到仓库或外传。
+
+## 故障排查
+
+| 现象 | 处理 |
+| --- | --- |
+| 输出列表里没有「扬声器 (立体声链设备)」 | 管理员运行 `安装虚拟声卡.cmd`；若已运行过，打开「设备管理器 → 声音、视频和游戏控制器」确认 Steam Streaming Speakers 存在且已启用 |
+| 面板提示「默认输出未切换」 | 点「虚拟声卡」区的「切为默认输出」；被其他程序独占或权限不足时也会失败，稍后重试 |
+| 改了虚拟声卡名字后输出列表没变 | 点「刷新设备」；改名需要 UAC 提权，取消会回滚，日志里能看到失败原因（音频服务重启约 2–4 秒） |
+| 改播放设备格式后没声音 / 声音异常 | 设备不支持该格式时可能自动回退或短时无声；把该行的格式下拉框选回原值即可（不写注册表，无需备份） |
+| 只有一边有声 | 检查左 / 右声道选的是不是两台不同设备；看对应电平条是否在动；点「左右自检音」分别确认 |
+| 声音断续、电平抖动 | 把「抖动缓冲」从 40 ms 往上调；缩短蓝牙距离、避开 2.4 GHz 干扰；蓝牙带宽不够时先断开其它蓝牙设备 |
+| 退出后默认输出没恢复 | 只有正常退出面板才会恢复；异常退出（崩溃 / 任务管理器结束）请在「设置 → 系统 → 声音」里手动切回 |
+| 想恢复虚拟声卡原来的名字 | 管理员运行 `卸载虚拟声卡.cmd`。它会用 `scripts\backups\` 里最早的备份回滚；找不到备份时删掉设备名，恢复为 Steam Streaming Speakers |
+| 看视频延迟明显 | 蓝牙链路固有延迟（≈0.2–0.35 s，取决于音箱固件），软件侧已压到约 80 ms；要求更低改用有线输出 |
 
 ## 目录结构
 
-```
-miplay-bridge/
-├─ crates/
-│  ├─ miplay-core/      # 设备模型、小米账号凭据、MiNA 云 API 客户端
-│  ├─ miplay-audio/     # WASAPI 回环采集、RingBuffer、声道分发、WAV 头
-│  ├─ miplay-airplay/   # AirPlay 2 发送端（📦 已归档，不再演进）
-│  ├─ miplay-desktop/   # 桌面投放面板（eframe/egui；单 exe = GUI + hub 引擎）
-│  └─ miplay-server/    # 主程序：CLI + HTTP API + 静态前端 + hub 引擎
-├─ web/                 # 网页前端（零构建依赖的静态页面）
-├─ docs/                # 架构决策、API 参考、端到端与防火墙说明
-├─ research/            # 技术调研（vad / miplay / lan / airplay / latency）
-├─ poc/zero-driver/     # 零驱动兜底 PoC（端点改名 + 回环采集 + 云推流）
-├─ drivers/             # 自签虚拟音频驱动（Scream 派生，装得上但加载不了）
-└─ tools/               # 一次性辅助脚本
+```text
+stereo-link.exe            面板入口（crates/stereo-link）
+crates/
+├─ stereo-link/            GUI：面板、配置、虚拟声卡改名、默认输出切换
+│  └─ src/app.rs           主界面（EGUI）
+└─ stereo-audio/           音频库（无 GUI 依赖）
+   ├─ src/route.rs         多路声道路由引擎（左/右/双声道，任意多路）
+   ├─ src/capture.rs       WASAPI 回环采集
+   ├─ src/playback.rs      WASAPI 播放（自检音、默认输出切换）
+   ├─ src/endpoint.rs      端点枚举 / 设备选择器 / PcmFormat
+   ├─ src/endpoint_format.rs  设备格式读写（IPolicyConfig）
+   ├─ src/btsplit.rs       早期的「固定左右两路」实现（保留兼容）
+   └─ src/ring.rs          环形缓冲 / 低延迟读
+scripts/
+├─ switch-audio-default.ps1  切 Windows 默认输出（IPolicyConfig，内嵌进程序）
+├─ gui-set-name.ps1          面板改名用：写设备名 + 重启 AudioEndpointBuilder
+├─ rename-endpoint.ps1       等价的命令行改名脚本（含 disable/enable、备份/回滚）
+└─ backups/                  改名前的注册表备份（本机数据，勿提交）
+安装虚拟声卡.cmd / 卸载虚拟声卡.cmd   虚拟声卡的安装 / 卸载入口（需管理员）
+docs/gui.md                 面板手册（界面、操作、改名/改格式、FAQ）
+docs/virtual-soundcard.md   虚拟声卡原理、安装、卸载、FAQ
 ```
 
-## 构建与运行
-
-需要 Rust 1.82+（本机已验证 1.99.0）。
+## 开发与测试
 
 ```powershell
-cargo build --workspace
-cargo run -q -p miplay-server -- devices        # 列出账号下的妙播设备
-cargo run -q -p miplay-server -- serve --port 8901   # 网页前端
-cargo build --release -p miplay-desktop        # 桌面投放面板 exe
+cargo test --workspace                      # 单元测试
+cargo run -p stereo-audio --bin endpoints   # 列出本机所有音频端点
+cargo run -p stereo-audio --example route_demo -- --left "Xiaomi Sound-1695" --right "Xiaomi Sound-5320"
 ```
 
-网页前端默认 `http://127.0.0.1:8900`（`serve` 默认端口），`serve --port 8901` 可改。
+`route_demo` 是路由引擎的命令行自检：可选 `--both`（双声道混音）、`--source`（采集源子串）、
+`--tone-to`（测试音播到哪台）、`--manual`（不自动播音，等外部声音）。
 
-## 桌面投放面板（推荐日常使用）
+## 历史
 
-```
-cargo build --release -p miplay-desktop
-# 双击 target\release\miplay-bridge-desktop.exe
-```
+本仓库早期是 `miplay-bridge`：把系统声音通过小米妙播云 API 投放到小米音箱（含 AirPlay 2 发送端）。
+妙播云路线 PC 侧延迟约 0.25 s、但音箱固件内部缓冲接近 1 s，压不下来；AirPlay 2 在本机设备上
+能建流但渲染静音，故都已被移除。现在只保留「本机音频设备左右分声道」这条纯用户态路线。
 
-一个 exe 里同时跑 GUI 和 hub 引擎：窗口开着 = 8931 在监听 = 播放器随时放歌都有声音。
-面板里可以投放/停止、看每台设备的在线/连接/延迟/已发流量、实时左右电平、日志，以及端口/增益/音量/
-左右分离/采集端点等设置；关窗口会先让云端 stop 再关流。
+## 许可证
 
-**延迟怎么降**：妙播链路约 1 秒（PC 侧只占 ~0.25s，其余在音箱固件内部，压不下去）。
-看视频请用面板顶部的 **「蓝牙左右分离」模式**：两台小米 Sound 各自蓝牙连到电脑，面板把系统声音拆成
-左/右声道分别推给两台音箱，延迟 **≈0.2–0.35 秒**，单房间看视频/直播够用；游戏要 <100ms 只能有线。
-面板会**自动把 Windows 默认输出切到虚拟声卡**（正常关窗自动切回原输出），也可以手动点「默认输出→虚拟声卡」。
-设备可单独「排除」（默认排除小爱音箱Play增强版）。
-
-详细说明（架构、配置、排障、四种输出模式的延迟对比）见 [`docs/desktop-gui.md`](docs/desktop-gui.md)。
-
-## 凭据
-
-程序默认从下面这些位置按顺序查找小米账号凭据（只读）：
-
-1. `%USERPROFILE%\conf\.mi.token`
-2. `%APPDATA%\miplay-bridge\.mi.token`
-3. 环境变量 `MIPLAY_TOKEN` / `MIPLAY_TOKEN_FILE`
-
-凭据文件格式与 [MiService](https://github.com/Yonsm/MiService) / MiXPlay 兼容：
-
-```json
-{
-  "deviceId": "…",
-  "userId": "…",
-  "passToken": "V1:…",
-  "micoapi": ["<ssecurity>", "<serviceToken>"]
-}
-```
-
-> ⚠️ 这个文件里是**明文**凭据。本仓库的 `.gitignore` 已把它排除，请勿手动提交。
-
-## 网络要求
-
-**Windows 防火墙必须为发送端进程放行 UDP 入站**，否则 AirPlay 路径会卡在 SETUP 超时
-（历史结论，见 `docs/firewall-requirement.md`）。妙播拉流路径需要放行 **TCP 入站**（音箱来拉流）。
-
-## 参考项目与许可证
-
-| 项目 | 用途 | 许可证 |
-| --- | --- | --- |
-| [MiService](https://github.com/Yonsm/MiService) (`miservice`) | 小米云 API 的权威参考实现 | MIT |
-| [MiXPlay](https://github.com/juneix/MiXPlay) | 妙播桥接、音箱控制、架构参考 | MIT |
-| [FusionPlay-Android](https://github.com/rosienosiesie/FusionPlay-Android) | MiPlay 协议参考文献 | **AGPL-3.0（只读参考，禁止抄代码）** |
-| [Scream](https://github.com/duncanthrax/scream) | 虚拟声卡驱动派生（`drivers/`） | MS-PL |
-
-本项目的原创代码采用 MIT OR Apache-2.0。
-
-## 与 MiXPlay 的关系
-
-MiXPlay 是一个成熟的同类项目（Python + Rust sidecar），本项目**复用它的经验、但不复用它的进程**：
-MiXPlay 让 PC 变成 AirPlay/妙播/DLNA 的**接收端**；本项目的方向相反 ——
-让 PC 把音频**送出去**，并且以 Windows 音频端点的形式暴露。
-
-> 注意：早期验证阶段依赖 MiXPlay 的 `POST /api/v1/control/play` 代发云指令；
-> 产品化后（task-15）改为**直接用 `miplay-core` 的 `MiNA play_by_url`**，不再需要 MiXPlay 在跑。
+MIT。

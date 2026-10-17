@@ -25,10 +25,6 @@ config.local.toml
 !assets/**/*.wav
 !crates/**/tests/fixtures/**/*.wav
 
-# ---------- 前端 ----------
-web/node_modules/
-web/dist/
-
 # ---------- 编辑器 / 系统 ----------
 .vscode/
 .idea/
@@ -36,26 +32,15 @@ web/dist/
 Thumbs.db
 desktop.ini
 
-# ---------- 研究资料里的临时克隆 ----------
-research/**/vendor/
-research/**/.cloned/
-
-# ---------- Python 探测脚本产物 ----------
+# ---------- Python 探针产物 ----------
 __pycache__/
 *.pyc
 *.pyo
 .venv/
 
-# ---------- 内核驱动构建/签名产物（由 drivers/build.ps1 + sign.ps1 再生） ----------
-# 私钥永远只在 %TEMP%，仓库里只有公钥 .cer（drivers/certs/）。
-drivers/out/
-drivers/pkg/*.sys
-drivers/pkg/*.cat
+# ---------- 虚拟声卡改名的本机备份（含本机设备实例路径） ----------
+scripts/backups/
 
-# ---------- 注册表/端点备份中的本机实例标识 ----------
-# 备份 .reg 会带上本机设备实例路径，保留（审计需要）；但排除临时导出。
-research/**/*.tmp.reg
-
-# ---------- 桌面面板：本地验证产物 / GUI 探针 ----------
+# ---------- 面板调试/验证产物 ----------
 /.scratch/
-/tools/gui-probe/
+/tools/

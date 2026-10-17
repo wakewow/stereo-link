@@ -1,32 +1,25 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/miplay-core",
-    "crates/miplay-server",
-    "crates/miplay-audio",
-    "crates/miplay-airplay",
-    "crates/miplay-desktop",
+    "crates/stereo-audio",
+    "crates/stereo-link",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT OR Apache-2.0"
-repository = "https://example.invalid/miplay-bridge"
-description = "把小米妙播设备变成 Windows 音频输出端点"
+repository = "https://example.invalid/stereo-link"
+description = "StereoLink 立体声链：用虚拟声卡把本机任意音频设备组合成左右声道立体声"
 
 [workspace.dependencies]
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-reqwest = { version = "0.12", features = ["json", "gzip"] }
-axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 
 [profile.release]
 lto = "thin"

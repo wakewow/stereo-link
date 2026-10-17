@@ -1,7 +1,7 @@
 # Switch the Windows default audio output endpoint (classic IPolicyConfig COM trick).
 #
 # This script is shipped inside the desktop panel (embedded with include_str! and written
-# to %TEMP%\miplay-desktop\switch-audio-default.ps1 at runtime), so keep it ASCII-only:
+# to %TEMP%\stereo-link\switch-audio-default.ps1 at runtime), so keep it ASCII-only:
 # Windows PowerShell 5.1 reads BOM-less files as ANSI, and non-ASCII comments break parsing.
 #
 # Usage:
@@ -12,7 +12,7 @@ param(
     [string]$Id = '',
     [string]$NameLike = '',
     [switch]$List,
-    [string]$EndpointsExe = 'E:\AI\MiPlay\target\debug\endpoints.exe'
+    [string]$EndpointsExe = (Join-Path $PSScriptRoot '..\target\debug\endpoints.exe')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,7 +21,7 @@ $cs = @'
 using System;
 using System.Runtime.InteropServices;
 
-namespace MiPlayAudioSwitch {
+namespace StereoLinkAudioSwitch {
     [ComImport, Guid("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9")]
     internal class CPolicyConfigClient { }
 
@@ -56,7 +56,7 @@ Add-Type -TypeDefinition $cs
 
 function Get-RenderEndpoints {
     if (-not (Test-Path $EndpointsExe)) {
-        throw "endpoints.exe not found: $EndpointsExe (build it with: cargo build -p miplay-audio --bin endpoints)"
+        throw "endpoints.exe not found: $EndpointsExe (build it with: cargo build -p stereo-audio --bin endpoints)"
     }
     $text = (& $EndpointsExe 2>&1 | Out-String)
     $result = @()
@@ -71,7 +71,7 @@ function Get-RenderEndpoints {
 }
 
 if ($Id) {
-    [MiPlayAudioSwitch.Switcher]::SetDefault($Id)
+    [StereoLinkAudioSwitch.Switcher]::SetDefault($Id)
     "Default output set to: $Id"
     exit 0
 }
@@ -94,6 +94,6 @@ if (-not $match) {
     $devices | Sort-Object Name | ForEach-Object { "  {0}  <-  {1}" -f $_.Name, $_.Id }
     exit 1
 }
-[MiPlayAudioSwitch.Switcher]::SetDefault($match.Id)
+[StereoLinkAudioSwitch.Switcher]::SetDefault($match.Id)
 "Default output set to: $($match.Name)"
 "Device id: $($match.Id)"
