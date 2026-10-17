@@ -1,0 +1,33 @@
+{
+  "target": "192.168.1.21",
+  "host": {
+    "t_mic_launch": 1792247124.2627356,
+    "t_click1": 1792247126.4673302,
+    "t_click2": 1792247128.230617,
+    "t_call": 1792247129.6448562,
+    "t_stream_done": 1792247134.0542822,
+    "t_record_from_log": 1792247130.042,
+    "record_minus_call_s": 0.397
+  },
+  "mic": {
+    "rate": 48000,
+    "duration_s": 10.983,
+    "click1_s": null,
+    "click2_s": null,
+    "tone_onset_s": null,
+    "noise_floor": 0.04933873274045747
+  },
+  "measured": {},
+  "checks": {},
+  "declared": {
+    "latencyMin_frames": 11025,
+    "latencyMax_frames": 88200,
+    "sr": 44100,
+    "spf": 352,
+    "audioFormat": 2048,
+    "latencyMin_ms": 250.0,
+    "latencyMax_ms": 2000.0
+  },
+  "volume_restored": 33.0,
+  "fatal": "TypeError(\"object set can't be used in 'await' expression\")"
+}

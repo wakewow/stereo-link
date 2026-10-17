@@ -1,0 +1,587 @@
+{
+ "rate": 48000,
+ "tone_sec": 6.0,
+ "rounds": 1,
+ "steam_rounds": 5,
+ "filter": "",
+ "service_before": {
+  "ts": 1792248013.2614243,
+  "ts_iso": "2026-10-17T22:40:13",
+  "services": "Steam Client Service=Stopped",
+  "steam_procs": "0",
+  "services_raw": null,
+  "steamclient": "Steam Client Service=Stopped",
+  "steam_exe": "steam* procs=0"
+ },
+ "service_after": {
+  "ts": 1792248175.6535645,
+  "ts_iso": "2026-10-17T22:42:55",
+  "services": "Steam Client Service=Stopped",
+  "steam_procs": "0",
+  "services_raw": null,
+  "steamclient": "Steam Client Service=Stopped",
+  "steam_exe": "steam* procs=0"
+ },
+ "results": {
+  "CG345UK (NVIDIA High Definition Audio) -> CG345UK (NVIDIA High Definition Audio) [loopback]": {
+   "rounds": [
+    {
+     "capture": "CG345UK (NVIDIA High Definition Audio)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 9.515,
+     "blocks": 446,
+     "tone_dbfs": -14.69,
+     "peak_dbfs": -14.69,
+     "noise_dbfs": -180.0,
+     "latency_ms": 16.5,
+     "dropout_ratio": 0.0024,
+     "max_recv_gap_ms": 41.7,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.4,
+     "tone_wall_sec": 8.955,
+     "round": 1,
+     "ts_iso": "2026-10-17T22:40:23",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    }
+   ],
+   "n_rounds": 1,
+   "is_loopback": true,
+   "tone_dbfs_all": [
+    -14.69
+   ],
+   "latency_ms_all": [
+    16.5
+   ],
+   "dropout_all": [
+    0.0024
+   ],
+   "detected_all": [
+    true
+   ]
+  },
+  "X41 (NVIDIA High Definition Audio) -> X41 (NVIDIA High Definition Audio) [loopback]": {
+   "rounds": [
+    {
+     "capture": "X41 (NVIDIA High Definition Audio)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 9.579,
+     "blocks": 449,
+     "tone_dbfs": -16.61,
+     "peak_dbfs": -16.61,
+     "noise_dbfs": -180.0,
+     "latency_ms": 67.9,
+     "dropout_ratio": 0.0024,
+     "max_recv_gap_ms": 41.6,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.37,
+     "tone_wall_sec": 8.946,
+     "round": 1,
+     "ts_iso": "2026-10-17T22:40:33",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    }
+   ],
+   "n_rounds": 1,
+   "is_loopback": true,
+   "tone_dbfs_all": [
+    -16.61
+   ],
+   "latency_ms_all": [
+    67.9
+   ],
+   "dropout_all": [
+    0.0024
+   ],
+   "detected_all": [
+    true
+   ]
+  },
+  "扬声器 (Steam Streaming Speakers) -> 扬声器 (Steam Streaming Speakers) [loopback]": {
+   "rounds": [
+    {
+     "capture": "扬声器 (Steam Streaming Speakers)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 9.963,
+     "blocks": 467,
+     "tone_dbfs": -20.83,
+     "peak_dbfs": -20.83,
+     "noise_dbfs": -180.0,
+     "latency_ms": 7.0,
+     "dropout_ratio": 0.0,
+     "max_recv_gap_ms": 41.7,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.77,
+     "tone_wall_sec": 9.367,
+     "round": 1,
+     "ts_iso": "2026-10-17T22:40:43",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    }
+   ],
+   "n_rounds": 1,
+   "is_loopback": true,
+   "tone_dbfs_all": [
+    -20.83
+   ],
+   "latency_ms_all": [
+    7.0
+   ],
+   "dropout_all": [
+    0.0
+   ],
+   "detected_all": [
+    true
+   ]
+  },
+  "扬声器 (Steam Streaming Microphone) -> 扬声器 (Steam Streaming Microphone) [loopback]": {
+   "rounds": [
+    {
+     "capture": "扬声器 (Steam Streaming Microphone)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 9.6,
+     "blocks": 450,
+     "tone_dbfs": -17.45,
+     "peak_dbfs": -17.45,
+     "noise_dbfs": -180.0,
+     "latency_ms": 28.0,
+     "dropout_ratio": 0.0,
+     "max_recv_gap_ms": 53.1,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.39,
+     "tone_wall_sec": 8.976,
+     "round": 1,
+     "ts_iso": "2026-10-17T22:40:53",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    },
+    {
+     "capture": "扬声器 (Steam Streaming Microphone)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 9.579,
+     "blocks": 449,
+     "tone_dbfs": -17.45,
+     "peak_dbfs": -17.45,
+     "noise_dbfs": -180.0,
+     "latency_ms": 12.8,
+     "dropout_ratio": 0.0,
+     "max_recv_gap_ms": 41.4,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.39,
+     "tone_wall_sec": 8.996,
+     "round": 2,
+     "ts_iso": "2026-10-17T22:41:03",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    },
+    {
+     "capture": "扬声器 (Steam Streaming Microphone)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 10.069,
+     "blocks": 472,
+     "tone_dbfs": -17.45,
+     "peak_dbfs": -17.45,
+     "noise_dbfs": -180.0,
+     "latency_ms": 7.8,
+     "dropout_ratio": 0.0,
+     "max_recv_gap_ms": 41.5,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.88,
+     "tone_wall_sec": 9.488,
+     "round": 3,
+     "ts_iso": "2026-10-17T22:41:14",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    },
+    {
+     "capture": "扬声器 (Steam Streaming Microphone)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 10.091,
+     "blocks": 473,
+     "tone_dbfs": -17.45,
+     "peak_dbfs": -17.45,
+     "noise_dbfs": -180.0,
+     "latency_ms": 8.7,
+     "dropout_ratio": 0.0,
+     "max_recv_gap_ms": 50.8,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.9,
+     "tone_wall_sec": 9.497,
+     "round": 4,
+     "ts_iso": "2026-10-17T22:41:24",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    },
+    {
+     "capture": "扬声器 (Steam Streaming Microphone)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 9.579,
+     "blocks": 449,
+     "tone_dbfs": -17.45,
+     "peak_dbfs": -17.45,
+     "noise_dbfs": -180.0,
+     "latency_ms": 9.5,
+     "dropout_ratio": 0.0,
+     "max_recv_gap_ms": 49.7,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.4,
+     "tone_wall_sec": 8.994,
+     "round": 5,
+     "ts_iso": "2026-10-17T22:41:34",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    }
+   ],
+   "n_rounds": 5,
+   "is_loopback": true,
+   "tone_dbfs_all": [
+    -17.45,
+    -17.45,
+    -17.45,
+    -17.45,
+    -17.45
+   ],
+   "latency_ms_all": [
+    28.0,
+    12.8,
+    7.8,
+    8.7,
+    9.5
+   ],
+   "dropout_all": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "detected_all": [
+    true,
+    true,
+    true,
+    true,
+    true
+   ]
+  },
+  "扬声器 (UU远程虚拟音频设备) -> 扬声器 (UU远程虚拟音频设备) [loopback]": {
+   "rounds": [
+    {
+     "capture": "扬声器 (UU远程虚拟音频设备)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 9.579,
+     "blocks": 449,
+     "tone_dbfs": -12.04,
+     "peak_dbfs": -12.04,
+     "noise_dbfs": -180.0,
+     "latency_ms": 18.6,
+     "dropout_ratio": 0.0,
+     "max_recv_gap_ms": 41.5,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.4,
+     "tone_wall_sec": 8.985,
+     "round": 1,
+     "ts_iso": "2026-10-17T22:41:44",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    }
+   ],
+   "n_rounds": 1,
+   "is_loopback": true,
+   "tone_dbfs_all": [
+    -12.04
+   ],
+   "latency_ms_all": [
+    18.6
+   ],
+   "dropout_all": [
+    0.0
+   ],
+   "detected_all": [
+    true
+   ]
+  },
+  "耳机 (Chu2 DSP) -> 耳机 (Chu2 DSP) [loopback]": {
+   "rounds": [
+    {
+     "capture": "耳机 (Chu2 DSP)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 9.579,
+     "blocks": 449,
+     "tone_dbfs": -12.04,
+     "peak_dbfs": -12.04,
+     "noise_dbfs": -180.0,
+     "latency_ms": 22.4,
+     "dropout_ratio": 0.0012,
+     "max_recv_gap_ms": 41.6,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.4,
+     "tone_wall_sec": 8.998,
+     "round": 1,
+     "ts_iso": "2026-10-17T22:41:54",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    }
+   ],
+   "n_rounds": 1,
+   "is_loopback": true,
+   "tone_dbfs_all": [
+    -12.04
+   ],
+   "latency_ms_all": [
+    22.4
+   ],
+   "dropout_all": [
+    0.0012
+   ],
+   "detected_all": [
+    true
+   ]
+  },
+  "扬声器 (Realtek High Definition Audio) -> 扬声器 (Realtek High Definition Audio) [loopback]": {
+   "rounds": [
+    {
+     "capture": "扬声器 (Realtek High Definition Audio)",
+     "loopback": true,
+     "channels": 2,
+     "error": null,
+     "seconds": 9.579,
+     "blocks": 449,
+     "tone_dbfs": -12.04,
+     "peak_dbfs": -12.04,
+     "noise_dbfs": -180.0,
+     "latency_ms": 18.6,
+     "dropout_ratio": 0.0012,
+     "max_recv_gap_ms": 41.3,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.4,
+     "tone_wall_sec": 8.988,
+     "round": 1,
+     "ts_iso": "2026-10-17T22:42:04",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    }
+   ],
+   "n_rounds": 1,
+   "is_loopback": true,
+   "tone_dbfs_all": [
+    -12.04
+   ],
+   "latency_ms_all": [
+    18.6
+   ],
+   "dropout_all": [
+    0.0012
+   ],
+   "detected_all": [
+    true
+   ]
+  },
+  "扬声器 (Steam Streaming Microphone) -> 麦克风 (Steam Streaming Microphone)": {
+   "rounds": [
+    {
+     "capture": "麦克风 (Steam Streaming Microphone)",
+     "loopback": false,
+     "channels": 1,
+     "error": null,
+     "seconds": 9.579,
+     "blocks": 449,
+     "tone_dbfs": -38.93,
+     "peak_dbfs": -16.13,
+     "noise_dbfs": -180.0,
+     "latency_ms": 97.9,
+     "dropout_ratio": 0.0011,
+     "max_recv_gap_ms": 41.4,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.91,
+     "tone_wall_sec": 8.882,
+     "round": 1,
+     "ts_iso": "2026-10-17T22:42:14",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    },
+    {
+     "capture": "麦克风 (Steam Streaming Microphone)",
+     "loopback": false,
+     "channels": 1,
+     "error": null,
+     "seconds": 9.152,
+     "blocks": 429,
+     "tone_dbfs": -35.21,
+     "peak_dbfs": -16.12,
+     "noise_dbfs": -180.0,
+     "latency_ms": 107.0,
+     "dropout_ratio": 0.0013,
+     "max_recv_gap_ms": 51.0,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 7.98,
+     "tone_wall_sec": 9.181,
+     "round": 2,
+     "ts_iso": "2026-10-17T22:42:24",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    },
+    {
+     "capture": "麦克风 (Steam Streaming Microphone)",
+     "loopback": false,
+     "channels": 1,
+     "error": null,
+     "seconds": 8.683,
+     "blocks": 407,
+     "tone_dbfs": -35.37,
+     "peak_dbfs": -16.12,
+     "noise_dbfs": -180.0,
+     "latency_ms": 115.8,
+     "dropout_ratio": 0.0013,
+     "max_recv_gap_ms": 51.3,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.0,
+     "tone_wall_sec": 8.882,
+     "round": 3,
+     "ts_iso": "2026-10-17T22:42:34",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    },
+    {
+     "capture": "麦克风 (Steam Streaming Microphone)",
+     "loopback": false,
+     "channels": 1,
+     "error": null,
+     "seconds": 9.813,
+     "blocks": 460,
+     "tone_dbfs": -36.9,
+     "peak_dbfs": -16.12,
+     "noise_dbfs": -180.0,
+     "latency_ms": 132.8,
+     "dropout_ratio": 0.0,
+     "max_recv_gap_ms": 40.3,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.55,
+     "tone_wall_sec": 9.202,
+     "round": 4,
+     "ts_iso": "2026-10-17T22:42:45",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    },
+    {
+     "capture": "麦克风 (Steam Streaming Microphone)",
+     "loopback": false,
+     "channels": 1,
+     "error": null,
+     "seconds": 9.429,
+     "blocks": 442,
+     "tone_dbfs": -33.82,
+     "peak_dbfs": -15.95,
+     "noise_dbfs": -180.0,
+     "latency_ms": 138.2,
+     "dropout_ratio": 0.0012,
+     "max_recv_gap_ms": 51.0,
+     "detected": true,
+     "walls": [],
+     "tone_span_sec": 8.37,
+     "tone_wall_sec": 9.292,
+     "round": 5,
+     "ts_iso": "2026-10-17T22:42:55",
+     "play_err": null,
+     "tone_sec_requested": 6.0,
+     "steamclient": "Steam Client Service=Stopped",
+     "steam_exe": "steam* procs=0"
+    }
+   ],
+   "n_rounds": 5,
+   "is_loopback": false,
+   "tone_dbfs_all": [
+    -38.93,
+    -35.21,
+    -35.37,
+    -36.9,
+    -33.82
+   ],
+   "latency_ms_all": [
+    97.9,
+    107.0,
+    115.8,
+    132.8,
+    138.2
+   ],
+   "dropout_all": [
+    0.0011,
+    0.0013,
+    0.0013,
+    0.0,
+    0.0012
+   ],
+   "detected_all": [
+    true,
+    true,
+    true,
+    true,
+    true
+   ]
+  }
+ }
+}

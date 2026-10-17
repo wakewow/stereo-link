@@ -1,0 +1,22 @@
+[package]
+name = "miplay-airplay"
+version.workspace = true
+edition.workspace = true
+# cidermill-airplay 要求 Rust 1.89（workspace 声明的是 1.82），本 crate 单独抬到 1.89。
+rust-version = "1.89"
+license.workspace = true
+repository.workspace = true
+description = "AirPlay 2 发送端：把 44.1kHz 立体声 PCM 低延迟直推小米音箱（L16A 实测窗口 250ms~2s）"
+
+[dependencies]
+# ⚠️ GPL-3.0-or-later：见 README「许可证」一节。协议后端集中在本 crate 的 src/worker.rs，
+#    若要换实现（自研/其它库）只影响该文件。
+cidermill-airplay = "0.1.1"
+tokio.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+# 只给 tests/wire_requests.rs 用：解 SETUP 的二进制 plist，与真机参照记录逐字段对照。
+# 它本来就在依赖树里（cidermill-airplay 依赖 plist 1），不引入新的传递依赖。
+plist = "1"

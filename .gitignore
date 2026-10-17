@@ -39,3 +39,19 @@ desktop.ini
 # ---------- 研究资料里的临时克隆 ----------
 research/**/vendor/
 research/**/.cloned/
+
+# ---------- Python 探测脚本产物 ----------
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# ---------- 内核驱动构建/签名产物（由 drivers/build.ps1 + sign.ps1 再生） ----------
+# 私钥永远只在 %TEMP%，仓库里只有公钥 .cer（drivers/certs/）。
+drivers/out/
+drivers/pkg/*.sys
+drivers/pkg/*.cat
+
+# ---------- 注册表/端点备份中的本机实例标识 ----------
+# 备份 .reg 会带上本机设备实例路径，保留（审计需要）；但排除临时导出。
+research/**/*.tmp.reg

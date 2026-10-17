@@ -1,0 +1,62 @@
+﻿[
+    {
+        "tag":  "BEFORE",
+        "ts":  "2026-10-17T22:29:34.9603238+08:00",
+        "device_friendly":  "\u003cno FriendlyName\u003e",
+        "device_pnp_status":  "OK",
+        "device_pnp_name":  "Steam Streaming Speakers",
+        "endpoint_pnp_name":  "扬声器 (Steam Streaming Speakers)",
+        "endpoint_pnp_status":  "OK",
+        "reg_pinname":  "扬声器",
+        "reg_friendly":  "\u003cabsent\u003e",
+        "reg_iface":  "Steam Streaming Speakers",
+        "soundcard_speakers":  "CG345UK (NVIDIA High Definition Audio) | X41 (NVIDIA High Definition Audio) | 扬声器 (Steam Streaming Speakers) | 扬声器 (Steam Streaming Microphone) | 扬声器 (UU远程虚拟音频设备) | 耳机 (Chu2 DSP) | 扬声器 (Realtek High Definition Audio)",
+        "soundcard_mics_steam":  "扬声器 (Steam Streaming Speakers) | 扬声器 (Steam Streaming Microphone) | 麦克风 (Steam Streaming Microphone)",
+        "device_props_key_exists":  false
+    },
+    {
+        "tag":  "AFTER-SET",
+        "ts":  "2026-10-17T22:29:38.2304140+08:00",
+        "device_friendly":  "\u003cno FriendlyName\u003e",
+        "device_pnp_status":  "OK",
+        "device_pnp_name":  "Steam Streaming Speakers",
+        "endpoint_pnp_name":  "扬声器 (Steam Streaming Speakers)",
+        "endpoint_pnp_status":  "OK",
+        "reg_pinname":  "扬声器",
+        "reg_friendly":  "\u003cabsent\u003e",
+        "reg_iface":  "Steam Streaming Speakers",
+        "soundcard_speakers":  "CG345UK (NVIDIA High Definition Audio) | X41 (NVIDIA High Definition Audio) | 扬声器 (Steam Streaming Speakers) | 扬声器 (Steam Streaming Microphone) | 扬声器 (UU远程虚拟音频设备) | 耳机 (Chu2 DSP) | 扬声器 (Realtek High Definition Audio)",
+        "soundcard_mics_steam":  "扬声器 (Steam Streaming Speakers) | 扬声器 (Steam Streaming Microphone) | 麦克风 (Steam Streaming Microphone)",
+        "device_props_key_exists":  false
+    },
+    {
+        "tag":  "AFTER-SET-RESTART",
+        "ts":  "2026-10-17T22:29:44.3161203+08:00",
+        "device_friendly":  "\u003cno FriendlyName\u003e",
+        "device_pnp_status":  "OK",
+        "device_pnp_name":  "Steam Streaming Speakers",
+        "endpoint_pnp_name":  "扬声器 (Steam Streaming Speakers)",
+        "endpoint_pnp_status":  "OK",
+        "reg_pinname":  "扬声器",
+        "reg_friendly":  "\u003cabsent\u003e",
+        "reg_iface":  "Steam Streaming Speakers",
+        "soundcard_speakers":  "CG345UK (NVIDIA High Definition Audio) | X41 (NVIDIA High Definition Audio) | 扬声器 (Steam Streaming Speakers) | 扬声器 (Steam Streaming Microphone) | 扬声器 (UU远程虚拟音频设备) | 耳机 (Chu2 DSP) | 扬声器 (Realtek High Definition Audio)",
+        "soundcard_mics_steam":  "扬声器 (Steam Streaming Speakers) | 扬声器 (Steam Streaming Microphone) | 麦克风 (Steam Streaming Microphone)",
+        "device_props_key_exists":  false
+    },
+    {
+        "tag":  "AFTER-ROLLBACK",
+        "ts":  "2026-10-17T22:29:50.4365625+08:00",
+        "device_friendly":  "\u003cno FriendlyName\u003e",
+        "device_pnp_status":  "OK",
+        "device_pnp_name":  "Steam Streaming Speakers",
+        "endpoint_pnp_name":  "扬声器 (Steam Streaming Speakers)",
+        "endpoint_pnp_status":  "OK",
+        "reg_pinname":  "扬声器",
+        "reg_friendly":  "\u003cabsent\u003e",
+        "reg_iface":  "Steam Streaming Speakers",
+        "soundcard_speakers":  "CG345UK (NVIDIA High Definition Audio) | X41 (NVIDIA High Definition Audio) | 扬声器 (Steam Streaming Speakers) | 扬声器 (Steam Streaming Microphone) | 扬声器 (UU远程虚拟音频设备) | 耳机 (Chu2 DSP) | 扬声器 (Realtek High Definition Audio)",
+        "soundcard_mics_steam":  "扬声器 (Steam Streaming Speakers) | 扬声器 (Steam Streaming Microphone) | 麦克风 (Steam Streaming Microphone)",
+        "device_props_key_exists":  false
+    }
+]

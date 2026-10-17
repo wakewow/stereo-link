@@ -1,0 +1,14 @@
+{
+  "ip": "192.168.1.21",
+  "wav": "D:\\Backup\\Documents\\deepseek-harness\\default-workspace\\miplay-bridge\\research\\lan\\ear_test_alt.wav",
+  "mode": "alt",
+  "amplitude": 0.85,
+  "volume": 70.0,
+  "connected": true,
+  "volume_before": 33.0,
+  "volume_set": 70.0,
+  "stream_start_monotonic": 112223.281,
+  "stream_ok": true,
+  "stream_return_after_s": 15.078,
+  "volume_restored": 33.0
+}

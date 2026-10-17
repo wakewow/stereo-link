@@ -1,0 +1,19 @@
+miplay-airplay PoC（真机推流验证）
+
+    cargo run -p miplay-airplay --example tone -- [HOST[:PORT]] [SECONDS] [选项]
+
+位置参数
+    HOST[:PORT]    目标音箱，默认 192.168.1.21:7000（实测可用的 L16A）
+    SECONDS        播放时长，1~30，默认 5
+
+选项
+    --codec alac|lpcm   编码，默认 alac（pyatv 在 L16A 上实测成功的路径）
+    --latency-ms N      声明延迟，250~2000，默认 250（设备窗口下限）
+    --freq HZ           正弦频率，默认 1000
+    --amplitude F       幅度 0~1，默认 0.12（刻意压低；不改音箱音量）
+    --volume F          可选：同时设音箱音量 0~1；默认不发，避免留下状态
+    --chunk-ms N        每块毫秒数，默认 10（模拟 WASAPI 环回采集的形态）
+    -h, --help          显示本说明
+
+它会打印 RTSP 步骤与状态码、设备给的 data/control 端口、设备自报的渲染延迟、
+发出的包数/字节数，以及延迟预算；结尾 TEARDOWN，不留会话。

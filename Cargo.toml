@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/miplay-core",
     "crates/miplay-server",
+    "crates/miplay-audio",
+    "crates/miplay-airplay",
 ]
 
 [workspace.package]

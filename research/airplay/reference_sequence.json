@@ -1,0 +1,363 @@
+[
+  {
+    "request": "GET /info RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "CSeq": "0",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB"
+    },
+    "req_body": "",
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": {
+      "sdk": "AirPlay;2.0.10",
+      "pi": "5E:02:14:2B:B3:C6",
+      "firmwareRevision": "1.106.3",
+      "OSInfo": "10.0.1",
+      "manufacturer": "XiaoMi",
+      "keepAliveLowPower": true,
+      "firmwareBuildDate": "Dec 15 2025",
+      "model": "L16A",
+      "nameIsFactoryDefault": true,
+      "hardwareRevision": "1.0.0",
+      "keepAliveSendStatsAsBody": true,
+      "statusFlags": 4,
+      "deviceID": "5E:02:14:2B:B3:C6",
+      "build": "53.0",
+      "PTPInfo": "PTP-AirPlay;2.0.10",
+      "protocolVersion": "1.1",
+      "sourceVersion": "366.0",
+      "features": 496157849520640,
+      "name": "Xiaomi Sound-1695"
+    }
+  },
+  {
+    "request": "POST /pair-pin-start HTTP/1.1",
+    "req_headers": {
+      "User-Agent": "AirPlay/320.20",
+      "Connection": "keep-alive",
+      "X-Apple-HKP": "4",
+      "Content-Type": "application/octet-stream"
+    },
+    "req_body": "",
+    "response": "HTTP/1.1 200 OK",
+    "resp_body": ""
+  },
+  {
+    "request": "POST /pair-setup HTTP/1.1",
+    "req_headers": {
+      "Content-Length": "9",
+      "User-Agent": "AirPlay/320.20",
+      "Connection": "keep-alive",
+      "X-Apple-HKP": "4",
+      "Content-Type": "application/octet-stream"
+    },
+    "req_body": "\u0000\u0001\u0000\u0006\u0001\u0001\u0013\u0001\u0010",
+    "response": "HTTP/1.1 200 OK",
+    "resp_body": {
+      "hap_tlv": [
+        {
+          "type": 6,
+          "len": 1,
+          "value": "02"
+        },
+        {
+          "type": 2,
+          "len": 16,
+          "value": "eed23106a7b4b5322e66d10bb1677145"
+        },
+        {
+          "type": 3,
+          "len": 255,
+          "value": "e53f1ecc6134cd1bcb61d2a2ab7c047940291f54c5f7dfb84da87aeacda01214"
+        },
+        {
+          "type": 3,
+          "len": 129,
+          "value": "29d78ed4e42372672b5e2d6b230d415c995a2f39ae2de845cb3b1c3fcfb304d8"
+        }
+      ]
+    }
+  },
+  {
+    "request": "POST /pair-setup HTTP/1.1",
+    "req_headers": {
+      "Content-Length": "457",
+      "User-Agent": "AirPlay/320.20",
+      "Connection": "keep-alive",
+      "X-Apple-HKP": "4",
+      "Content-Type": "application/octet-stream"
+    },
+    "req_body": {
+      "hap_tlv": [
+        {
+          "type": 6,
+          "len": 1,
+          "value": "03"
+        },
+        {
+          "type": 3,
+          "len": 255,
+          "value": "c9b1e348e771e76d095f54bbaf717767b1a7aab2b60dc58a5baf07ebe5f144b3"
+        },
+        {
+          "type": 3,
+          "len": 129,
+          "value": "311cbfa9511ca5e2d8a4c7021ef0bc5bddea555a891e0ecbda4601cdfc98a11d"
+        },
+        {
+          "type": 4,
+          "len": 64,
+          "value": "2607fd32d70e550082fba77ee508b2a9b505b4a09c835b0e490784515cf3b52e"
+        }
+      ]
+    },
+    "response": "HTTP/1.1 200 OK",
+    "resp_body": {
+      "hap_tlv": [
+        {
+          "type": 6,
+          "len": 1,
+          "value": "04"
+        },
+        {
+          "type": 4,
+          "len": 64,
+          "value": "120651cb174e33da52705b8caf22783ec21b342b3beb2ac232b3981b5634b552"
+        }
+      ]
+    }
+  },
+  {
+    "request": "SETUP rtsp://192.168.1.4/3062041125 RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "Content-Length": "455",
+      "CSeq": "1",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB",
+      "Content-Type": "application/x-apple-binary-plist"
+    },
+    "req_body": {
+      "deviceID": "AA:BB:CC:DD:EE:FF",
+      "groupContainsGroupLeader": false,
+      "isMultiSelectAirPlay": true,
+      "macAddress": "AA:BB:CC:DD:EE:FF",
+      "model": "iPhone14,3",
+      "name": "pyatv",
+      "osBuildVersion": "20F66",
+      "osName": "iPhone OS",
+      "osVersion": "16.5",
+      "senderSupportsRelay": false,
+      "sessionUUID": "D05EF8FE-FF3F-4E81-8048-EFB705CCAA39",
+      "sourceVersion": "690.7.1",
+      "statsCollectionEnabled": false,
+      "timingPort": 57727,
+      "timingProtocol": "NTP"
+    },
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": {
+      "eventPort": 33477,
+      "timingPort": 53611
+    }
+  },
+  {
+    "request": "SETUP rtsp://192.168.1.4/3062041125 RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "Content-Length": "314",
+      "CSeq": "2",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB",
+      "Content-Type": "application/x-apple-binary-plist"
+    },
+    "req_body": {
+      "streams": [
+        {
+          "audioFormat": 2048,
+          "audioMode": "default",
+          "controlPort": 57726,
+          "ct": 1,
+          "isMedia": true,
+          "latencyMax": 88200,
+          "latencyMin": 11025,
+          "shk": "<32 bytes>",
+          "spf": 352,
+          "sr": 44100,
+          "streamConnectionID": 3062041125,
+          "supportsDynamicStreamID": false,
+          "type": 96
+        }
+      ]
+    },
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": {
+      "streams": [
+        {
+          "type": 96,
+          "dataPort": 41013,
+          "controlPort": 56356
+        }
+      ]
+    }
+  },
+  {
+    "request": "SET_PARAMETER rtsp://192.168.1.4/3062041125 RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "Content-Type": "text/parameters",
+      "Content-Length": "13",
+      "CSeq": "3",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB"
+    },
+    "req_body": "volume: -27.6",
+    "response": "RTSP/1.0 500 Internal Server Error",
+    "resp_body": ""
+  },
+  {
+    "request": "SET_PARAMETER rtsp://192.168.1.4/3062041125 RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "Content-Type": "text/parameters",
+      "Content-Length": "28",
+      "CSeq": "4",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB"
+    },
+    "req_body": "progress: 66150/66150/198450",
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": ""
+  },
+  {
+    "request": "SET_PARAMETER rtsp://192.168.1.4/3062041125 RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "Content-Type": "application/x-dmap-tagged",
+      "Content-Length": "8",
+      "CSeq": "5",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB",
+      "Session": "0",
+      "RTP-Info": "seq=46459;rtptime=66150"
+    },
+    "req_body": "mlit\u0000\u0000\u0000\u0000",
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": ""
+  },
+  {
+    "request": "RECORD rtsp://192.168.1.4/3062041125 RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "CSeq": "6",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB"
+    },
+    "req_body": ""
+  },
+  {
+    "request": "POST /feedback RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "CSeq": "7",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB"
+    },
+    "req_body": "",
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": ""
+  },
+  {
+    "request": "FLUSH rtsp://192.168.1.4/3062041125 RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "CSeq": "8",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB",
+      "Range": "npt=0-",
+      "Session": "0",
+      "RTP-Info": "seq=46459;rtptime=66150"
+    },
+    "req_body": "",
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": ""
+  },
+  {
+    "request": "SET_PARAMETER rtsp://192.168.1.4/3062041125 RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "Content-Type": "text/parameters",
+      "Content-Length": "13",
+      "CSeq": "9",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB"
+    },
+    "req_body": "volume: -27.6",
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": ""
+  },
+  {
+    "request": "POST /feedback RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "CSeq": "10",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB"
+    },
+    "req_body": "",
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": {
+      "streams": [
+        {
+          "type": 96,
+          "sr": 44100.0
+        }
+      ]
+    }
+  },
+  {
+    "request": "POST /feedback RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "CSeq": "11",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB"
+    },
+    "req_body": "",
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": {
+      "streams": [
+        {
+          "type": 96,
+          "sr": 44100.0
+        }
+      ]
+    }
+  },
+  {
+    "request": "TEARDOWN rtsp://192.168.1.4/3062041125 RTSP/1.0",
+    "req_headers": {
+      "User-Agent": "AirPlay/550.10",
+      "CSeq": "12",
+      "DACP-ID": "E1DAB5B651434CCB",
+      "Active-Remote": "2484607472",
+      "Client-Instance": "E1DAB5B651434CCB",
+      "Session": "0"
+    },
+    "req_body": "",
+    "response": "RTSP/1.0 200 OK",
+    "resp_body": ""
+  }
+]

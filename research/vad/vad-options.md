@@ -332,3 +332,28 @@ Web 前端（查看/控制妙播设备、登录小米账号）
 - `Get-AuthenticodeSignature`：`nevaudio.sys` / `SteamStreamingSpeakers.sys`（两者 `Microsoft Windows Hardware Compatibility Publisher`，Valid）；`Scream.sys`（私人证书 + 过期 + 无时间戳 → `UnknownError`）
 - `%TEMP%\vad-research\{Virtual-Cables, usbip-win2, scream, scream-arcnmx, usbipd-win}` 源码副本
 - `bcdedit /enum {current}`、`Confirm-SecureBootUEFI`、`Test-Path "…Windows Kits\10\Include\*\km"`
+
+---
+
+## 13. 实测更新（task-8，2026-10-17 22:2x–22:5x，本机实测）
+
+> 本节由 task-8（队友 `vad-rename-prober`）**追加**，不改动上文任何原文；上文 **§9.4、§10 步骤 3/4、§11 决策点 5** 的最新状态以本节为准。
+> 原始数据与复现命令：`loopback-matrix.md`、`rename-probe.md`；数据文件 `loopback_matrix.json`、`loopback_pairs2*.json`。
+> 判据（数字通路 vs 声学串音）：数字通路实测 **−12.04…−38.93 dBFS**，声学串音 **−86.97…−106.72 dBFS**，纯静音 **−180.0 dBFS**（全零），判决线 `peak > −60 dBFS 且 peak−floor ≥ 20 dB`。
+
+### 13.1 §9.4「0 安装的 30 分钟实验」→ **已否决**
+
+| 方向 | 结果 |
+|---|---|
+| `扬声器 (UU远程虚拟音频设备)` → 自身 `[loopback]` | **−12.04 dBFS** ✅（对照组：该端点本身工作正常） |
+| `扬声器 (UU远程虚拟音频设备)` → `麦克风阵列 (UU远程虚拟音频设备)` | **−180.0 dBFS（全零样本）** ❌ 2 s 与 6 s 两次独立运行都一样 |
+
+**结论：UU 远程虚拟音频设备没有播放→录音的内部数字回环**（它的播放端点把音频交给远端设备，麦克风阵列是另一路独立输入）。§9.4 的猜想不成立，§10 步骤 4 的"通过标准：录到同一音频"**未达成** → 该冒烟路径作废。
+
+### 13.2 本轮顺带拿到的结论（影响 §9.1 / §9.2 / §11）
+
+1. **主路径保底（不需要任何虚拟声卡）**：任意 render 端点的 **WASAPI loopback** 都能采到"Windows 混音后交给该端点"的数字流。本机 **7/7 render 端点全通**：tone −12.04…−20.83 dBFS，数字自环延迟 **6.4–67.9 ms**（轮间抖动 ~10 ms），丢块率 ≤0.74%。→ 若只需「把某个既有输出设备的声音转发给音箱」，**v1 连虚拟声卡都不需要**，§9.1 的 v1 可以再省掉装 Scream 那一步。
+2. **零安装的"虚拟线"确实存在一条**：`扬声器 (Steam Streaming Microphone)` → `麦克风 (Steam Streaming Microphone)`，**15/15 轮全通**（跨 3 个独立进程/时段），且全程 `Steam Client Service=Stopped`、无 `steam*.exe` 进程（每轮前后 + 4 秒一次的时间线采样为证）。但延迟 **81–144 ms**、电平 −33.8…−38.9 dBFS、名字带 `扬声器` 前缀、随 Steam 升级/卸载而消失 → **仅作"零驱动可行"的可行性证据，不作产品路径**。
+3. **§11 决策点 5（端点名形态）已有实测答案**：端点显示名**可以零驱动改**——改写设备硬件键 `HKLM\SYSTEM\CurrentControlSet\Enum\ROOT\<dev>\0000\FriendlyName`（本机对 `ROOT\STEAMSTREAMINGSPEAKERS\0000` 实测，写入前先 `reg export` 备份、改完已回滚验证），再做设备 disable/enable，声音列表里就显示为 **`扬声器 (小米妙播设备)`**。但前缀「扬声器」是 Windows 硬编码（`MMDevices\…\Properties` 的描述符 `,2` + 接口名 `,6` 拼接），**零驱动去不掉**；`{a45c254e-…},14` 在该设备下不存在，而 `MMDevices\Audio\Render` 键被 Audiosrv 的 ACL 保护——提权管理员用 `reg add` 或官方 `IPropertyStore::SetValue(FriendlyName)` 都是 **E_ACCESSDENIED / Access is denied**（实测 HRESULT `0x80070005`）。三态与回滚验证见 `rename-probe.md`。
+4. 因此 **§9.2「改名走 INF，不碰注册表」仍然是对的做法**：要**无前缀的自定义名字** + **按需新增多个端点**，必须驱动（§9.1 Scream 派生 3–7 人日 / §9.2 自研 8–15 人日，结论不变）。
+5. 补充：`扬声器 (Xiaomi Speaker-4162)` 与 `扬声器 (立体声组合)` 这两个端点在本机是 **Unknown（不在位）**状态，不在声音输出列表里；它们的存在不改变上面结论。

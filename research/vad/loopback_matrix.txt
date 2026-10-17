@@ -1,0 +1,23 @@
+# 自环矩阵 @ 48000 Hz, 1 kHz 0.25 FS, 2.0s / 格
+# 单元格 = 1 kHz 分量 dBFS；'-' = 未检出（比本底低 20.0 dB 以上）
+
+render \ capture                  | C00 | C01 | C02 | C03 | C04 | C05 | C06 | C07 | C08 | C09 | C10 
+CG345UK (NVIDIA High Definition Audio)|  -14.7|--180.0|--180.0|--180.0|--180.0|--180.0|--180.0|  n/a |--105.8|--180.0|--180.0|
+X41 (NVIDIA High Definition Audio)|--180.0|  -16.6|--180.0|--180.0|--180.0|--180.0|--180.0|  n/a |--106.5|--180.0|--180.0|
+扬声器 (Steam Streaming Speakers)    |--180.0|--180.0|  -20.8|--180.0|--180.0|--180.0|--180.0|  n/a |--106.3|--180.0|--180.0|
+扬声器 (Steam Streaming Microphone)  |--180.0|--180.0|--180.0|  -17.4|--180.0|--180.0|--180.0|  n/a |--105.8|--180.0|  -33.6|
+扬声器 (UU远程虚拟音频设备)                  |--180.0|--180.0|--180.0|--180.0|  -12.0|--180.0|--180.0|  n/a |--106.7|--180.0|--180.0|
+耳机 (Chu2 DSP)                     |--180.0|--180.0|--180.0|--180.0|--180.0|  -12.0|--180.0|  n/a |- -96.4|--180.0|--180.0|
+扬声器 (Realtek High Definition Audio)|--180.0|--180.0|--180.0|--180.0|--180.0|--180.0|  -12.0|  n/a |- -87.0|--180.0|--180.0|
+
+C00 = CG345UK (NVIDIA High Definition Audio) [loopback]
+C01 = X41 (NVIDIA High Definition Audio) [loopback]
+C02 = 扬声器 (Steam Streaming Speakers) [loopback]
+C03 = 扬声器 (Steam Streaming Microphone) [loopback]
+C04 = 扬声器 (UU远程虚拟音频设备) [loopback]
+C05 = 耳机 (Chu2 DSP) [loopback]
+C06 = 扬声器 (Realtek High Definition Audio) [loopback]
+C07 = 麦克风 (Chu2 DSP)
+C08 = 麦克风 (Realtek High Definition Audio)
+C09 = 麦克风阵列 (UU远程虚拟音频设备)
+C10 = 麦克风 (Steam Streaming Microphone)
