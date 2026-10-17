@@ -723,6 +723,26 @@ fn ensure_firewall(port: u16) -> String {
 
 // ---------------------------------------------------------------- HTTP
 
+/// 识别虚拟串流声卡端点用的名字关键字。
+///
+/// `miplay-bridge vad install` 会把机器上一个已有虚拟声卡（默认 Steam Streaming
+/// Speakers）的设备名改掉，其端点显示名就变成 `扬声器 (小米妙播设备)`。
+#[cfg(windows)]
+const VAD_NAME_HINTS: &[&str] = &["小米妙播", "妙播设备"];
+
+/// 找出虚拟串流声卡的 render 端点名。
+///
+/// 用户只要把播放器切到「扬声器 (小米妙播设备)」，声音就整条链走到 hub，
+/// 不需要改系统默认播放设备。没装虚拟声卡时返回 `None`，行为与以前一致。
+#[cfg(windows)]
+fn virtual_endpoint_name() -> Option<String> {
+    let eps = miplay_audio::list_endpoints().ok()?;
+    eps.iter()
+        .filter(|e| e.flow == miplay_audio::DataFlow::Render)
+        .find(|e| VAD_NAME_HINTS.iter().any(|h| e.name.contains(h)))
+        .map(|e| e.name.clone())
+}
+
 struct HubError(anyhow::Error);
 
 impl IntoResponse for HubError {
@@ -1073,8 +1093,14 @@ mod win {
             .with_samplerate(SAMPLE_RATE)
             .with_channels(CHANNELS);
         cap_cfg.buffer_ms = CAPTURE_BUFFER_MS;
+        let mut auto_vad: Option<String> = None;
         if let Some(name) = &args.capture_device {
             cap_cfg = cap_cfg.with_device_name(name.clone());
+        } else if let Some(vad) = virtual_endpoint_name() {
+            // 没显式指定采集端点时，优先抓虚拟串流声卡：用户在 Windows 输出列表里
+            // 选中「扬声器 (小米妙播设备)」，声音就整条链走到我们的 hub。
+            auto_vad = Some(vad.clone());
+            cap_cfg = cap_cfg.with_device_name(vad);
         }
         cap_cfg.validate().context("采集参数不合法")?;
         let planned = miplay_audio::resolve_endpoint(&cap_cfg.device, CaptureMode::Loopback)
@@ -1085,6 +1111,9 @@ mod win {
         println!("== miplay-bridge hub ==");
         println!("监听地址     {url_base}（0.0.0.0:{}）", args.port);
         println!("采集端点     {planned}");
+        if let Some(vad) = &auto_vad {
+            println!("采集来源     虚拟串流声卡「{vad}」——播放器切到它即可（--capture-device 可覆盖）");
+        }
         println!(
             "采集格式     {SAMPLE_RATE} Hz / {CHANNELS} ch / 16 bit，每条流环形缓冲 {RING_SECONDS} 秒"
         );
