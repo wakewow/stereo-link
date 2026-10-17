@@ -9,6 +9,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod audio_default;
 mod config;
 mod fonts;
 mod logbuf;

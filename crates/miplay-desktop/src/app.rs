@@ -11,9 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+use miplay_audio::{BtSplitConfig, BtSplitHandle, BtSplitStats, PcmFormat};
 use miplay_server::hub::engine::{DeviceSnapshot, EngineConfig, EngineHandle, EngineSnapshot, Phase};
 
-use crate::config::DesktopConfig;
+use crate::config::{DesktopConfig, OutputMode};
 use crate::logbuf::{LogBuffer, LogLine};
 
 const GREEN: egui::Color32 = egui::Color32::from_rgb(96, 200, 132);
@@ -55,6 +56,19 @@ pub struct DesktopApp {
     auto_started: bool,
     /// 上一帧「系统默认输出是否虚拟声卡」，用来检测用户手动切换输出设备。
     last_output_was_vad: bool,
+    /// 蓝牙左右分离句柄（运行中才 `Some`）。
+    split: Option<BtSplitHandle>,
+    /// 分离运行统计（每帧刷新）。
+    split_stats: Option<BtSplitStats>,
+    /// 分离的采集源错误是否已经记过日志。
+    split_error_logged: bool,
+    /// 实时探测到的系统默认输出（端点名, 是否虚拟声卡）。
+    ///
+    /// 引擎快照里的 `default_output` 是引擎启动时的值，用户中途切输出不会更新；
+    /// 界面上的「默认输出 / 自检 / 蓝牙提示」都用这份实时值覆盖。
+    live_default_output: Option<(String, bool)>,
+    /// 上一次实时探测的时间（节流：约 0.8 秒一次）。
+    live_default_at: Option<Instant>,
 }
 
 impl DesktopApp {
@@ -95,7 +109,7 @@ impl DesktopApp {
             selected.insert(d.id.clone(), want);
         }
 
-        Self {
+        let mut app = Self {
             cfg,
             running,
             engine,
@@ -108,7 +122,17 @@ impl DesktopApp {
             font_warned: false,
             auto_started: false,
             last_output_was_vad: false,
+            split: None,
+            split_stats: None,
+            split_error_logged: false,
+            live_default_output: None,
+            live_default_at: None,
+        };
+        // 上次用的是蓝牙左右分离模式 → 打开面板就自动起流，用户直接放视频即可。
+        if app.cfg.output_mode == OutputMode::Bluetooth && app.cfg.split.enabled {
+            app.start_split(false);
         }
+        app
     }
 
     fn setup_style(ctx: &egui::Context) {
@@ -147,6 +171,13 @@ impl DesktopApp {
     }
 
     fn start_devices(&mut self, keys: Vec<String>) {
+        if self.cfg.output_mode == OutputMode::Bluetooth {
+            self.toast(
+                "当前是蓝牙左右分离模式：妙播投放会把音箱从蓝牙抢回云端。要投放请先切到「妙播云投放」",
+                true,
+            );
+            return;
+        }
         // 双保险：被排除的设备即使被别处塞进来也不投放。
         let keys: Vec<String> = keys
             .into_iter()
@@ -243,7 +274,217 @@ impl DesktopApp {
         });
     }
 
+    // ------------------------------------------------------------ 蓝牙左右分离
+
+    /// 配置里的分离参数转成引擎参数。
+    fn split_engine_config(&self) -> BtSplitConfig {
+        let sp = &self.cfg.split;
+        BtSplitConfig {
+            left_endpoint: sp.left_endpoint.clone(),
+            right_endpoint: sp.right_endpoint.clone(),
+            capture_gain: sp.gain,
+            queue_ms: sp.queue_ms,
+            left_delay_ms: sp.left_delay_ms,
+            right_delay_ms: sp.right_delay_ms,
+            ..Default::default()
+        }
+    }
+
+    /// 启动蓝牙左右分离；`from_ui` = 用户点的（要 toast，否则只记日志）。
+    fn start_split(&mut self, from_ui: bool) -> bool {
+        if self.split.is_some() {
+            return true;
+        }
+        let config = self.split_engine_config();
+        if let Err(e) = config.validate() {
+            let msg = format!("左右分离配置不合法：{e}");
+            tracing::warn!("{msg}");
+            if from_ui {
+                self.toast(msg, true);
+            }
+            return false;
+        }
+        match BtSplitHandle::start(config) {
+            Ok(handle) => {
+                tracing::info!("[蓝牙分离] 已启动：{}", handle.config().describe());
+                // 蓝牙分离跑起来后，妙播云端投放就是多余的（还会把音箱从蓝牙抢走）。
+                if let Some(engine) = self.engine.as_ref() {
+                    let ids: Vec<String> = self
+                        .snap
+                        .devices
+                        .iter()
+                        .filter(|d| d.active)
+                        .map(|d| d.id.clone())
+                        .collect();
+                    if !ids.is_empty() {
+                        engine.stop_devices(Some(ids.clone()));
+                        tracing::info!("[蓝牙分离] 已停止 {} 台妙播投放（避免抢音箱）", ids.len());
+                    }
+                }
+                self.split = Some(handle);
+                self.split_stats = Some(BtSplitStats::default());
+                self.split_error_logged = false;
+                // 分离链路采集的是虚拟声卡的回环：默认输出不切过去，播放器的声音就进不来。
+                if self.cfg.switch_output_on_split {
+                    self.apply_default_output();
+                }
+                if from_ui {
+                    self.toast("已开始蓝牙左右分离（延迟约 0.2~0.35 秒）", false);
+                }
+                true
+            }
+            Err(e) => {
+                tracing::warn!("[蓝牙分离] 启动失败：{e}");
+                if from_ui {
+                    self.toast(format!("蓝牙左右分离启动失败：{e}"), true);
+                }
+                false
+            }
+        }
+    }
+
+    /// 停止蓝牙左右分离。
+    fn stop_split(&mut self, from_ui: bool) {
+        if let Some(mut handle) = self.split.take() {
+            handle.stop();
+            tracing::info!("[蓝牙分离] 已停止");
+            if from_ui {
+                self.toast("已停止蓝牙左右分离", false);
+            }
+        }
+        self.split_stats = None;
+        if from_ui {
+            self.restore_default_output();
+        }
+    }
+
+    /// 开始分离后把系统默认输出切到虚拟声卡（否则播放器声音不会进分离链路）。
+    fn apply_default_output(&mut self) {
+        match crate::audio_default::switch_to_virtual() {
+            Ok(outcome) => {
+                match outcome.previous_id {
+                    Some(prev) => {
+                        // 只在第一次记：重启分离链路时不要覆盖成「虚拟声卡」。
+                        if self.cfg.previous_output.is_none() {
+                            self.cfg.previous_output = Some(prev.clone());
+                            self.cfg.save();
+                        }
+                        tracing::info!(
+                            "[默认输出] 已切到虚拟声卡（切换前是 {prev}，停止分离/关闭面板时会切回）：{}",
+                            outcome.message
+                        );
+                        self.toast("已把 Windows 默认输出切到虚拟声卡", false);
+                    }
+                    None => {
+                        tracing::info!("[默认输出] {}", outcome.message);
+                        self.toast("默认输出已经是虚拟声卡", false);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[默认输出] 自动切换失败：{e}；可以在面板上点「默认输出→虚拟声卡」，或用「打开声音设置」手动切"
+                );
+                self.toast("自动切换默认输出失败，请点「默认输出→虚拟声卡」", true);
+            }
+        }
+    }
+
+    /// 恢复开始分离前的默认输出（停止分离时用）。
+    fn restore_default_output(&mut self) {
+        let Some(prev) = self.cfg.previous_output.clone() else {
+            return;
+        };
+        match crate::audio_default::switch_to_id(&prev) {
+            Ok(message) => {
+                tracing::info!("[默认输出] 已恢复原默认输出（{prev}）：{message}");
+                self.cfg.previous_output = None;
+                self.cfg.save();
+                self.toast("已恢复原来的默认输出", false);
+            }
+            Err(e) => tracing::warn!("[默认输出] 恢复失败：{e}（可以在 Windows 声音设置里手动切回）"),
+        }
+    }
+
+    /// 分离模式下放 12 秒左右声道自检音（左 440Hz / 右 880Hz / 两边各一路 / 两边同 660Hz）。
+    fn split_test_tone(&mut self) {
+        if self.split.is_none() {
+            self.toast("先点「开始分离」，再放自检音", true);
+            return;
+        }
+        const RATE: u32 = 44_100;
+        fn sine(hz: f64, t: f64) -> f32 {
+            (2.0 * std::f64::consts::PI * hz * t).sin() as f32
+        }
+        fn segment(seconds: f64, phase: fn(f64) -> (f32, f32)) -> Vec<u8> {
+            let frames = (seconds * RATE as f64) as usize;
+            let mut out = Vec::with_capacity(frames * 4);
+            for i in 0..frames {
+                let t = i as f64 / RATE as f64;
+                let (l, r) = phase(t);
+                let l = (l.clamp(-1.0, 1.0) * 0.45 * i16::MAX as f32) as i16;
+                let r = (r.clamp(-1.0, 1.0) * 0.45 * i16::MAX as f32) as i16;
+                out.extend_from_slice(&l.to_le_bytes());
+                out.extend_from_slice(&r.to_le_bytes());
+            }
+            out
+        }
+        let mut pcm = Vec::new();
+        pcm.extend(segment(3.0, |t| (sine(440.0, t), 0.0)));
+        pcm.extend(segment(3.0, |t| (0.0, sine(880.0, t))));
+        pcm.extend(segment(3.0, |t| (sine(440.0, t), sine(880.0, t))));
+        pcm.extend(segment(3.0, |t| (sine(660.0, t), sine(660.0, t))));
+        tracing::info!(
+            "[蓝牙分离] 自检音：0–3s 只有左箱 440Hz / 3–6s 只有右箱 880Hz / 6–9s 两边各一路 / 9–12s 两边同 660Hz（应听成居中）"
+        );
+        std::thread::spawn(move || {
+            match miplay_audio::play_pcm_s16(
+                &miplay_audio::DeviceSelector::name_contains("小米妙播"),
+                PcmFormat::new(RATE, 2, 16),
+                &pcm,
+            ) {
+                Ok(info) => tracing::info!("[蓝牙分离] 自检音播放完成：{}", info.describe()),
+                Err(e) => tracing::warn!("[蓝牙分离] 自检音播放失败：{e}"),
+            }
+        });
+        self.toast("正在播放 12 秒左右声道自检音", false);
+    }
+
+    /// 打开 Windows「声音设置」页面（让用户把输出改成虚拟声卡）。
+    fn open_sound_settings(&mut self) {
+        let result = std::process::Command::new("cmd")
+            .args(["/c", "start", "", "ms-settings:sound"])
+            .spawn();
+        match result {
+            Ok(_) => tracing::info!("已打开 Windows 声音设置"),
+            Err(e) => self.toast(format!("打开声音设置失败：{e}"), true),
+        }
+    }
+
     // ------------------------------------------------------------ 每帧
+
+    /// 刷新蓝牙左右分离的运行统计；链路意外停掉时收掉句柄并提示。
+    fn refresh_split_state(&mut self) {
+        let Some(handle) = self.split.as_ref() else {
+            self.split_stats = None;
+            return;
+        };
+        let stats = handle.stats();
+        let alive = handle.alive();
+        if let Some(err) = &stats.source_error {
+            if !self.split_error_logged {
+                self.split_error_logged = true;
+                tracing::warn!("[蓝牙分离] 采集源出错：{err}");
+            }
+        }
+        self.split_stats = Some(stats);
+        if !alive {
+            self.split = None;
+            self.split_stats = None;
+            tracing::warn!("[蓝牙分离] 输出链路已停止（蓝牙断开或端点消失？）");
+            self.toast("蓝牙左右分离已停止：检查两台音箱的蓝牙连接", true);
+        }
+    }
 
     fn tick(&mut self, ctx: &egui::Context) {
         self.snap = self
@@ -254,6 +495,26 @@ impl DesktopApp {
                 phase: Phase::Stopped,
                 ..Default::default()
             });
+
+        self.refresh_split_state();
+
+        // 实时刷新「系统默认输出」：引擎快照里的那份是启动时的静态值，
+        // 自动/手动切换默认输出后必须立刻反映到提示和自检里。
+        let stale = self
+            .live_default_at
+            .map(|t| t.elapsed() > Duration::from_millis(800))
+            .unwrap_or(true);
+        if stale {
+            self.live_default_at = Some(Instant::now());
+            self.live_default_output = crate::audio_default::default_render().map(|ep| {
+                let is_vad = crate::audio_default::is_virtual(&ep);
+                (ep.name, is_vad)
+            });
+        }
+        if let Some((name, is_vad)) = self.live_default_output.clone() {
+            self.snap.default_output = Some(name);
+            self.snap.default_output_is_vad = is_vad;
+        }
 
         // 设备名单会变（刷新设备列表后），勾选状态跟着对齐：新出现且在线的默认勾上。
         let ids: BTreeSet<String> = self.snap.devices.iter().map(|d| d.id.clone()).collect();
@@ -274,7 +535,10 @@ impl DesktopApp {
             self.auto_started = false;
         }
         self.last_output_was_vad = vad_now;
-        if self.snap.phase == Phase::Running && !self.auto_started {
+        if self.cfg.output_mode == OutputMode::Cloud
+            && self.snap.phase == Phase::Running
+            && !self.auto_started
+        {
             self.auto_started = true;
             if !self.snap.default_output_is_vad {
                 if self.cfg.auto_start {
@@ -350,6 +614,230 @@ impl DesktopApp {
         out
     }
 
+    // ------------------------------------------------------------ 输出模式 / 蓝牙分离
+
+    /// 切换输出模式：妙播云投放 ↔ 蓝牙左右分离。
+    fn set_output_mode(&mut self, mode: OutputMode) {
+        if mode == self.cfg.output_mode {
+            return;
+        }
+        self.cfg.output_mode = mode;
+        match mode {
+            OutputMode::Bluetooth => {
+                // 蓝牙模式不再自动投放妙播，否则会把音箱从蓝牙抢回云端。
+                self.auto_started = true;
+                if self.cfg.split.enabled {
+                    self.start_split(false);
+                }
+            }
+            OutputMode::Cloud => {
+                self.stop_split(false);
+                // 重新评估一次「引擎就绪后自动投放」。
+                self.auto_started = false;
+                self.last_output_was_vad = false;
+            }
+        }
+        self.cfg.save();
+        tracing::info!("输出模式切换为：{}", mode.label());
+        self.toast(format!("输出模式：{}", mode.label()), false);
+    }
+
+    /// 输出模式 + 蓝牙左右分离控制面板。
+    fn split_panel(&mut self, ctx: &egui::Context) {
+        let mut sp = self.cfg.split.clone();
+        let mut mode = self.cfg.output_mode;
+        let endpoints = self.endpoints.clone();
+        let stats = self.split_stats.clone();
+        let running = self.split.is_some();
+        let mut start = false;
+        let mut stop = false;
+        let mut test_tone = false;
+        let mut sound_settings = false;
+        let mut switch_output = false;
+        let mut restore_output = false;
+        let mut auto_switch = self.cfg.switch_output_on_split;
+        let has_previous_output = self.cfg.previous_output.is_some();
+
+        egui::TopBottomPanel::top("mode")
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("输出模式").color(GREY));
+                    let cloud_on = mode == OutputMode::Cloud;
+                    if ui
+                        .selectable_label(cloud_on, OutputMode::Cloud.label())
+                        .on_hover_text("每台音箱一条局域网 WAV 流：可多房间，延迟约 1 秒（音箱固件缓冲决定）")
+                        .clicked()
+                    {
+                        mode = OutputMode::Cloud;
+                    }
+                    let bt_on = mode == OutputMode::Bluetooth;
+                    if ui
+                        .selectable_label(bt_on, OutputMode::Bluetooth.label())
+                        .on_hover_text("虚拟声卡回环 → 左右声道分别蓝牙推给两台音箱：单房间看视频够用")
+                        .clicked()
+                    {
+                        mode = OutputMode::Bluetooth;
+                    }
+                    if bt_on {
+                        if running {
+                            ui.label(egui::RichText::new("● 分离运行中").color(GREEN).strong());
+                        } else {
+                            ui.label(egui::RichText::new("○ 未启动").color(GREY).small());
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("打开声音设置").clicked() {
+                            sound_settings = true;
+                        }
+                    });
+                });
+
+                if mode == OutputMode::Bluetooth {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("左声道→").color(GREY));
+                        egui::ComboBox::from_id_salt("split_left")
+                            .selected_text(short_endpoint(&sp.left_endpoint))
+                            .width(200.0)
+                            .show_ui(ui, |ui| {
+                                for name in &endpoints {
+                                    ui.selectable_value(
+                                        &mut sp.left_endpoint,
+                                        name.clone(),
+                                        name.as_str(),
+                                    );
+                                }
+                            });
+                        ui.label(egui::RichText::new("右声道→").color(GREY));
+                        egui::ComboBox::from_id_salt("split_right")
+                            .selected_text(short_endpoint(&sp.right_endpoint))
+                            .width(200.0)
+                            .show_ui(ui, |ui| {
+                                for name in &endpoints {
+                                    ui.selectable_value(
+                                        &mut sp.right_endpoint,
+                                        name.clone(),
+                                        name.as_str(),
+                                    );
+                                }
+                            });
+                        ui.label(egui::RichText::new("增益").color(GREY));
+                        ui.add(
+                            egui::Slider::new(&mut sp.gain, 0.0..=2.0)
+                                .fixed_decimals(2)
+                                .max_decimals(2),
+                        );
+                        ui.label(egui::RichText::new("抖动缓冲").color(GREY));
+                        ui.add(
+                            egui::Slider::new(&mut sp.queue_ms, 10..=200)
+                                .suffix(" ms")
+                                .fixed_decimals(0),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        if running {
+                            if ui.button("停止分离").clicked() {
+                                stop = true;
+                            }
+                        } else if ui.button("开始分离").clicked() {
+                            start = true;
+                        }
+                        if ui.button("左右声道自检音").clicked() {
+                            test_tone = true;
+                        }
+                        if ui
+                            .button("默认输出→虚拟声卡")
+                            .on_hover_text("把 Windows 默认输出切到「扬声器 (小米妙播设备)」：只有切过去，播放器的声音才会进分离链路")
+                            .clicked()
+                        {
+                            switch_output = true;
+                        }
+                        if ui
+                            .add_enabled(has_previous_output, egui::Button::new("恢复默认输出"))
+                            .on_hover_text("切回开始分离前的默认输出设备（例如蓝牙直连），避免关掉面板后没声音")
+                            .clicked()
+                        {
+                            restore_output = true;
+                        }
+                        ui.checkbox(&mut auto_switch, "自动切默认输出")
+                            .on_hover_text("开始分离时自动把默认输出切到虚拟声卡，停止分离/关闭面板时自动切回");
+                        ui.separator();
+                        if let Some(s) = &stats {
+                            if s.running {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "采集 {:.1}s · L 已发 {:.1} MB 队列 {:.0}ms 欠载 {} · R 已发 {:.1} MB 队列 {:.0}ms 欠载 {}",
+                                        s.captured_frames as f64 / 44_100.0,
+                                        s.left.sent_bytes as f64 / 1_048_576.0,
+                                        s.left.queued_ms,
+                                        s.left.underruns,
+                                        s.right.sent_bytes as f64 / 1_048_576.0,
+                                        s.right.queued_ms,
+                                        s.right.underruns,
+                                    ))
+                                    .color(GREY)
+                                    .small(),
+                                );
+                            }
+                            if let Some(err) = s.source_error.as_ref().or(s.left.error.as_ref()).or(s.right.error.as_ref()) {
+                                ui.label(egui::RichText::new(err).color(RED).small());
+                            }
+                        } else {
+                            let estimate = 20 + sp.queue_ms + 20;
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "软件侧缓冲约 {estimate} ms（不含蓝牙链路本身）；开始分离会自动把 Windows 默认输出切到虚拟声卡"
+                                ))
+                                .color(GREY)
+                                .small(),
+                            );
+                        }
+                    });
+                }
+                ui.add_space(2.0);
+            });
+
+        if mode != self.cfg.output_mode {
+            self.set_output_mode(mode);
+        }
+        if sp != self.cfg.split {
+            let endpoints_changed = sp.left_endpoint != self.cfg.split.left_endpoint
+                || sp.right_endpoint != self.cfg.split.right_endpoint
+                || sp.queue_ms != self.cfg.split.queue_ms
+                || (sp.gain - self.cfg.split.gain).abs() > f32::EPSILON;
+            self.cfg.split = sp;
+            self.cfg.save();
+            if endpoints_changed && self.split.is_some() {
+                tracing::info!("[蓝牙分离] 参数已改，重启分离链路");
+                self.stop_split(false);
+                self.start_split(false);
+            }
+        }
+        if start {
+            self.start_split(true);
+        }
+        if stop {
+            self.stop_split(true);
+        }
+        if test_tone {
+            self.split_test_tone();
+        }
+        if sound_settings {
+            self.open_sound_settings();
+        }
+        if switch_output {
+            self.apply_default_output();
+        }
+        if restore_output {
+            self.restore_default_output();
+        }
+        if auto_switch != self.cfg.switch_output_on_split {
+            self.cfg.switch_output_on_split = auto_switch;
+            self.cfg.save();
+        }
+    }
+
     // ------------------------------------------------------------ 顶栏
 
     fn top_bar(&mut self, ctx: &egui::Context) {
@@ -415,6 +903,17 @@ impl DesktopApp {
         let mut tone = false;
         let snap = self.snap.clone();
         let cap = &snap.capture;
+        // 蓝牙分离模式下，引擎的云采集环通常没有读者（没人投放），环里几乎没有留存数据，
+        // 电平会一直是 0%；这时改用分离链路自己的采集电平。
+        let split_level = self
+            .split_stats
+            .as_ref()
+            .filter(|s| s.running)
+            .map(|s| (s.level_l, s.level_r));
+        let (peak_l, peak_r, rms) = match split_level {
+            Some((l, r)) => (l, r, ((l * l + r * r) / 2.0).sqrt()),
+            None => (cap.level.peak_l, cap.level.peak_r, cap.level.rms),
+        };
         let state_color = if cap.error.is_some() {
             RED
         } else if cap.audio_recent {
@@ -460,20 +959,24 @@ impl DesktopApp {
                 });
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("电平").color(GREY));
+                    if split_level.is_some() {
+                        ui.label(egui::RichText::new("分离").color(GREY).small())
+                            .on_hover_text("两路蓝牙分离链路各自看到的采集电平");
+                    }
                     ui.add(
-                        egui::ProgressBar::new(cap.level.peak_l)
+                        egui::ProgressBar::new(peak_l)
                             .desired_width(130.0)
-                            .text(format!("左 {:>3.0}%", cap.level.peak_l * 100.0)),
+                            .text(format!("左 {:>3.0}%", peak_l * 100.0)),
                     );
                     ui.add(
-                        egui::ProgressBar::new(cap.level.peak_r)
+                        egui::ProgressBar::new(peak_r)
                             .desired_width(130.0)
-                            .text(format!("右 {:>3.0}%", cap.level.peak_r * 100.0)),
+                            .text(format!("右 {:>3.0}%", peak_r * 100.0)),
                     );
                     ui.add(
-                        egui::ProgressBar::new(cap.level.rms)
+                        egui::ProgressBar::new(rms)
                             .desired_width(130.0)
-                            .text(format!("RMS {:>3.0}%", cap.level.rms * 100.0)),
+                            .text(format!("RMS {:>3.0}%", rms * 100.0)),
                     );
                     ui.separator();
                     if cap.audio_recent {
@@ -1026,27 +1529,52 @@ impl DesktopApp {
                 "引擎采集的不是虚拟声卡。请把 Windows 输出设备切换成「扬声器 (小米妙播设备)」，或到设置里手动指定采集端点。".to_string(),
             ));
         }
+        // 蓝牙左右分离模式：低延迟主路线，状态单独提示。
+        let bt_split = self.cfg.output_mode == OutputMode::Bluetooth;
+        if bt_split {
+            if self.split.is_none() {
+                out.push((
+                    AMBER,
+                    "蓝牙左右分离还没启动：点上方「开始分离」，再把 Windows 默认输出设为「扬声器 (小米妙播设备)」".to_string(),
+                ));
+            } else if !snap.default_output_is_vad {
+                out.push((
+                    AMBER,
+                    format!(
+                        "蓝牙分离在跑，但系统默认输出是「{}」：播放器的声音不会经过分离链路。点上面的「默认输出→虚拟声卡」或「打开声音设置」把输出切过去",
+                        snap.default_output.as_deref().unwrap_or("无")
+                    ),
+                ));
+            } else {
+                out.push((
+                    GREEN,
+                    "蓝牙左右分离运行中：延迟约 0.2~0.35 秒，所有播放器声音会被拆成左/右声道分别推给两台蓝牙音箱。".to_string(),
+                ));
+            }
+        }
         // 蓝牙直连模式：声音本来就不经过虚拟声卡，这是「低延迟看视频」的正确用法，
         // 不能按「采集端点不对」去报错。
-        if let Some(device_out) = snap.default_output.as_deref() {
-            let is_bt = device_out.contains("立体声组合")
-                || device_out.contains("Bluetooth")
-                || device_out.contains("蓝牙");
-            if is_bt && !snap.default_output_is_vad {
-                if snap.active_count() > 0 {
-                    out.push((
-                        AMBER,
-                        format!(
-                            "系统输出是蓝牙「{device_out}」：声音已经直接走蓝牙（约 0.2~0.35s，看视频够用），此时妙播投放是多余的；建议点「停止全部」，要玩多房间再切回虚拟声卡。"
-                        ),
-                    ));
-                } else {
-                    out.push((
-                        GREEN,
-                        format!(
-                            "系统输出是蓝牙「{device_out}」：这就是低延迟模式（约 0.2~0.35s），看视频/听歌直接用系统播放即可，不需要妙播投放。"
-                        ),
-                    ));
+        if !bt_split {
+            if let Some(device_out) = snap.default_output.as_deref() {
+                let is_bt = device_out.contains("立体声组合")
+                    || device_out.contains("Bluetooth")
+                    || device_out.contains("蓝牙");
+                if is_bt && !snap.default_output_is_vad {
+                    if snap.active_count() > 0 {
+                        out.push((
+                            AMBER,
+                            format!(
+                                "系统输出是蓝牙「{device_out}」：声音已经直接走蓝牙（约 0.2~0.35s，看视频够用），此时妙播投放是多余的；建议点「停止全部」，要玩多房间再切回虚拟声卡。"
+                            ),
+                        ));
+                    } else {
+                        out.push((
+                            GREEN,
+                            format!(
+                                "系统输出是蓝牙「{device_out}」：这就是低延迟模式（约 0.2~0.35s），看视频/听歌直接用系统播放即可，不需要妙播投放。"
+                            ),
+                        ));
+                    }
                 }
             }
         }
@@ -1062,7 +1590,11 @@ impl DesktopApp {
                 RED,
                 "采集线程没在跑：检查输出设备是否被拔掉/切换，然后重启引擎。".to_string(),
             ));
-        } else if snap.phase.is_running() && !cap.audio_recent && !bt_idle {
+        } else if snap.phase.is_running()
+            && !cap.audio_recent
+            && !bt_idle
+            && !(bt_split && self.split.is_some())
+        {
             out.push((
                 AMBER,
                 format!(
@@ -1102,11 +1634,24 @@ impl eframe::App for DesktopApp {
         self.tick(ctx);
         self.top_bar(ctx);
         self.capture_panel(ctx);
+        self.split_panel(ctx);
         self.settings_panel(ctx);
         if self.cfg.show_log {
             self.log_panel(ctx);
         }
         egui::CentralPanel::default().show(ctx, |ui| self.devices_panel(ui));
+    }
+
+    /// 关窗口时收尾：停分离、把 Windows 默认输出切回原设备、停引擎。
+    ///
+    /// 这里必须做恢复：否则用户关掉面板后系统默认输出还停在虚拟声卡上，
+    /// 所有播放器都会「没声音」（任务管理器强杀进程时不会走到这里，文档里要写）。
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.stop_split(false);
+        self.restore_default_output();
+        if let Some(mut engine) = self.engine.take() {
+            engine.shutdown();
+        }
     }
 }
 
@@ -1136,6 +1681,23 @@ fn source_label(source: &str) -> &str {
         "left" => "左声道",
         "right" => "右声道",
         _ => "混合",
+    }
+}
+
+/// 下拉框里显示短一点的端点名：`扬声器 (Xiaomi Sound-1695)` → `Xiaomi Sound-1695`。
+fn short_endpoint(name: &str) -> String {
+    let trimmed = name.trim();
+    if let Some(start) = trimmed.find('(') {
+        if let Some(end) = trimmed.rfind(')') {
+            if end > start + 1 {
+                return trimmed[start + 1..end].to_string();
+            }
+        }
+    }
+    if trimmed.is_empty() {
+        "（未选择）".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 

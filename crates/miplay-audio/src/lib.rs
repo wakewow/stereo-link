@@ -72,6 +72,8 @@ mod com;
 #[cfg(windows)]
 pub mod capture;
 #[cfg(windows)]
+pub mod btsplit;
+#[cfg(windows)]
 pub mod playback;
 
 pub use channels::{
@@ -91,5 +93,7 @@ pub use capture::{
     default_endpoint, list_endpoints, resolve_endpoint, AudioCapture, CaptureConfig, CaptureMode,
     ConversionPath, NegotiatedFormat,
 };
+#[cfg(windows)]
+pub use btsplit::{BtSplitConfig, BtSplitHandle, BtSplitStats, SplitSinkStats, SPLIT_SAMPLE_RATE};
 #[cfg(windows)]
 pub use playback::{play_pcm_s16, play_sine, PlaybackInfo};
