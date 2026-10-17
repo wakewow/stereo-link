@@ -100,3 +100,50 @@ debug 版带控制台（方便看日志），release 版是无控制台窗口的
 cargo test -p miplay-server --lib     # 引擎 28 项（含通道映射、电平、状态标签）
 cargo build --workspace               # 全仓
 ```
+
+## 端到端实测（2026-10-18，真机）
+
+环境：`采集端点 = 扬声器 (小米妙播设备)`；三台目标音箱
+`Xiaomi Sound (did 934947888)`、`小爱音箱Play增强版 (did 931892755)`、`Xiaomi Sound-左 (did 501718792)`。
+
+**1. 真实播放**（Windows 自带 WAV 从默认输出即虚拟声卡播放）：
+
+| 证据 | 实测值 |
+| --- | --- |
+| 每台音箱客户端数 | `clients = 1`（音箱正在拉流） |
+| 播放位置落后采集 | `lag = 0.0 s` |
+| 已发流 | 0.54 MB 起持续增长到 6.36 MB |
+| 采集已分发帧 | 1,390,269 → 1,830,141 帧（`44100 Hz / 2 ch / 16 bit`） |
+| 日志链路 | `[采集] 长静默后收到音频 → [流] 客户端 192.168.1.171:46342 接入 → [下发] player_play_url` |
+
+**2. 频谱取证**（不是"看着像有声"，而是把推给音箱的字节解出来做 FFT）：
+
+```powershell
+# 触发 4s / 440Hz 测试音，同时抓 hub 的流
+Invoke-RestMethod -Method Post 'http://127.0.0.1:8931/api/hub/tone?freq=440&seconds=4'
+curl.exe -s --max-time 4.5 -o probe.wav http://127.0.0.1:8931/hub/934947888.wav
+```
+
+`probe.wav` 自检：`RIFF / fmt=1(PCM) / 2ch / 44100 Hz / 16 bit`，4.50 s、794,624 B。
+对 PCM 做 FFT，左右声道主频均为 **440.0 Hz**（top3：440.0 / 440.2 / 439.8 Hz），
+`rms = 0.0567`、`peak = 0.091` —— 证明流里送出去的确实是这段正弦音，而不是静音或串流错位。
+
+**3. 地址可达性**（证明监听在 LAN 而非仅回环）：
+
+```text
+GET http://192.168.1.4:8931/health -> 200 "ok"
+GET http://192.168.1.4:8931/        -> 200 17710 bytes（网页面板）
+```
+
+**4. 静默不刷云端**：连续 10 s 无音频时 `plays_sent 1→1`、`reissues 0→0`、`clients 1→1`，
+说明不会在静默期反复调 `player_play_url`。
+
+**5. CLI 回归**（lib 化后原有命令不受影响）：
+
+```text
+target\debug\miplay-bridge.exe hub --devices 934947888 --dry-run   -> exit 0
+监听地址  http://192.168.1.4:8931（0.0.0.0:8931）
+采集端点  [render 默认] 扬声器 (小米妙播设备) | 48000 Hz / 2 ch / 32-bit float
+分发模式  所有设备同一混音
+```
+
