@@ -97,11 +97,37 @@ impl XiaomiDevice {
     }
 
     pub fn capability(&self, key: &str) -> bool {
-        self.capabilities
-            .as_ref()
-            .and_then(|c| c.get(key))
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
+        // 云端的能力位**是数字 1/0**，不是布尔 —— 用 as_bool() 会全部判成 false。
+        match self.capabilities.as_ref().and_then(|c| c.get(key)) {
+            Some(Value::Bool(b)) => *b,
+            Some(Value::Number(n)) => n.as_i64().is_some_and(|i| i != 0),
+            Some(Value::String(s)) => {
+                !s.is_empty() && s != "0" && !s.eq_ignore_ascii_case("false")
+            }
+            _ => false,
+        }
+    }
+
+    /// 是否参与了立体声组合（L16A/L16B 都是 `stereo_mode_v2`）。
+    pub fn stereo_mode(&self) -> bool {
+        self.capability("stereo_mode_v2") || self.capability("stereo_mode")
+    }
+
+    /// 前端 / 列表接口用的精简视图。
+    ///
+    /// 刻意**不含 `raw`** —— 云端每个设备条目有几十 KB，原样返回会让列表响应上兆。
+    pub fn to_view(&self) -> Value {
+        serde_json::json!({
+            "name": self.label(),
+            "did": self.did,
+            "device_id": self.device_id,
+            "hardware": self.hardware,
+            "mac": self.mac,
+            "online": self.online(),
+            "stereo_mode": self.stereo_mode(),
+            "play_api": crate::mina::MinaClient::play_api_for(&self.hardware).as_str(),
+            "rom_version": self.raw.get("romVersion").and_then(Value::as_str),
+        })
     }
 
     /// 用于稳定排序 / 展示的标识。
@@ -158,5 +184,46 @@ mod tests {
             o.insert("deviceID".into(), json!("x"));
             assert!(XiaomiDevice::from_value(Value::Object(o)).online(), "{v} 应判在线");
         }
+    }
+
+    #[test]
+    fn capability_accepts_numeric_flags_from_cloud() {
+        // 真实云端返回的是 1/0，不是 true/false —— 这是最容易踩的坑。
+        let d = XiaomiDevice::from_value(json!({
+            "deviceID": "x",
+            "hardware": "L16A",
+            "capabilities": { "stereo_mode_v2": 1, "airplay2_reprovision": 1, "no_such": 0 }
+        }));
+        assert!(d.capability("stereo_mode_v2"), "数字 1 必须算 true");
+        assert!(d.stereo_mode());
+        assert!(d.capability("airplay2_reprovision"));
+        assert!(!d.capability("no_such"));
+        assert!(!d.capability("missing"));
+    }
+
+    #[test]
+    fn view_is_snake_case_and_excludes_raw() {
+        let d = XiaomiDevice::from_value(json!({
+            "deviceID": "0c9041b3-a155-4ffb-814e-497a266b1e93",
+            "miotDID": "934947888",
+            "name": "Xiaomi Sound",
+            "hardware": "L16B",
+            "mac": "90:FB:5D:0F:B9:5C",
+            "presence": "online",
+            "romVersion": "1.80.2",
+            "capabilities": { "stereo_mode_v2": 1 },
+            "deviceProfile": "should-not-leak"
+        }));
+        let v = d.to_view();
+        // 前端读的是这几个名字
+        assert_eq!(v["did"], "934947888");
+        assert_eq!(v["device_id"], "0c9041b3-a155-4ffb-814e-497a266b1e93");
+        assert_eq!(v["online"], true);
+        assert_eq!(v["stereo_mode"], true);
+        assert_eq!(v["play_api"], "player_play_url");
+        assert_eq!(v["rom_version"], "1.80.2");
+        // raw 与庞大字段不得进入列表视图
+        assert!(v.get("raw").is_none());
+        assert!(!v.to_string().contains("should-not-leak"));
     }
 }

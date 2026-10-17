@@ -1,0 +1,52 @@
+{
+  "ip": "192.168.1.21",
+  "mode": "handshake",
+  "codec": "l16",
+  "prefix_bytes": 0,
+  "latency_frames": 88200,
+  "started": "2026-10-17T22:15:37+0800",
+  "handshake_accepted": false,
+  "legs": [
+    {
+      "step": "OPTIONS",
+      "code": 200
+    },
+    {
+      "step": "ANNOUNCE",
+      "code": 200
+    },
+    {
+      "step": "SETUP",
+      "code": 455
+    }
+  ],
+  "server_ports": {
+    "server_port": null,
+    "server_control_port": null,
+    "server_timing_port": null
+  },
+  "log": [
+    {
+      "step": "OPTIONS",
+      "code": 200,
+      "raw": "RTSP/1.0 200 OK\r\nPublic: ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, FLUSHBUFFERED, TEARDOWN, OPTIONS, POST, GET, PUT\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n"
+    },
+    {
+      "step": "ANNOUNCE",
+      "code": 200,
+      "raw": "RTSP/1.0 200 OK\r\nServer: AirTunes/366.0\r\nCSeq: 2\r\n\r\n",
+      "sdp": "v=0\r\no=iTunes 1792246537 0 IN IP4 192.168.1.4\r\ns=iTunes\r\nc=IN IP4 192.168.1.21\r\nt=0 0\r\nm=audio 0 RTP/AVP 96\r\na=rtpmap:96 L16/44100/2\r\na=fmtp:96 0\r\na=ptime:352\r\n"
+    },
+    {
+      "step": "SETUP",
+      "code": 455,
+      "raw": "RTSP/1.0 455 Method Not Valid In This State\r\nContent-Length: 0\r\nServer: AirTunes/366.0\r\nCSeq: 3\r\n\r\n",
+      "transport_request": "RTP/AVP/UDP;unicast;mode=record;control_port=57704;timing_port=57705"
+    },
+    {
+      "step": "TEARDOWN",
+      "code": 200,
+      "raw": "RTSP/1.0 200 OK\r\nServer: AirTunes/366.0\r\nCSeq: 4\r\n\r\n"
+    }
+  ]
+}

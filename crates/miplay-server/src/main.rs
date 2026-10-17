@@ -91,8 +91,22 @@ type ApiResult<T> = std::result::Result<T, AppError>;
 
 // ---------------------------------------------------------------- 处理函数
 
-async fn index() -> Html<&'static str> {
-    Html(INDEX_HTML)
+async fn index() -> Html<String> {
+    Html(load_index_html())
+}
+
+/// 优先读磁盘上的 `web/index.html`（改前端不用重编译），
+/// 读不到就回退到编译期嵌入的副本（保证单文件分发仍可用）。
+fn load_index_html() -> String {
+    for dir in [std::env::var("MIPLAY_WEB_DIR").ok(), Some("web".to_string())] {
+        if let Some(dir) = dir {
+            let p = std::path::Path::new(&dir).join("index.html");
+            if let Ok(s) = std::fs::read_to_string(&p) {
+                return s;
+            }
+        }
+    }
+    INDEX_HTML.to_string()
 }
 
 async fn api_health(State(st): State<Arc<AppState>>) -> Json<Value> {
@@ -106,7 +120,8 @@ async fn api_health(State(st): State<Arc<AppState>>) -> Json<Value> {
 
 async fn api_devices(State(st): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
     let list = st.devices(false).await?;
-    Ok(Json(json!({ "ok": true, "count": list.len(), "devices": list })))
+    let views: Vec<Value> = list.iter().map(XiaomiDevice::to_view).collect();
+    Ok(Json(json!({ "ok": true, "count": views.len(), "devices": views })))
 }
 
 async fn api_device_status(
@@ -116,9 +131,9 @@ async fn api_device_status(
     let dev = st.device(&key).await?;
     // 状态查询失败不该让整个请求 500，但要**说清楚失败原因**，不能静默返回 null。
     match st.client.play_status(&dev.device_id).await {
-        Ok(status) => Ok(Json(json!({ "ok": true, "device": dev, "play_status": status }))),
+        Ok(status) => Ok(Json(json!({ "ok": true, "device": dev.to_view(), "play_status": status }))),
         Err(e) => Ok(Json(json!({
-            "ok": false, "device": dev, "play_status": null,
+            "ok": false, "device": dev.to_view(), "play_status": null,
             "error": format!("{e:#}"),
         }))),
     }
@@ -257,7 +272,8 @@ async fn main() -> Result<()> {
             let client = MinaClient::new(token)?;
             let devices = client.device_list().await.context("获取设备列表失败")?;
             if args.iter().any(|a| a == "--json") {
-                println!("{}", serde_json::to_string_pretty(&devices)?);
+                let views: Vec<Value> = devices.iter().map(XiaomiDevice::to_view).collect();
+                println!("{}", serde_json::to_string_pretty(&views)?);
             } else {
                 println!("共 {} 台设备:", devices.len());
                 println!(

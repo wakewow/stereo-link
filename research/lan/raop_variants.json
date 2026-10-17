@@ -1,0 +1,56 @@
+{
+  "ip": "192.168.1.21",
+  "local_ip": "192.168.1.4",
+  "started": "2026-10-17T22:12:58+0800",
+  "info": {
+    "GET /info RTSP/1.0": "RTSP/1.0 200 OK\r\nContent-Length: 543\r\nContent-Type: application/x-apple-binary-plist\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\nbplist00�\u0010\u0013\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u0019\u001c\u0019\u001d\u0015\u001e\u001f !\"#SsdkRpi_\u0010\u0010firmwareRevisionVOSInfo\\manufacturer_\u0010\u0011keepAliveLowPower_\u0010\u0011firmwareBuildDateUmodel_\u0010\u0014nameIsFactoryDefault_\u0010\u0010hardwareRevision_\u0010\u0018keepAliveSendStatsAsBody[statusFlagsXdeviceIDUbuildWPTPInfo_\u0010\u000fprotocolVersion]sourceVersionXfeaturesTname^AirPlay;2.0.10_\u0010\u00115E:02:14:2B:B3:C6W1.106.3V10.0.1VXiaoMi\t[Dec 15 2025TL16AU1.0.0\u0010\u0004T53.0_\u0010\u0012PTP-AirPlay;2.0.10S1.1U366.0\u0013\u0000\u0001�@�_�\u0000_\u0010\u0011Xiaomi Sound-1695\u0000\b\u00001\u00005\u00008\u0000K\u0000R\u0000_\u0000s\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0001\u0007\u0001\u0015\u0001\u001e\u0001#\u00012\u0001F\u0001N\u0001U\u0001\\\u0001]\u0001i\u0001n\u0001t\u0001v\u0001{\u0001�\u0001�\u0001�\u0001�\u0000\u0000\u0000\u0000\u0000\u0000\u0002\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000$\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001�",
+    "GET /info HTTP/1.1": "HTTP/1.1 200 OK\r\nContent-Length: 543\r\nContent-Type: application/x-apple-binary-plist\r\nServer: AirTunes/366.0\r\n\r\nbplist00�\u0010\u0013\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u0019\u001c\u0019\u001d\u0015\u001e\u001f !\"#SsdkRpi_\u0010\u0010firmwareRevisionVOSInfo\\manufacturer_\u0010\u0011keepAliveLowPower_\u0010\u0011firmwareBuildDateUmodel_\u0010\u0014nameIsFactoryDefault_\u0010\u0010hardwareRevision_\u0010\u0018keepAliveSendStatsAsBody[statusFlagsXdeviceIDUbuildWPTPInfo_\u0010\u000fprotocolVersion]sourceVersionXfeaturesTname^AirPlay;2.0.10_\u0010\u00115E:02:14:2B:B3:C6W1.106.3V10.0.1VXiaoMi\t[Dec 15 2025TL16AU1.0.0\u0010\u0004T53.0_\u0010\u0012PTP-AirPlay;2.0.10S1.1U366.0\u0013\u0000\u0001�@�_�\u0000_\u0010\u0011Xiaomi Sound-1695\u0000\b\u00001\u00005\u00008\u0000K\u0000R\u0000_\u0000s\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0001\u0007\u0001\u0015\u0001\u001e\u0001#\u00012\u0001F\u0001N\u0001U\u0001\\\u0001]\u0001i\u0001n\u0001t\u0001v\u0001{\u0001�\u0001�\u0001�\u0001�\u0000\u0000\u0000\u0000\u0000\u0000\u0002\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000$\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001�"
+  },
+  "announce_variants": [
+    {
+      "variant": "bare L16",
+      "url": "rtsp://192.168.1.21/1",
+      "response": "RTSP/1.0 200 OK\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n"
+    },
+    {
+      "variant": "L16 + Apple-Challenge",
+      "url": "rtsp://192.168.1.21/1",
+      "response": "RTSP/1.0 200 OK\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n"
+    },
+    {
+      "variant": "ALAC",
+      "url": "rtsp://192.168.1.21/1",
+      "response": "RTSP/1.0 200 OK\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n"
+    },
+    {
+      "variant": "ALAC + Apple-Challenge",
+      "url": "rtsp://192.168.1.21/1",
+      "response": "RTSP/1.0 200 OK\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n"
+    },
+    {
+      "variant": "AAC",
+      "url": "rtsp://192.168.1.21/1",
+      "response": "RTSP/1.0 406 Not Acceptable\r\nContent-Length: 0\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n"
+    },
+    {
+      "variant": "ALAC + Apple-Challenge + X-Apple headers",
+      "url": "rtsp://192.168.1.21/1",
+      "response": "RTSP/1.0 200 OK\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n"
+    },
+    {
+      "variant": "L16 + X-Apple headers",
+      "url": "rtsp://192.168.1.21/1",
+      "response": "RTSP/1.0 200 OK\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n"
+    },
+    {
+      "variant": "ALAC, url=rtsp://ip/<sessionid>",
+      "url": "rtsp://192.168.1.21/1792246378",
+      "response": "RTSP/1.0 200 OK\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n"
+    },
+    {
+      "variant": "ALAC, c=IN IP4 0.0.0.0",
+      "url": "rtsp://192.168.1.21/1",
+      "response": "RTSP/1.0 200 OK\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n"
+    }
+  ]
+}
