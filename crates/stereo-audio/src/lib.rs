@@ -74,6 +74,18 @@ pub use endpoint::{DataFlow, DeviceSelector, EndpointInfo, FormatInfo, PcmFormat
 pub use error::{AudioError, Result};
 pub use ring::{ReadOutcome, RingBuffer};
 
+/// 声学自校验（麦克风互相关测延迟 + 自动对齐）。
+///
+/// 注意：本机实测**只有独占模式**能采到真实声学信号（共享模式整段是 0.48 LSB 平底），
+/// 所以自动标定走 `capture_mono_exclusive`，且必须丢弃开流后前 [`EXCLUSIVE_WARMUP_MS`]。
+#[cfg(windows)]
+pub use sync::{
+    calibrate_pair, calibrate_pair_sequential, calibrate_pair_simultaneous, capture_mono,
+    delay_ms_for, list_microphones, measure_endpoint_delay, mic_health, play_alignment_clicks,
+    CapturedAudio, CapturePath, Correlation, MicCandidate, MicHealth, MicKind, MicVerdict,
+    PcmStats, SyncConfig, SyncMethod, SyncProbe, SyncResult, EXCLUSIVE_WARMUP_MS,
+};
+
 #[cfg(windows)]
 pub use btsplit::{BtSplitConfig, BtSplitHandle, BtSplitStats, SplitSinkStats, SPLIT_SAMPLE_RATE};
 #[cfg(windows)]
