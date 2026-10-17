@@ -1,0 +1,125 @@
+{
+  "started": "2026-10-17T22:06:23+0800",
+  "note": "token VALUES are never emitted; only descriptors",
+  "hello": {
+    "192.168.1.171": {
+      "ok": true,
+      "reply_hex": "213100200000000037ba2c3000001c18ffffffffffffffffffffffffffffffff",
+      "device_id_hex": "37ba2c30",
+      "device_id_int": 934947888,
+      "stamp": 7192,
+      "token_from_hello_hex": "ffffffffffffffffffffffffffffffff",
+      "token_from_hello_is_ff": true
+    },
+    "192.168.1.21": {
+      "ok": true,
+      "reply_hex": "21310020000000001de79f0800001bcaffffffffffffffffffffffffffffffff",
+      "device_id_hex": "1de79f08",
+      "device_id_int": 501718792,
+      "stamp": 7114,
+      "token_from_hello_hex": "ffffffffffffffffffffffffffffffff",
+      "token_from_hello_is_ff": true
+    }
+  },
+  "calls": [],
+  "token_sources": [
+    {
+      "path": "C:\\Users\\Administrator\\conf\\.mi.token",
+      "exists": true,
+      "size": 711,
+      "top_level_keys": [
+        "deviceId",
+        "micoapi",
+        "passToken",
+        "userId"
+      ],
+      "token_like_fields": []
+    },
+    {
+      "path": "D:\\MiXPlay\\conf\\.mi.token",
+      "exists": true,
+      "size": 711,
+      "top_level_keys": [
+        "deviceId",
+        "micoapi",
+        "passToken",
+        "userId"
+      ],
+      "token_like_fields": []
+    },
+    {
+      "path": "C:\\Users\\Administrator\\conf\\config.json",
+      "exists": true,
+      "size": 2248,
+      "top_level_keys": [
+        "airplay2_lead_skip_ms",
+        "airplay2_multiroom_lead_ms",
+        "airplay_mode",
+        "conf_path",
+        "default_audio_id",
+        "default_xiaomi_volume",
+        "dlna",
+        "group",
+        "local_speaker",
+        "miplay",
+        "notify",
+        "sync_delay_ms",
+        "targets",
+        "verbose",
+        "web_port",
+        "web_sync_delay_ms",
+        "xiaomi"
+      ],
+      "token_like_fields": []
+    }
+  ],
+  "device_list_probe": {
+    "token_file": {
+      "path": "C:\\Users\\Administrator\\conf\\.mi.token",
+      "exists": true,
+      "size": 711,
+      "top_level_keys": [
+        "deviceId",
+        "micoapi",
+        "passToken",
+        "userId"
+      ],
+      "token_like_fields": []
+    },
+    "store_keys": [
+      "deviceId",
+      "micoapi",
+      "passToken",
+      "userId"
+    ],
+    "store_key_types": {
+      "deviceId": "str",
+      "userId": "str",
+      "passToken": "str",
+      "micoapi": "list"
+    },
+    "store_value_shapes": {
+      "deviceId": 16,
+      "userId": 10,
+      "passToken": 347,
+      "micoapi": 2
+    },
+    "found": [
+      {
+        "key_path": "deviceId",
+        "key": "deviceId",
+        "descriptor": {
+          "len": 16,
+          "sha256_8": "7aaa5d9b",
+          "first_2_hex": "3238",
+          "looks_like_miio_token": true
+        }
+      }
+    ]
+  },
+  "candidate_tokens": [],
+  "authenticated_local_miio": {
+    "attempted": false,
+    "reason": "no 16-byte device token found in .mi.token or config.json"
+  }
+}

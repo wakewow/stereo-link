@@ -1,0 +1,425 @@
+{
+  "started": "2026-10-17T22:01:02+0800",
+  "hostname": "PC-20251004QUHB",
+  "browsed_types": [
+    "_services._dns-sd._udp.local.",
+    "_raop._tcp.local.",
+    "_airplay._tcp.local.",
+    "_mi-connect._udp.local.",
+    "_miplay._tcp.local.",
+    "_miplay._udp.local.",
+    "_micont._tcp.local.",
+    "_miio._udp.local.",
+    "_miio._tcp.local.",
+    "_miot._tcp.local.",
+    "_mihome._tcp.local.",
+    "_googlecast._tcp.local.",
+    "_spotify-connect._tcp.local.",
+    "_sonos._tcp.local.",
+    "_matter._tcp.local.",
+    "_matterc._udp.local.",
+    "_dlna._tcp.local.",
+    "_upnp._tcp.local.",
+    "_http._tcp.local.",
+    "_https._tcp.local.",
+    "_ssh._tcp.local.",
+    "_device-info._tcp.local.",
+    "_airport._tcp.local.",
+    "_companion-link._tcp.local.",
+    "_touch-able._tcp.local.",
+    "_appletv-v2._tcp.local.",
+    "_mediaremotetv._tcp.local.",
+    "_sleep-proxy._udp.local.",
+    "_hsc._tcp.local.",
+    "_sdap._tcp.local.",
+    "_amzn-wplay._tcp.local.",
+    "_hap._tcp.local.",
+    "_workstation._tcp.local.",
+    "_printer._tcp.local.",
+    "_ipp._tcp.local.",
+    "_rdlink._tcp.local.",
+    "_airplay._udp.local."
+  ],
+  "raw_queries": [],
+  "records": [
+    {
+      "name": "L16A-1695.local.",
+      "type": "A",
+      "type_num": 1,
+      "class": "in",
+      "unique": true,
+      "ttl": 120,
+      "raw_to_string": "<DNSAddress name=L16A-1695.local. type=a class=in unique ttl=120 (89 remaining) data=1792245692.8518534>",
+      "address": "��\u0001\u0015"
+    },
+    {
+      "name": "L16A-1738.local.",
+      "type": "A",
+      "type_num": 1,
+      "class": "in",
+      "unique": true,
+      "ttl": 120,
+      "raw_to_string": "<DNSAddress name=L16A-1738.local. type=a class=in unique ttl=120 (90 remaining) data=1792245692.8518534>",
+      "address": "��\u0001\u0015"
+    },
+    {
+      "name": "小爱音箱-5320(AnRV-C3ba-).local.",
+      "type": "A",
+      "type_num": 1,
+      "class": "in",
+      "unique": true,
+      "ttl": 120,
+      "raw_to_string": "<DNSAddress name=小爱音箱-5320(AnRV-C3ba-).local. type=a class=in unique ttl=120 (89 remaining) data=1792245692.8518534>",
+      "address": "��\u0001�"
+    },
+    {
+      "name": "L16A-1695.local.",
+      "type": "AAAA",
+      "type_num": 28,
+      "class": "in",
+      "unique": true,
+      "ttl": 120,
+      "raw_to_string": "<DNSAddress name=L16A-1695.local. type=aaaa class=in unique ttl=120 (89 remaining) data=1792245692.8518534>",
+      "address": "$\b�V\f�\u0003#\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0002"
+    },
+    {
+      "name": "小爱音箱-5320(AnRV-C3ba-).local.",
+      "type": "AAAA",
+      "type_num": 28,
+      "class": "in",
+      "unique": true,
+      "ttl": 120,
+      "raw_to_string": "<DNSAddress name=小爱音箱-5320(AnRV-C3ba-).local. type=aaaa class=in unique ttl=120 (89 remaining) data=1792245692.8518534>",
+      "address": "$\b�V\f�\u0003#\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0003"
+    },
+    {
+      "name": "_airplay._tcp.local.",
+      "type": "PTR",
+      "type_num": 12,
+      "class": "in",
+      "unique": false,
+      "ttl": 4500,
+      "raw_to_string": "<DNSPointer name=_airplay._tcp.local. type=ptr class=in ttl=4500 (4469 remaining) data=1792245692.8518534>",
+      "alias": "Xiaomi Sound-1695._airplay._tcp.local."
+    },
+    {
+      "name": "_mi-connect._udp.local.",
+      "type": "PTR",
+      "type_num": 12,
+      "class": "in",
+      "unique": false,
+      "ttl": 1125,
+      "raw_to_string": "<DNSPointer name=_mi-connect._udp.local. type=ptr class=in ttl=1125 (1094 remaining) data=1792245692.8518534>",
+      "alias": "小爱音箱-5320(AnRV-C3ba-)._mi-connect._udp.local."
+    },
+    {
+      "name": "_mi-connect._udp.local.",
+      "type": "PTR",
+      "type_num": 12,
+      "class": "in",
+      "unique": false,
+      "ttl": 4500,
+      "raw_to_string": "<DNSPointer name=_mi-connect._udp.local. type=ptr class=in ttl=4500 (4470 remaining) data=1792245692.8518534>",
+      "alias": "小爱音箱-1695._mi-connect._udp.local."
+    },
+    {
+      "name": "_raop._tcp.local.",
+      "type": "PTR",
+      "type_num": 12,
+      "class": "in",
+      "unique": false,
+      "ttl": 4500,
+      "raw_to_string": "<DNSPointer name=_raop._tcp.local. type=ptr class=in ttl=4500 (4469 remaining) data=1792245692.8518534>",
+      "alias": "5E02142BB3C6@Xiaomi Sound-1695._raop._tcp.local."
+    },
+    {
+      "name": "_services._dns-sd._udp.local.",
+      "type": "PTR",
+      "type_num": 12,
+      "class": "in",
+      "unique": false,
+      "ttl": 1125,
+      "raw_to_string": "<DNSPointer name=_services._dns-sd._udp.local. type=ptr class=in ttl=1125 (1094 remaining) data=1792245692.8518534>",
+      "alias": "_dsh-mobile._tcp.local."
+    },
+    {
+      "name": "_services._dns-sd._udp.local.",
+      "type": "PTR",
+      "type_num": 12,
+      "class": "in",
+      "unique": false,
+      "ttl": 4500,
+      "raw_to_string": "<DNSPointer name=_services._dns-sd._udp.local. type=ptr class=in ttl=4500 (4469 remaining) data=1792245692.8518534>",
+      "alias": "_airplay._tcp.local."
+    },
+    {
+      "name": "_services._dns-sd._udp.local.",
+      "type": "PTR",
+      "type_num": 12,
+      "class": "in",
+      "unique": false,
+      "ttl": 4500,
+      "raw_to_string": "<DNSPointer name=_services._dns-sd._udp.local. type=ptr class=in ttl=4500 (4469 remaining) data=1792245692.8518534>",
+      "alias": "_raop._tcp.local."
+    },
+    {
+      "name": "_services._dns-sd._udp.local.",
+      "type": "PTR",
+      "type_num": 12,
+      "class": "in",
+      "unique": false,
+      "ttl": 4500,
+      "raw_to_string": "<DNSPointer name=_services._dns-sd._udp.local. type=ptr class=in ttl=4500 (4469 remaining) data=1792245692.8518534>",
+      "alias": "_mi-connect._udp.local."
+    },
+    {
+      "name": "5E02142BB3C6@Xiaomi Sound-1695._raop._tcp.local.",
+      "type": "SRV",
+      "type_num": 33,
+      "class": "in",
+      "unique": true,
+      "ttl": 120,
+      "raw_to_string": "<DNSService name=5E02142BB3C6@Xiaomi Sound-1695._raop._tcp.local. type=srv class=in unique ttl=120 (89 remaining) data=1792245692.8518534>",
+      "server": "L16A-1695.local.",
+      "port": 7000,
+      "priority": 0,
+      "weight": 0
+    },
+    {
+      "name": "Xiaomi Sound-1695._airplay._tcp.local.",
+      "type": "SRV",
+      "type_num": 33,
+      "class": "in",
+      "unique": true,
+      "ttl": 120,
+      "raw_to_string": "<DNSService name=Xiaomi Sound-1695._airplay._tcp.local. type=srv class=in unique ttl=120 (89 remaining) data=1792245692.8518534>",
+      "server": "L16A-1695.local.",
+      "port": 7000,
+      "priority": 0,
+      "weight": 0
+    },
+    {
+      "name": "小爱音箱-1695._mi-connect._udp.local.",
+      "type": "SRV",
+      "type_num": 33,
+      "class": "in",
+      "unique": true,
+      "ttl": 120,
+      "raw_to_string": "<DNSService name=小爱音箱-1695._mi-connect._udp.local. type=srv class=in unique ttl=120 (90 remaining) data=1792245692.8518534>",
+      "server": "L16A-1738.local.",
+      "port": 56666,
+      "priority": 0,
+      "weight": 0
+    },
+    {
+      "name": "小爱音箱-5320(AnRV-C3ba-)._mi-connect._udp.local.",
+      "type": "SRV",
+      "type_num": 33,
+      "class": "in",
+      "unique": true,
+      "ttl": 120,
+      "raw_to_string": "<DNSService name=小爱音箱-5320(AnRV-C3ba-)._mi-connect._udp.local. type=srv class=in unique ttl=120 (89 remaining) data=1792245692.8518534>",
+      "server": "小爱音箱-5320(AnRV-C3ba-).local.",
+      "port": 56666,
+      "priority": 0,
+      "weight": 0
+    },
+    {
+      "name": "5E02142BB3C6@Xiaomi Sound-1695._raop._tcp.local.",
+      "type": "TXT",
+      "type_num": 16,
+      "class": "in",
+      "unique": true,
+      "ttl": 4500,
+      "raw_to_string": "<DNSText name=5E02142BB3C6@Xiaomi Sound-1695._raop._tcp.local. type=txt class=in unique ttl=4500 (4469 remaining) data=1792245692.8518534>",
+      "text": "\u0006cn=0,1\u0007da=true\u0004et=0\u0015ft=0xC05F8A00,0x1C340\nfv=1.106.3\bmd=0,1,2\u0007am=L16A\u0006sf=0x4\u0006tp=UDP\bvn=65537\bvs=366.0Cpk=be290bd4d4b9be518aaf69881f893cdcfcea477c40f361d17a14179cce25cd6f",
+      "txt_props": {
+        "cn": "0,1",
+        "da": "true",
+        "et": "0",
+        "ft": "0xC05F8A00,0x1C340",
+        "fv": "1.106.3",
+        "md": "0,1,2",
+        "am": "L16A",
+        "sf": "0x4",
+        "tp": "UDP",
+        "vn": "65537",
+        "vs": "366.0",
+        "pk": "be290bd4d4b9be518aaf69881f893cdcfcea477c40f361d17a14179cce25cd6f"
+      }
+    },
+    {
+      "name": "Xiaomi Sound-1695._airplay._tcp.local.",
+      "type": "TXT",
+      "type_num": 16,
+      "class": "in",
+      "unique": true,
+      "ttl": 4500,
+      "raw_to_string": "<DNSText name=Xiaomi Sound-1695._airplay._tcp.local. type=txt class=in unique ttl=4500 (4469 remaining) data=1792245692.8518534>",
+      "text": "\u0005acl=0\u001adeviceid=5E:02:14:2B:B3:C6\u001bfeatures=0xC05F8A00,0x1C340\u0007rsf=0x4\nfv=1.106.3\tflags=0x4\nmodel=L16A\u0013manufacturer=XiaoMi\u001cserialNumber=34471/A1T321695\rprotovers=1.1\rsrcvers=366.0\u0014pi=5E:02:14:2B:B3:C6\u0015gid=5E:02:14:2B:B3:C6\u0006gcgl=0Cpk=be290bd4d4b9be518aaf69881f893cdcfcea477c40f361d17a14179cce25cd6f",
+      "txt_props": {
+        "acl": "0",
+        "deviceid": "5E:02:14:2B:B3:C6",
+        "features": "0xC05F8A00,0x1C340",
+        "rsf": "0x4",
+        "fv": "1.106.3",
+        "flags": "0x4",
+        "model": "L16A",
+        "manufacturer": "XiaoMi",
+        "serialNumber": "34471/A1T321695",
+        "protovers": "1.1",
+        "srcvers": "366.0",
+        "pi": "5E:02:14:2B:B3:C6",
+        "gid": "5E:02:14:2B:B3:C6",
+        "gcgl": "0",
+        "pk": "be290bd4d4b9be518aaf69881f893cdcfcea477c40f361d17a14179cce25cd6f"
+      }
+    },
+    {
+      "name": "小爱音箱-1695._mi-connect._udp.local.",
+      "type": "TXT",
+      "type_num": 16,
+      "class": "in",
+      "unique": true,
+      "ttl": 4500,
+      "raw_to_string": "<DNSText name=小爱音箱-1695._mi-connect._udp.local. type=txt class=in unique ttl=4500 (4470 remaining) data=1792245692.8518534>",
+      "text": "\rversion=65545\bapps=[5]\nflags=Ag==\u0016name=小爱音箱-1695\u000bidHash=ZGEz\u0005dev=4\u0005sec=2�appsData=gQBmBIMiw1wCFCuzxgAAAaFJw/H+AAAAAAAAAAAAewoJIm1pY28iOiB7CgkJImRldmljZV9pZCI6ICJmNThjNjQ1My0wMjY4LTRkZjUtYTIyMC0xMzM1YmI4NDE3MmIiIAoJfSAKfSAK",
+      "txt_props": {
+        "version": "65545",
+        "apps": "[5]",
+        "flags": "Ag==",
+        "name": "小爱音箱-1695",
+        "idHash": "ZGEz",
+        "dev": "4",
+        "sec": "2",
+        "appsData": "gQBmBIMiw1wCFCuzxgAAAaFJw/H+AAAAAAAAAAAAewoJIm1pY28iOiB7CgkJImRldmljZV9pZCI6ICJmNThjNjQ1My0wMjY4LTRkZjUtYTIyMC0xMzM1YmI4NDE3MmIiIAoJfSAKfSAK"
+      }
+    },
+    {
+      "name": "小爱音箱-5320(AnRV-C3ba-)._mi-connect._udp.local.",
+      "type": "TXT",
+      "type_num": 16,
+      "class": "in",
+      "unique": true,
+      "ttl": 120,
+      "raw_to_string": "<DNSText name=小爱音箱-5320(AnRV-C3ba-)._mi-connect._udp.local. type=txt class=in unique ttl=120 (89 remaining) data=1792245692.8518534>",
+      "text": "\rversion=65545\bapps=[5]\nflags=Ag==\u0016name=小爱音箱-5320\u000bidHash=ZEFu\u0005dev=4\u0005sec=2�appsData=gQBmBIMiw5D7XQ+5XAAAAaFJw/H+AAAAAAAAAAAAewoJIm1pY28iOiB7CgkJImRldmljZV9pZCI6ICIwYzkwNDFiMy1hMTU1LTRmZmItODE0ZS00OTdhMjY2YjFlOTMiIAoJfSAKfSAK\fmac=kPtdD7lc",
+      "txt_props": {
+        "version": "65545",
+        "apps": "[5]",
+        "flags": "Ag==",
+        "name": "小爱音箱-5320",
+        "idHash": "ZEFu",
+        "dev": "4",
+        "sec": "2",
+        "appsData": "gQBmBIMiw5D7XQ+5XAAAAaFJw/H+AAAAAAAAAAAAewoJIm1pY28iOiB7CgkJImRldmljZV9pZCI6ICIwYzkwNDFiMy1hMTU1LTRmZmItODE0ZS00OTdhMjY2YjFlOTMiIAoJfSAKfSAK",
+        "mac": "kPtdD7lc"
+      }
+    }
+  ],
+  "services_seen": {
+    "_raop._tcp.local.": {
+      "5E02142BB3C6@Xiaomi Sound-1695._raop._tcp.local.": {
+        "server": "L16A-1695.local.",
+        "port": 7000,
+        "addresses": [
+          "192.168.1.21"
+        ],
+        "properties": {
+          "cn": "0,1",
+          "da": "true",
+          "et": "0",
+          "ft": "0xC05F8A00,0x1C340",
+          "fv": "1.106.3",
+          "md": "0,1,2",
+          "am": "L16A",
+          "sf": "0x4",
+          "tp": "UDP",
+          "vn": "65537",
+          "vs": "366.0",
+          "pk": "be290bd4d4b9be518aaf69881f893cdcfcea477c40f361d17a14179cce25cd6f"
+        },
+        "txt_as_sent": "\u0006cn=0,1\u0007da=true\u0004et=0\u0015ft=0xC05F8A00,0x1C340\nfv=1.106.3\bmd=0,1,2\u0007am=L16A\u0006sf=0x4\u0006tp=UDP\bvn=65537\bvs=366.0Cpk=be290bd4d4b9be518aaf69881f893cdcfcea477c40f361d17a14179cce25cd6f"
+      }
+    },
+    "_airplay._tcp.local.": {
+      "Xiaomi Sound-1695._airplay._tcp.local.": {
+        "server": "L16A-1695.local.",
+        "port": 7000,
+        "addresses": [
+          "192.168.1.21"
+        ],
+        "properties": {
+          "acl": "0",
+          "deviceid": "5E:02:14:2B:B3:C6",
+          "features": "0xC05F8A00,0x1C340",
+          "rsf": "0x4",
+          "fv": "1.106.3",
+          "flags": "0x4",
+          "model": "L16A",
+          "manufacturer": "XiaoMi",
+          "serialNumber": "34471/A1T321695",
+          "protovers": "1.1",
+          "srcvers": "366.0",
+          "pi": "5E:02:14:2B:B3:C6",
+          "gid": "5E:02:14:2B:B3:C6",
+          "gcgl": "0",
+          "pk": "be290bd4d4b9be518aaf69881f893cdcfcea477c40f361d17a14179cce25cd6f"
+        },
+        "txt_as_sent": "\u0005acl=0\u001adeviceid=5E:02:14:2B:B3:C6\u001bfeatures=0xC05F8A00,0x1C340\u0007rsf=0x4\nfv=1.106.3\tflags=0x4\nmodel=L16A\u0013manufacturer=XiaoMi\u001cserialNumber=34471/A1T321695\rprotovers=1.1\rsrcvers=366.0\u0014pi=5E:02:14:2B:B3:C6\u0015gid=5E:02:14:2B:B3:C6\u0006gcgl=0Cpk=be290bd4d4b9be518aaf69881f893cdcfcea477c40f361d17a14179cce25cd6f"
+      }
+    },
+    "_mi-connect._udp.local.": {
+      "小爱音箱-1695._mi-connect._udp.local.": {
+        "server": "L16A-1738.local.",
+        "port": 56666,
+        "addresses": [
+          "192.168.1.21"
+        ],
+        "properties": {
+          "version": "65545",
+          "apps": "[5]",
+          "flags": "Ag==",
+          "name": "小爱音箱-1695",
+          "idHash": "ZGEz",
+          "dev": "4",
+          "sec": "2",
+          "appsData": "gQBmBIMiw1wCFCuzxgAAAaFJw/H+AAAAAAAAAAAAewoJIm1pY28iOiB7CgkJImRldmljZV9pZCI6ICJmNThjNjQ1My0wMjY4LTRkZjUtYTIyMC0xMzM1YmI4NDE3MmIiIAoJfSAKfSAK"
+        },
+        "txt_as_sent": "\rversion=65545\bapps=[5]\nflags=Ag==\u0016name=小爱音箱-1695\u000bidHash=ZGEz\u0005dev=4\u0005sec=2�appsData=gQBmBIMiw1wCFCuzxgAAAaFJw/H+AAAAAAAAAAAAewoJIm1pY28iOiB7CgkJImRldmljZV9pZCI6ICJmNThjNjQ1My0wMjY4LTRkZjUtYTIyMC0xMzM1YmI4NDE3MmIiIAoJfSAKfSAK"
+      },
+      "小爱音箱-5320(AnRV-C3ba-)._mi-connect._udp.local.": {
+        "server": "小爱音箱-5320(AnRV-C3ba-).local.",
+        "port": 56666,
+        "addresses": [
+          "192.168.1.171"
+        ],
+        "properties": {
+          "version": "65545",
+          "apps": "[5]",
+          "flags": "Ag==",
+          "name": "小爱音箱-5320",
+          "idHash": "ZEFu",
+          "dev": "4",
+          "sec": "2",
+          "appsData": "gQBmBIMiw5D7XQ+5XAAAAaFJw/H+AAAAAAAAAAAAewoJIm1pY28iOiB7CgkJImRldmljZV9pZCI6ICIwYzkwNDFiMy1hMTU1LTRmZmItODE0ZS00OTdhMjY2YjFlOTMiIAoJfSAKfSAK",
+          "mac": "kPtdD7lc"
+        },
+        "txt_as_sent": "\rversion=65545\bapps=[5]\nflags=Ag==\u0016name=小爱音箱-5320\u000bidHash=ZEFu\u0005dev=4\u0005sec=2�appsData=gQBmBIMiw5D7XQ+5XAAAAaFJw/H+AAAAAAAAAAAAewoJIm1pY28iOiB7CgkJImRldmljZV9pZCI6ICIwYzkwNDFiMy1hMTU1LTRmZmItODE0ZS00OTdhMjY2YjFlOTMiIAoJfSAKfSAK\fmac=kPtdD7lc"
+      }
+    }
+  },
+  "cache_type_buckets": {
+    "_services._dns-sd._udp.local.": 4,
+    "l16a-1695.local.": 5,
+    "_airplay._tcp.local.": 1,
+    "_raop._tcp.local.": 1,
+    "xiaomi sound-1695._airplay._tcp.local.": 2,
+    "5e02142bb3c6@xiaomi sound-1695._raop._tcp.local.": 2,
+    "小爱音箱-5320(anrv-c3ba-).local.": 2,
+    "_mi-connect._udp.local.": 2,
+    "小爱音箱-5320(anrv-c3ba-)._mi-connect._udp.local.": 2,
+    "l16a-1738.local.": 1,
+    "小爱音箱-1695._mi-connect._udp.local.": 2
+  }
+}

@@ -1,0 +1,2129 @@
+{
+  "started": "2026-10-17T22:00:06+0800",
+  "timeout_s": 1.2,
+  "workers": 32,
+  "tcp": {
+    "192.168.1.171:21": {
+      "ip": "192.168.1.171",
+      "port": 21,
+      "label": "ftp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:22": {
+      "ip": "192.168.1.171",
+      "port": 22,
+      "label": "ssh",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:23": {
+      "ip": "192.168.1.171",
+      "port": 23,
+      "label": "telnet",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:53": {
+      "ip": "192.168.1.171",
+      "port": 53,
+      "label": "dns",
+      "tcp_open": true,
+      "banner": null,
+      "banner_ascii": "",
+      "sent": "(none: read-only peek)",
+      "error": null,
+      "connect_ms": 8.2,
+      "banner_len": 0,
+      "banner_hex": ""
+    },
+    "192.168.1.171:80": {
+      "ip": "192.168.1.171",
+      "port": 80,
+      "label": "http",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:111": {
+      "ip": "192.168.1.171",
+      "port": 111,
+      "label": "rpcbind",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:139": {
+      "ip": "192.168.1.171",
+      "port": 139,
+      "label": "netbios",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:443": {
+      "ip": "192.168.1.171",
+      "port": 443,
+      "label": "https",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:445": {
+      "ip": "192.168.1.171",
+      "port": 445,
+      "label": "smb",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:515": {
+      "ip": "192.168.1.171",
+      "port": 515,
+      "label": "lpd",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:548": {
+      "ip": "192.168.1.171",
+      "port": 548,
+      "label": "afpovertcp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:554": {
+      "ip": "192.168.1.171",
+      "port": 554,
+      "label": "rtsp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:631": {
+      "ip": "192.168.1.171",
+      "port": 631,
+      "label": "ipp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:1900": {
+      "ip": "192.168.1.171",
+      "port": 1900,
+      "label": "ssdp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:2049": {
+      "ip": "192.168.1.171",
+      "port": 2049,
+      "label": "nfs",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:3000": {
+      "ip": "192.168.1.171",
+      "port": 3000,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:3306": {
+      "ip": "192.168.1.171",
+      "port": 3306,
+      "label": "mysql",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:3689": {
+      "ip": "192.168.1.171",
+      "port": 3689,
+      "label": "daap",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:5000": {
+      "ip": "192.168.1.171",
+      "port": 5000,
+      "label": "upnp/airplay-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:5060": {
+      "ip": "192.168.1.171",
+      "port": 5060,
+      "label": "sip",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:5222": {
+      "ip": "192.168.1.171",
+      "port": 5222,
+      "label": "xmpp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:5289": {
+      "ip": "192.168.1.171",
+      "port": 5289,
+      "label": "airplay-alt2",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:5297": {
+      "ip": "192.168.1.171",
+      "port": 5297,
+      "label": "bonjour",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:5298": {
+      "ip": "192.168.1.171",
+      "port": 5298,
+      "label": "bonjour",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:5353": {
+      "ip": "192.168.1.171",
+      "port": 5353,
+      "label": "mdns",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:5432": {
+      "ip": "192.168.1.171",
+      "port": 5432,
+      "label": "postgres",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:5555": {
+      "ip": "192.168.1.171",
+      "port": 5555,
+      "label": "adb",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:5900": {
+      "ip": "192.168.1.171",
+      "port": 5900,
+      "label": "vnc",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:6881": {
+      "ip": "192.168.1.171",
+      "port": 6881,
+      "label": "bittorrent",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:7000": {
+      "ip": "192.168.1.171",
+      "port": 7000,
+      "label": "airplay/raop",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:7100": {
+      "ip": "192.168.1.171",
+      "port": 7100,
+      "label": "airplay-alt3",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:7237": {
+      "ip": "192.168.1.171",
+      "port": 7237,
+      "label": "raop-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8000": {
+      "ip": "192.168.1.171",
+      "port": 8000,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8008": {
+      "ip": "192.168.1.171",
+      "port": 8008,
+      "label": "cast",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8009": {
+      "ip": "192.168.1.171",
+      "port": 8009,
+      "label": "cast-tls",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8080": {
+      "ip": "192.168.1.171",
+      "port": 8080,
+      "label": "http-proxy",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8081": {
+      "ip": "192.168.1.171",
+      "port": 8081,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8082": {
+      "ip": "192.168.1.171",
+      "port": 8082,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8085": {
+      "ip": "192.168.1.171",
+      "port": 8085,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8123": {
+      "ip": "192.168.1.171",
+      "port": 8123,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8200": {
+      "ip": "192.168.1.171",
+      "port": 8200,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8443": {
+      "ip": "192.168.1.171",
+      "port": 8443,
+      "label": "https-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8554": {
+      "ip": "192.168.1.171",
+      "port": 8554,
+      "label": "rtsp-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8888": {
+      "ip": "192.168.1.171",
+      "port": 8888,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:8899": {
+      "ip": "192.168.1.171",
+      "port": 8899,
+      "error": "AttributeError(\"'bytes' object has no attribute 'format'\")",
+      "tcp_open": false
+    },
+    "192.168.1.171:8989": {
+      "ip": "192.168.1.171",
+      "port": 8989,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:9000": {
+      "ip": "192.168.1.171",
+      "port": 9000,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:9090": {
+      "ip": "192.168.1.171",
+      "port": 9090,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:9100": {
+      "ip": "192.168.1.171",
+      "port": 9100,
+      "label": "printer",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:10000": {
+      "ip": "192.168.1.171",
+      "port": 10000,
+      "label": "webmin",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:11223": {
+      "ip": "192.168.1.171",
+      "port": 11223,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:18080": {
+      "ip": "192.168.1.171",
+      "port": 18080,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:32200": {
+      "ip": "192.168.1.171",
+      "port": 32200,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:32400": {
+      "ip": "192.168.1.171",
+      "port": 32400,
+      "label": "plex",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:32469": {
+      "ip": "192.168.1.171",
+      "port": 32469,
+      "label": "dlna",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:35000": {
+      "ip": "192.168.1.171",
+      "port": 35000,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:35500": {
+      "ip": "192.168.1.171",
+      "port": 35500,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:36666": {
+      "ip": "192.168.1.171",
+      "port": 36666,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:40000": {
+      "ip": "192.168.1.171",
+      "port": 40000,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:41111": {
+      "ip": "192.168.1.171",
+      "port": 41111,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:43210": {
+      "ip": "192.168.1.171",
+      "port": 43210,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:48000": {
+      "ip": "192.168.1.171",
+      "port": 48000,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:49152": {
+      "ip": "192.168.1.171",
+      "port": 49152,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:49153": {
+      "ip": "192.168.1.171",
+      "port": 49153,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:49154": {
+      "ip": "192.168.1.171",
+      "port": 49154,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:49155": {
+      "ip": "192.168.1.171",
+      "port": 49155,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:49156": {
+      "ip": "192.168.1.171",
+      "port": 49156,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:49157": {
+      "ip": "192.168.1.171",
+      "port": 49157,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:49158": {
+      "ip": "192.168.1.171",
+      "port": 49158,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:49159": {
+      "ip": "192.168.1.171",
+      "port": 49159,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:49160": {
+      "ip": "192.168.1.171",
+      "port": 49160,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52540": {
+      "ip": "192.168.1.171",
+      "port": 52540,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52541": {
+      "ip": "192.168.1.171",
+      "port": 52541,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52542": {
+      "ip": "192.168.1.171",
+      "port": 52542,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52543": {
+      "ip": "192.168.1.171",
+      "port": 52543,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52544": {
+      "ip": "192.168.1.171",
+      "port": 52544,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52545": {
+      "ip": "192.168.1.171",
+      "port": 52545,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52546": {
+      "ip": "192.168.1.171",
+      "port": 52546,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52547": {
+      "ip": "192.168.1.171",
+      "port": 52547,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52548": {
+      "ip": "192.168.1.171",
+      "port": 52548,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52549": {
+      "ip": "192.168.1.171",
+      "port": 52549,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52550": {
+      "ip": "192.168.1.171",
+      "port": 52550,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52551": {
+      "ip": "192.168.1.171",
+      "port": 52551,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52552": {
+      "ip": "192.168.1.171",
+      "port": 52552,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52553": {
+      "ip": "192.168.1.171",
+      "port": 52553,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52554": {
+      "ip": "192.168.1.171",
+      "port": 52554,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52555": {
+      "ip": "192.168.1.171",
+      "port": 52555,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52556": {
+      "ip": "192.168.1.171",
+      "port": 52556,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52557": {
+      "ip": "192.168.1.171",
+      "port": 52557,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52558": {
+      "ip": "192.168.1.171",
+      "port": 52558,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52559": {
+      "ip": "192.168.1.171",
+      "port": 52559,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:52560": {
+      "ip": "192.168.1.171",
+      "port": 52560,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:54321": {
+      "ip": "192.168.1.171",
+      "port": 54321,
+      "label": "miio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:55442": {
+      "ip": "192.168.1.171",
+      "port": 55442,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:55555": {
+      "ip": "192.168.1.171",
+      "port": 55555,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:56666": {
+      "ip": "192.168.1.171",
+      "port": 56666,
+      "label": "mi-connect",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:62078": {
+      "ip": "192.168.1.171",
+      "port": 62078,
+      "label": "iphone-sync",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.171:63999": {
+      "ip": "192.168.1.171",
+      "port": 63999,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:21": {
+      "ip": "192.168.1.21",
+      "port": 21,
+      "label": "ftp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:22": {
+      "ip": "192.168.1.21",
+      "port": 22,
+      "label": "ssh",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:23": {
+      "ip": "192.168.1.21",
+      "port": 23,
+      "label": "telnet",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:53": {
+      "ip": "192.168.1.21",
+      "port": 53,
+      "label": "dns",
+      "tcp_open": true,
+      "banner": null,
+      "banner_ascii": "",
+      "sent": "(none: read-only peek)",
+      "error": null,
+      "connect_ms": 15.2,
+      "banner_len": 0,
+      "banner_hex": ""
+    },
+    "192.168.1.21:80": {
+      "ip": "192.168.1.21",
+      "port": 80,
+      "label": "http",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:111": {
+      "ip": "192.168.1.21",
+      "port": 111,
+      "label": "rpcbind",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:139": {
+      "ip": "192.168.1.21",
+      "port": 139,
+      "label": "netbios",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:443": {
+      "ip": "192.168.1.21",
+      "port": 443,
+      "label": "https",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:445": {
+      "ip": "192.168.1.21",
+      "port": 445,
+      "label": "smb",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:515": {
+      "ip": "192.168.1.21",
+      "port": 515,
+      "label": "lpd",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:548": {
+      "ip": "192.168.1.21",
+      "port": 548,
+      "label": "afpovertcp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:554": {
+      "ip": "192.168.1.21",
+      "port": 554,
+      "label": "rtsp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:631": {
+      "ip": "192.168.1.21",
+      "port": 631,
+      "label": "ipp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:1900": {
+      "ip": "192.168.1.21",
+      "port": 1900,
+      "label": "ssdp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:2049": {
+      "ip": "192.168.1.21",
+      "port": 2049,
+      "label": "nfs",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:3000": {
+      "ip": "192.168.1.21",
+      "port": 3000,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:3306": {
+      "ip": "192.168.1.21",
+      "port": 3306,
+      "label": "mysql",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:3689": {
+      "ip": "192.168.1.21",
+      "port": 3689,
+      "label": "daap",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:5000": {
+      "ip": "192.168.1.21",
+      "port": 5000,
+      "label": "upnp/airplay-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:5060": {
+      "ip": "192.168.1.21",
+      "port": 5060,
+      "label": "sip",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:5222": {
+      "ip": "192.168.1.21",
+      "port": 5222,
+      "label": "xmpp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:5289": {
+      "ip": "192.168.1.21",
+      "port": 5289,
+      "label": "airplay-alt2",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:5297": {
+      "ip": "192.168.1.21",
+      "port": 5297,
+      "label": "bonjour",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:5298": {
+      "ip": "192.168.1.21",
+      "port": 5298,
+      "label": "bonjour",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:5353": {
+      "ip": "192.168.1.21",
+      "port": 5353,
+      "label": "mdns",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:5432": {
+      "ip": "192.168.1.21",
+      "port": 5432,
+      "label": "postgres",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:5555": {
+      "ip": "192.168.1.21",
+      "port": 5555,
+      "label": "adb",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:5900": {
+      "ip": "192.168.1.21",
+      "port": 5900,
+      "label": "vnc",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:6881": {
+      "ip": "192.168.1.21",
+      "port": 6881,
+      "label": "bittorrent",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:7000": {
+      "ip": "192.168.1.21",
+      "port": 7000,
+      "label": "airplay/raop",
+      "tcp_open": true,
+      "banner": "RTSP/1.0 200 OK",
+      "banner_ascii": "RTSP/1.0 200 OK\r\nPublic: ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, FLUSHBUFFERED, TEARDOWN, OPTIONS, POST, GET, PUT\r\nServer: AirTunes/366.0\r\nCSeq: 1\r\n\r\n",
+      "sent": "RTSP OPTIONS *",
+      "error": null,
+      "connect_ms": 4.5,
+      "banner_len": 149,
+      "banner_hex": "525453502f312e3020323030204f4b0d0a5075626c69633a20414e4e4f554e43452c2053455455502c205245434f52442c2050415553452c20464c5553482c20464c55534842554646455245442c2054454152444f574e2c204f5054494f4e532c20504f53542c204745542c205055540d0a5365727665723a2041697254756e65732f3336362e300d0a435365713a20310d0a0d0a"
+    },
+    "192.168.1.21:7100": {
+      "ip": "192.168.1.21",
+      "port": 7100,
+      "label": "airplay-alt3",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:7237": {
+      "ip": "192.168.1.21",
+      "port": 7237,
+      "label": "raop-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8000": {
+      "ip": "192.168.1.21",
+      "port": 8000,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8008": {
+      "ip": "192.168.1.21",
+      "port": 8008,
+      "label": "cast",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8009": {
+      "ip": "192.168.1.21",
+      "port": 8009,
+      "label": "cast-tls",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8080": {
+      "ip": "192.168.1.21",
+      "port": 8080,
+      "label": "http-proxy",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8081": {
+      "ip": "192.168.1.21",
+      "port": 8081,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8082": {
+      "ip": "192.168.1.21",
+      "port": 8082,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8085": {
+      "ip": "192.168.1.21",
+      "port": 8085,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8123": {
+      "ip": "192.168.1.21",
+      "port": 8123,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8200": {
+      "ip": "192.168.1.21",
+      "port": 8200,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8443": {
+      "ip": "192.168.1.21",
+      "port": 8443,
+      "label": "https-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8554": {
+      "ip": "192.168.1.21",
+      "port": 8554,
+      "label": "rtsp-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8888": {
+      "ip": "192.168.1.21",
+      "port": 8888,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:8899": {
+      "ip": "192.168.1.21",
+      "port": 8899,
+      "error": "AttributeError(\"'bytes' object has no attribute 'format'\")",
+      "tcp_open": false
+    },
+    "192.168.1.21:8989": {
+      "ip": "192.168.1.21",
+      "port": 8989,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:9000": {
+      "ip": "192.168.1.21",
+      "port": 9000,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:9090": {
+      "ip": "192.168.1.21",
+      "port": 9090,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:9100": {
+      "ip": "192.168.1.21",
+      "port": 9100,
+      "label": "printer",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:10000": {
+      "ip": "192.168.1.21",
+      "port": 10000,
+      "label": "webmin",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:11223": {
+      "ip": "192.168.1.21",
+      "port": 11223,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:18080": {
+      "ip": "192.168.1.21",
+      "port": 18080,
+      "label": "http-alt",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:32200": {
+      "ip": "192.168.1.21",
+      "port": 32200,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:32400": {
+      "ip": "192.168.1.21",
+      "port": 32400,
+      "label": "plex",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:32469": {
+      "ip": "192.168.1.21",
+      "port": 32469,
+      "label": "dlna",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:35000": {
+      "ip": "192.168.1.21",
+      "port": 35000,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:35500": {
+      "ip": "192.168.1.21",
+      "port": 35500,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:36666": {
+      "ip": "192.168.1.21",
+      "port": 36666,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:40000": {
+      "ip": "192.168.1.21",
+      "port": 40000,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:41111": {
+      "ip": "192.168.1.21",
+      "port": 41111,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:43210": {
+      "ip": "192.168.1.21",
+      "port": 43210,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:48000": {
+      "ip": "192.168.1.21",
+      "port": 48000,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:49152": {
+      "ip": "192.168.1.21",
+      "port": 49152,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:49153": {
+      "ip": "192.168.1.21",
+      "port": 49153,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:49154": {
+      "ip": "192.168.1.21",
+      "port": 49154,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:49155": {
+      "ip": "192.168.1.21",
+      "port": 49155,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:49156": {
+      "ip": "192.168.1.21",
+      "port": 49156,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:49157": {
+      "ip": "192.168.1.21",
+      "port": 49157,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:49158": {
+      "ip": "192.168.1.21",
+      "port": 49158,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:49159": {
+      "ip": "192.168.1.21",
+      "port": 49159,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:49160": {
+      "ip": "192.168.1.21",
+      "port": 49160,
+      "label": "upnp",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52540": {
+      "ip": "192.168.1.21",
+      "port": 52540,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52541": {
+      "ip": "192.168.1.21",
+      "port": 52541,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52542": {
+      "ip": "192.168.1.21",
+      "port": 52542,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52543": {
+      "ip": "192.168.1.21",
+      "port": 52543,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52544": {
+      "ip": "192.168.1.21",
+      "port": 52544,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52545": {
+      "ip": "192.168.1.21",
+      "port": 52545,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52546": {
+      "ip": "192.168.1.21",
+      "port": 52546,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52547": {
+      "ip": "192.168.1.21",
+      "port": 52547,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52548": {
+      "ip": "192.168.1.21",
+      "port": 52548,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52549": {
+      "ip": "192.168.1.21",
+      "port": 52549,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52550": {
+      "ip": "192.168.1.21",
+      "port": 52550,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52551": {
+      "ip": "192.168.1.21",
+      "port": 52551,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52552": {
+      "ip": "192.168.1.21",
+      "port": 52552,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52553": {
+      "ip": "192.168.1.21",
+      "port": 52553,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52554": {
+      "ip": "192.168.1.21",
+      "port": 52554,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52555": {
+      "ip": "192.168.1.21",
+      "port": 52555,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52556": {
+      "ip": "192.168.1.21",
+      "port": 52556,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52557": {
+      "ip": "192.168.1.21",
+      "port": 52557,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52558": {
+      "ip": "192.168.1.21",
+      "port": 52558,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52559": {
+      "ip": "192.168.1.21",
+      "port": 52559,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:52560": {
+      "ip": "192.168.1.21",
+      "port": 52560,
+      "label": "raop-audio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:54321": {
+      "ip": "192.168.1.21",
+      "port": 54321,
+      "label": "miio",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:55442": {
+      "ip": "192.168.1.21",
+      "port": 55442,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:55555": {
+      "ip": "192.168.1.21",
+      "port": 55555,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:56666": {
+      "ip": "192.168.1.21",
+      "port": 56666,
+      "label": "mi-connect",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:62078": {
+      "ip": "192.168.1.21",
+      "port": 62078,
+      "label": "iphone-sync",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    },
+    "192.168.1.21:63999": {
+      "ip": "192.168.1.21",
+      "port": 63999,
+      "label": "mi-?",
+      "tcp_open": false,
+      "banner": null,
+      "banner_ascii": null,
+      "sent": null,
+      "error": "connect timeout"
+    }
+  },
+  "udp": {
+    "miio_54321": [
+      {
+        "ip": "192.168.1.171",
+        "port": 54321,
+        "test": "miio hello",
+        "request_hex": "21310020ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "response_hex": "213100200000000037ba2c3000001aa7ffffffffffffffffffffffffffffffff",
+        "response_len": 32,
+        "device_id": "37ba2c30",
+        "stamp": 6823,
+        "error": null,
+        "from": "192.168.1.171",
+        "magic": "2131",
+        "length_field": 32,
+        "token_or_checksum_hex": "ffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ip": "192.168.1.21",
+        "port": 54321,
+        "test": "miio hello",
+        "request_hex": "21310020ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "response_hex": "21310020000000001de79f0800001a58ffffffffffffffffffffffffffffffff",
+        "response_len": 32,
+        "device_id": "1de79f08",
+        "stamp": 6744,
+        "error": null,
+        "from": "192.168.1.21",
+        "magic": "2131",
+        "length_field": 32,
+        "token_or_checksum_hex": "ffffffffffffffffffffffffffffffff"
+      }
+    ],
+    "ssdp": {
+      "request": "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n",
+      "responders": {}
+    },
+    "blind": [
+      {
+        "ip": "192.168.1.171",
+        "port": 56666,
+        "label": "mi-connect keepalive guess",
+        "payload_hex": "00000000",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.171",
+        "port": 54321,
+        "label": "miio hello (repeat)",
+        "payload_hex": "21310020ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "response_hex": "213100200000000037ba2c3000001aabffffffffffffffffffffffffffffffff",
+        "error": null,
+        "response_ascii": "!1\u0000 \u0000\u0000\u0000\u00007�,0\u0000\u0000\u001a�����������������",
+        "from": "192.168.1.171"
+      },
+      {
+        "ip": "192.168.1.171",
+        "port": 1900,
+        "label": "ssdp unicast",
+        "payload_hex": "4d2d534541524348202a20485454502f312e310d0a484f53543a203233392e3235352e3235352e3235303a313930300d0a4d414e3a2022737364703a646973636f766572220d0a4d583a20310d0a53543a20737364703a616c6c0d0a0d0a",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.171",
+        "port": 7000,
+        "label": "airplay udp? (expect none)",
+        "payload_hex": "00",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.171",
+        "port": 32200,
+        "label": "mi guess",
+        "payload_hex": "00",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.171",
+        "port": 35000,
+        "label": "mi guess",
+        "payload_hex": "00",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.171",
+        "port": 52540,
+        "label": "raop control guess",
+        "payload_hex": "00",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.21",
+        "port": 56666,
+        "label": "mi-connect keepalive guess",
+        "payload_hex": "00000000",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.21",
+        "port": 54321,
+        "label": "miio hello (repeat)",
+        "payload_hex": "21310020ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "response_hex": "21310020000000001de79f0800001a66ffffffffffffffffffffffffffffffff",
+        "error": null,
+        "response_ascii": "!1\u0000 \u0000\u0000\u0000\u0000\u001d�\b\u0000\u0000\u001af����������������",
+        "from": "192.168.1.21"
+      },
+      {
+        "ip": "192.168.1.21",
+        "port": 1900,
+        "label": "ssdp unicast",
+        "payload_hex": "4d2d534541524348202a20485454502f312e310d0a484f53543a203233392e3235352e3235352e3235303a313930300d0a4d414e3a2022737364703a646973636f766572220d0a4d583a20310d0a53543a20737364703a616c6c0d0a0d0a",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.21",
+        "port": 7000,
+        "label": "airplay udp? (expect none)",
+        "payload_hex": "00",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.21",
+        "port": 32200,
+        "label": "mi guess",
+        "payload_hex": "00",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.21",
+        "port": 35000,
+        "label": "mi guess",
+        "payload_hex": "00",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      },
+      {
+        "ip": "192.168.1.21",
+        "port": 52540,
+        "label": "raop control guess",
+        "payload_hex": "00",
+        "response_hex": null,
+        "error": "no response (may still be open+silent, or filtered)"
+      }
+    ]
+  },
+  "open_tcp": [
+    "192.168.1.171:53 (dns)",
+    "192.168.1.21:53 (dns)",
+    "192.168.1.21:7000 (airplay/raop)"
+  ]
+}

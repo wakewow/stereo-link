@@ -1,0 +1,157 @@
+{
+  "started": "2026-10-17T21:53:09+0800",
+  "local_hostname": "PC-20251004QUHB",
+  "steps": [
+    {
+      "step": "services_meta_query",
+      "qname": "_services._dns-sd._udp.local.",
+      "qtype": "PTR",
+      "wire_hex": "e2b200000001000000000000095f7365727669636573075f646e732d7364045f756470056c6f63616c00000c0001",
+      "from": [],
+      "records": []
+    }
+  ],
+  "advertised_types": [],
+  "types": {
+    "_airplay._tcp.local.": {
+      "qname": "_airplay._tcp.local.",
+      "wire_hex": "e9da00000001000000000000085f616972706c6179045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_airport._tcp.local.": {
+      "qname": "_airport._tcp.local.",
+      "wire_hex": "0d7700000001000000000000085f616972706f7274045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_companion-link._tcp.local.": {
+      "qname": "_companion-link._tcp.local.",
+      "wire_hex": "00b0000000010000000000000f5f636f6d70616e696f6e2d6c696e6b045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_device-info._tcp.local.": {
+      "qname": "_device-info._tcp.local.",
+      "wire_hex": "4e5f000000010000000000000c5f6465766963652d696e666f045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_dlna._tcp.local.": {
+      "qname": "_dlna._tcp.local.",
+      "wire_hex": "572300000001000000000000055f646c6e61045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_googlecast._tcp.local.": {
+      "qname": "_googlecast._tcp.local.",
+      "wire_hex": "535f000000010000000000000b5f676f6f676c6563617374045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_hap._tcp.local.": {
+      "qname": "_hap._tcp.local.",
+      "wire_hex": "48bd00000001000000000000045f686170045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_http._tcp.local.": {
+      "qname": "_http._tcp.local.",
+      "wire_hex": "d87000000001000000000000055f68747470045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_matter._tcp.local.": {
+      "qname": "_matter._tcp.local.",
+      "wire_hex": "42b100000001000000000000075f6d6174746572045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_mi-connect._udp.local.": {
+      "qname": "_mi-connect._udp.local.",
+      "wire_hex": "8350000000010000000000000b5f6d692d636f6e6e656374045f756470056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_micont._tcp.local.": {
+      "qname": "_micont._tcp.local.",
+      "wire_hex": "14e900000001000000000000075f6d69636f6e74045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_miio._tcp.local.": {
+      "qname": "_miio._tcp.local.",
+      "wire_hex": "c89100000001000000000000055f6d69696f045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_miio._udp.local.": {
+      "qname": "_miio._udp.local.",
+      "wire_hex": "dd2400000001000000000000055f6d69696f045f756470056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_miot._tcp.local.": {
+      "qname": "_miot._tcp.local.",
+      "wire_hex": "3ab500000001000000000000055f6d696f74045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_miplay._tcp.local.": {
+      "qname": "_miplay._tcp.local.",
+      "wire_hex": "b02000000001000000000000075f6d69706c6179045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_miplay._udp.local.": {
+      "qname": "_miplay._udp.local.",
+      "wire_hex": "c73900000001000000000000075f6d69706c6179045f756470056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_raop._tcp.local.": {
+      "qname": "_raop._tcp.local.",
+      "wire_hex": "95c200000001000000000000055f72616f70045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_sdap._tcp.local.": {
+      "qname": "_sdap._tcp.local.",
+      "wire_hex": "6d2400000001000000000000055f73646170045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_spotify-connect._tcp.local.": {
+      "qname": "_spotify-connect._tcp.local.",
+      "wire_hex": "0d9700000001000000000000105f73706f746966792d636f6e6e656374045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    },
+    "_upnp._tcp.local.": {
+      "qname": "_upnp._tcp.local.",
+      "wire_hex": "115b00000001000000000000055f75706e70045f746370056c6f63616c00000c0001",
+      "responders": [],
+      "ptr_records": [],
+      "instances": {}
+    }
+  }
+}

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>miplay-bridge · 小米妙播设备</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #171a21;
+    --card-hover: #1d212a;
+    --border: #262b36;
+    --fg: #e6e9ef;
+    --muted: #8b93a7;
+    --accent: #ff6a1f;
+    --accent-dim: #7a3410;
+    --ok: #34d399;
+    --off: #6b7280;
+    --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 20px 60px;
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.55 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--muted); font-size: 12.5px; }
+  .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 18px 0 14px; }
+  button {
+    background: var(--card); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 13px; cursor: pointer; font-size: 13px;
+    transition: background .13s, border-color .13s;
+  }
+  button:hover { background: var(--card-hover); border-color: #39404e; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1a0d05; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input[type=text] {
+    background: #10131a; color: var(--fg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 11px; font-size: 13px; font-family: inherit;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent-dim); }
+  input[type=range] { accent-color: var(--accent); width: 130px; vertical-align: middle; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 16px 14px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .card .top { display: flex; align-items: center; gap: 9px; }
+  .name { font-size: 15.5px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 8px rgba(52,211,153,.55); }
+  .meta { color: var(--muted); font-size: 12px; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+  .meta b { font-weight: 500; color: #6f7787; }
+  code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11.5px; color: #c8cede; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .vol-val { width: 34px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .tag {
+    font-size: 11px; padding: 1.5px 7px; border-radius: 999px;
+    background: #222834; color: var(--muted); border: 1px solid var(--border);
+  }
+  .tag.hi { background: #2a1c10; color: #ffb37a; border-color: #4a2f16; }
+  #status { color: var(--muted); font-size: 12.5px; }
+  #status.err { color: var(--err); }
+  .empty { color: var(--muted); padding: 30px; text-align: center; border: 1px dashed var(--border); border-radius: 12px; }
+  a { color: var(--accent); }
+  .foot { margin-top: 26px; color: var(--muted); font-size: 12px; line-height: 1.9; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>miplay<span>-bridge</span></h1>
+    <div class="sub">把小米妙播设备变成 Windows 音频输出端点 · 设备总览</div>
+  </header>
+
+  <div class="bar">
+    <button class="primary" id="refresh">刷新设备</button>
+    <span id="status">加载中…</span>
+    <span style="flex:1"></span>
+    <span class="sub" id="account"></span>
+  </div>
+
+  <div class="grid" id="devices"></div>
+
+  <div class="foot">
+    <div>API：<code>GET /api/devices</code> · <code>POST /api/devices/{key}/play</code> · <code>POST /api/devices/{key}/volume</code> · <code>POST /api/devices/{key}/stop</code></div>
+    <div>本页只读取小米云设备列表并下发播放/音量指令；凭据保存在本机，不会上传。</div>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const statusEl = $('#status');
+const devicesEl = $('#devices');
+
+function setStatus(text, isErr) {
+  statusEl.textContent = text;
+  statusEl.className = isErr ? 'err' : '';
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+  if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function card(d) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  const apiName = d.hardware && ['LX04','LX05','L05B','L05C','L06','L06A','X08A','X10A','X08C','X08E','X8F','X4B','OH2','OH2P','X6A']
+    .includes(d.hardware.toUpperCase()) ? 'player_play_music' : 'player_play_url';
+  const stereo = d.capabilities && d.capabilities.stereo_mode_v2;
+  el.innerHTML = `
+    <div class="top">
+      <div class="dot ${d.online ? 'on' : ''}" title="${d.online ? '在线' : '离线'}"></div>
+      <div class="name" title="${esc(d.name)}">${esc(d.name || d.device_id)}</div>
+      ${stereo ? '<span class="tag hi">立体声</span>' : ''}
+      <span class="tag">${esc(d.hardware || '?')}</span>
+    </div>
+    <div class="meta">
+      <b>did</b><code>${esc(d.did || '-')}</code>
+      <b>MiNA</b><code>${esc(d.device_id)}</code>
+      <b>MAC</b><code>${esc(d.mac || '-')}</code>
+      <b>接口</b><code>${apiName}</code>
+    </div>
+    <div class="row">
+      <span class="sub">音量</span>
+      <input type="range" min="0" max="100" value="50" data-vol>
+      <span class="vol-val" data-volval>50</span>
+      <button data-act="setvol">设置</button>
+    </div>
+    <div class="row">
+      <input type="text" placeholder="音频 URL (http/https)" data-url style="flex:1;min-width:150px">
+      <button class="primary" data-act="play">投放</button>
+      <button data-act="stop">停止</button>
+    </div>
+    <div class="row">
+      <button data-act="tts">让它说句话</button>
+      <button data-act="probe">查询播放状态</button>
+    </div>
+  `;
+
+  const key = encodeURIComponent(d.did || d.device_id);
+  const q = (s) => el.querySelector(s);
+  const vol = q('[data-vol]'), volVal = q('[data-volval]');
+
+  vol.addEventListener('input', () => { volVal.textContent = vol.value; });
+
+  const guard = async (btn, fn) => {
+    btn.disabled = true;
+    try { await fn(); } catch (e) { setStatus(`失败：${e.message}`, true); }
+    finally { btn.disabled = false; }
+  };
+
+  q('[data-act=setvol]').onclick = (e) => guard(e.target, async () => {
+    await api(`/api/devices/${key}/volume`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volume: Number(vol.value) }),
+    });
+    setStatus(`${d.name} 音量已设为 ${vol.value}`);
+  });
+
+  q('[data-act=play]').onclick = (e) => guard(e.target, async () => {
+    const url = q('[data-url]').value.trim();
+    if (!url) return setStatus('请先填音频 URL', true);
+    const r = await api(`/api/devices/${key}/play`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    setStatus(`${r.device} 已下发（${r.api}）`);
+  });
+
+  q('[data-act=stop]').onclick = (e) => guard(e.target, async () => {
+    await api(`/api/devices/${key}/stop`, { method: 'POST' });
+    setStatus(`${d.name} 已停止`);
+  });
+
+  q('[data-act=tts]').onclick = (e) => guard(e.target, async () => {
+    await api(`/api/devices/${key}/tts`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: '你好，我是 miplay-bridge' }),
+    });
+    setStatus(`${d.name} 正在说话`);
+  });
+
+  q('[data-act=probe]').onclick = (e) => guard(e.target, async () => {
+    const r = await api(`/api/devices/${key}`);
+    setStatus(`${d.name} 播放状态：${JSON.stringify(r.play_status).slice(0, 160)}`);
+  });
+
+  return el;
+}
+
+async function refresh() {
+  $('#refresh').disabled = true;
+  setStatus('正在从小米云拉取设备…');
+  try {
+    const r = await api('/api/devices');
+    devicesEl.innerHTML = '';
+    if (!r.devices.length) {
+      devicesEl.innerHTML = '<div class="empty">账号下没有发现设备</div>';
+    } else {
+      r.devices.forEach((d) => devicesEl.appendChild(card(d)));
+    }
+    const on = r.devices.filter((d) => d.online).length;
+    setStatus(`共 ${r.count} 台设备，${on} 台在线 · ${new Date().toLocaleTimeString()}`);
+  } catch (e) {
+    setStatus(`加载失败：${e.message}`, true);
+  } finally {
+    $('#refresh').disabled = false;
+  }
+}
+
+(async () => {
+  try {
+    const h = await api('/api/health');
+    $('#account').textContent =
+      `账号 ${h.account.userId} · 版本 ${h.version}`;
+  } catch (e) {
+    $('#account').textContent = `账号信息不可用：${e.message}`;
+  }
+  refresh();
+})();
+</script>
+</body>
+</html>

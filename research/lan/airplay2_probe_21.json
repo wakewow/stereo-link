@@ -1,0 +1,231 @@
+{
+  "started": "2026-10-17T22:03:18+0800",
+  "target": "192.168.1.21:7000",
+  "steps": [
+    {
+      "step": "A. OPTIONS + Apple-Challenge",
+      "request": "OPTIONS * RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: iTunes/12.9.5 (Windows; Microsoft Windows 10 x64) AppleWebKit/7604.400.15\r\nClient-Instance: AB4511D61CF5F810\r\nDACP-ID: DCC93B6CDA37922B\r\nActive-Remote: 3214529556\r\nApple-Challenge: 4+VqJD1mxegkk6GXpYlZFQ==\r\n\r\n",
+      "parsed": {
+        "status_line": "RTSP/1.0 200 OK",
+        "code": 200,
+        "headers": {
+          "Public": "ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, FLUSHBUFFERED, TEARDOWN, OPTIONS, POST, GET, PUT",
+          "Server": "AirTunes/366.0",
+          "CSeq": "1"
+        },
+        "body_len": 0,
+        "body_hex": "",
+        "body_ascii": "",
+        "plist": null
+      },
+      "challenge_hex": "e3e56a243d66c5e82493a197a5895915"
+    },
+    {
+      "step": "B. GET /info",
+      "request": "GET /info RTSP/1.0\r\nCSeq: 2\r\nUser-Agent: iTunes/12.9.5 (Windows; Microsoft Windows 10 x64) AppleWebKit/7604.400.15\r\nClient-Instance: AB4511D61CF5F810\r\nDACP-ID: 08E883542F688034\r\nActive-Remote: 3407254823\r\n\r\n",
+      "parsed": {
+        "status_line": "RTSP/1.0 200 OK",
+        "code": 200,
+        "headers": {
+          "Content-Length": "543",
+          "Content-Type": "application/x-apple-binary-plist",
+          "Server": "AirTunes/366.0",
+          "CSeq": "2"
+        },
+        "body_len": 543,
+        "body_hex": "62706c6973743030df10130102030405060708090a0b0c0d0e0f101112131415161718191a1b191c191d151e1f202122235373646b5270695f10106669726d776172655265766973696f6e564f53496e666f5c6d616e7566616374757265725f10116b656570416c6976654c6f77506f7765725f10116669726d776172654275696c6444617465556d6f64656c5f10146e616d654973466163746f727944656661756c745f101068617264776172655265766973696f6e5f10186b656570416c69766553656e6453",
+        "body_ascii": "bplist00�\u0010\u0013\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u0019\u001c\u0019\u001d\u0015\u001e\u001f !\"#SsdkRpi_\u0010\u0010firmwareRevisionVOSInfo\\manufacturer_\u0010\u0011keepAliveLowPower_\u0010\u0011firmwareBuildDateUmodel_\u0010\u0014nameIsFactoryDefault_\u0010\u0010hardwareRevision_\u0010\u0018keepAliveSendStatsAsBody[statusFlagsXdeviceIDUbuildWPTPInfo_\u0010\u000fprotocolVersion]sourceVersionXfeaturesTname^AirPlay;2.0.10_\u0010\u00115E:02:14:2B:B3:C6W1.106.3V10.0.1VXiaoMi\t[Dec 15 2025TL16AU1.0.0\u0010\u0004T53.0_\u0010\u0012PTP-AirPlay;2.0.10S1.1U366.0\u0013\u0000\u0001�@�_�\u0000_\u0010\u0011Xiaomi Sound-1695\u0000\b\u00001\u00005\u00008\u0000K\u0000R\u0000_\u0000s\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0000�\u0001\u0007\u0001\u0015\u0001\u001e\u0001#\u00012\u0001F\u0001N\u0001U\u0001\\\u0001]\u0001i\u0001n\u0001t\u0001v\u0001{\u0001�\u0001�\u0001�\u0001�\u0000\u0000\u0000\u0000\u0000\u0000\u0002\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000$\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001�",
+        "plist": {
+          "sdk": "AirPlay;2.0.10",
+          "pi": "5E:02:14:2B:B3:C6",
+          "firmwareRevision": "1.106.3",
+          "OSInfo": "10.0.1",
+          "manufacturer": "XiaoMi",
+          "keepAliveLowPower": true,
+          "firmwareBuildDate": "Dec 15 2025",
+          "model": "L16A",
+          "nameIsFactoryDefault": true,
+          "hardwareRevision": "1.0.0",
+          "keepAliveSendStatsAsBody": true,
+          "statusFlags": 4,
+          "deviceID": "5E:02:14:2B:B3:C6",
+          "build": "53.0",
+          "PTPInfo": "PTP-AirPlay;2.0.10",
+          "protocolVersion": "1.1",
+          "sourceVersion": "366.0",
+          "features": 496157849520640,
+          "name": "Xiaomi Sound-1695"
+        }
+      }
+    },
+    {
+      "step": "C. POST /pair-verify (malformed)",
+      "request": "POST /pair-verify RTSP/1.0\r\nCSeq: 3\r\nUser-Agent: iTunes/12.9.5 (Windows; Microsoft Windows 10 x64) AppleWebKit/7604.400.15\r\nClient-Instance: AB4511D61CF5F810\r\nDACP-ID: 97DBF0E52E483860\r\nActive-Remote: 3167475368\r\nContent-Type: application/octet-stream\r\nContent-Length: 4\r\n\r\n",
+      "parsed": {
+        "status_line": "RTSP/1.0 403 Forbidden",
+        "code": 403,
+        "headers": {
+          "Content-Length": "0",
+          "Server": "AirTunes/366.0",
+          "CSeq": "3"
+        },
+        "body_len": 0,
+        "body_hex": "",
+        "body_ascii": "",
+        "plist": null
+      }
+    },
+    {
+      "step": "D. AirPlay2 SETUP (plist)",
+      "request": "SETUP rtsp://192.168.1.21:7000/AB4511D61CF5F810 RTSP/1.0\r\nCSeq: 4\r\nUser-Agent: iTunes/12.9.5 (Windows; Microsoft Windows 10 x64) AppleWebKit/7604.400.15\r\nClient-Instance: AB4511D61CF5F810\r\nDACP-ID: 92A5922EB38D155E\r\nActive-Remote: 3505911147\r\nContent-Type: application/x-apple-binary-plist\r\nContent-Length: 383\r\n\r\n",
+      "body_sent": {
+        "timingPort": 0,
+        "timingProtocol": "NTP",
+        "deviceID": "AA:BB:CC:DD:EE:FF",
+        "sessionUUID": "F94A6DE5-80E6-2E7F-6B74-A48DA281B26B",
+        "isScreenMirroringSession": false,
+        "streams": [
+          {
+            "type": 96,
+            "audioFormat": 262144,
+            "audioMode": 0,
+            "controlPort": 0,
+            "ct": 1,
+            "spf": 352,
+            "sr": 44100,
+            "ss": 16,
+            "et": 0,
+            "cn": 0,
+            "shk": 0,
+            "ssrc": 3609370622
+          }
+        ]
+      },
+      "parsed": {
+        "status_line": "RTSP/1.0 403 Forbidden",
+        "code": 403,
+        "headers": {
+          "Content-Length": "0",
+          "Server": "AirTunes/366.0",
+          "CSeq": "4"
+        },
+        "body_len": 0,
+        "body_hex": "",
+        "body_ascii": "",
+        "plist": null
+      }
+    },
+    {
+      "step": "E. legacy SETUP (no ANNOUNCE)",
+      "request": "SETUP rtsp://192.168.1.21:7000/AB4511D61CF5F810/1 RTSP/1.0\r\nCSeq: 5\r\nUser-Agent: iTunes/12.9.5 (Windows; Microsoft Windows 10 x64) AppleWebKit/7604.400.15\r\nClient-Instance: AB4511D61CF5F810\r\nDACP-ID: 7BCE7DC594318816\r\nActive-Remote: 1136521723\r\nTransport: RTP/AVP/UDP;unicast;mode=record;control;timing\r\n\r\n",
+      "parsed": {
+        "status_line": "RTSP/1.0 403 Forbidden",
+        "code": 403,
+        "headers": {
+          "Content-Length": "0",
+          "Server": "AirTunes/366.0",
+          "CSeq": "5"
+        },
+        "body_len": 0,
+        "body_hex": "",
+        "body_ascii": "",
+        "plist": null
+      }
+    }
+  ],
+  "no_pairing_written": true,
+  "no_audio_played": true,
+  "features_raw": 496157849520640,
+  "features_hex": "0x1C340C05F8A00",
+  "features_bits": [
+    {
+      "bit": 9,
+      "mask": "0x200",
+      "name": "AudioReceiver"
+    },
+    {
+      "bit": 11,
+      "mask": "0x800",
+      "name": "SupportsAirPlayAudioFormatALAC"
+    },
+    {
+      "bit": 15,
+      "mask": "0x8000",
+      "name": "MetadataFeatures: text"
+    },
+    {
+      "bit": 16,
+      "mask": "0x10000",
+      "name": "MetadataFeatures: artwork"
+    },
+    {
+      "bit": 17,
+      "mask": "0x20000",
+      "name": "MetadataFeatures: progress"
+    },
+    {
+      "bit": 18,
+      "mask": "0x40000",
+      "name": "SupportsUnifiedMediaControl"
+    },
+    {
+      "bit": 19,
+      "mask": "0x80000",
+      "name": "SupportsAirPlayVideoPlayQueue"
+    },
+    {
+      "bit": 20,
+      "mask": "0x100000",
+      "name": "SupportsAirPlayFromCloud"
+    },
+    {
+      "bit": 22,
+      "mask": "0x400000",
+      "name": "SupportsAirPlayScreenMultiDisplay"
+    },
+    {
+      "bit": 30,
+      "mask": "0x40000000",
+      "name": "SupportsAirPlayPTP"
+    },
+    {
+      "bit": 38,
+      "mask": "0x4000000000",
+      "name": "SupportsBufferedAudio"
+    },
+    {
+      "bit": 40,
+      "mask": "0x10000000000",
+      "name": "SupportsPTP"
+    },
+    {
+      "bit": 41,
+      "mask": "0x20000000000",
+      "name": "SupportsAirPlayAudioFormatALAC_2"
+    },
+    {
+      "bit": 46,
+      "mask": "0x400000000000",
+      "name": "SupportsAirPlayAudioFormatAAC_ELD_2"
+    },
+    {
+      "bit": 48,
+      "mask": "0x1000000000000",
+      "name": "SupportsAirPlayVideoPlayQueue2"
+    }
+  ],
+  "verdict": {
+    "apple_response_header": false,
+    "server": "AirTunes/366.0",
+    "public": "ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, FLUSHBUFFERED, TEARDOWN, OPTIONS, POST, GET, PUT",
+    "airplay2_setup_ok": false,
+    "legacy_setup_ok": false,
+    "codes": {
+      "A. OPTIONS + Apple-Challenge": 200,
+      "B. GET /info": 200,
+      "C. POST /pair-verify (malformed)": 403,
+      "D. AirPlay2 SETUP (plist)": 403,
+      "E. legacy SETUP (no ANNOUNCE)": 403
+    }
+  }
+}
