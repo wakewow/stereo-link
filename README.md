@@ -136,7 +136,7 @@ crates/
 scripts/
 ├─ switch-audio-default.ps1  切 Windows 默认输出（IPolicyConfig，内嵌进程序）
 ├─ gui-set-name.ps1          面板改名用：写设备名 + 重启 AudioEndpointBuilder
-├─ rename-endpoint.ps1       等价的命令行改名脚本（含 disable/enable、备份/回滚）
+├─ rename-endpoint.ps1       备用命令行改名脚本（含备份/回滚；正常安装/卸载走 gui-set-name.ps1）
 └─ backups/                  改名前的注册表备份（本机数据，勿提交）
 安装虚拟声卡.cmd / 卸载虚拟声卡.cmd   虚拟声卡的安装 / 卸载入口（需管理员）
 docs/gui.md                 面板手册（界面、操作、改名/改格式、FAQ）

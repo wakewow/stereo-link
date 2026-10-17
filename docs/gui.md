@@ -114,8 +114,8 @@
 | 提示文字 | 说明「把 Windows 输出选成虚拟声卡后，播放器声音才会流进分离链路」 |
 
 面板内部调用的是 `scripts\gui-set-name.ps1`（自提权、写 `FriendlyName`、重启
-`AudioEndpointBuilder`、轮询校验）。`scripts\rename-endpoint.ps1` 是等价的老脚本，额外做了
-disable/enable，也可以手动跑（管理员 PowerShell，脚本会先备份注册表到 `scripts\backups\`）：
+`AudioEndpointBuilder`、轮询校验）。`scripts\rename-endpoint.ps1` 是备用命令行脚本（额外做了
+disable/enable，Win11 上可能 pending-reboot），一般不需要手动跑：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\rename-endpoint.ps1 `

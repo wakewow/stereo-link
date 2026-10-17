@@ -43,11 +43,9 @@ goto :done
 :fallback
 echo.
 echo [1/2] scripts\backups\ 里没有找到 Steam_Streaming_Speakers 的原始备份。
-echo       回退为直接删除 FriendlyName 值，并重启一次设备。
+echo       回退为直接删除 FriendlyName 值，并重启 AudioEndpointBuilder。
 reg delete "HKLM\SYSTEM\CurrentControlSet\Enum\%DEVICE%" /v FriendlyName /f >nul 2>&1
-pnputil /disable-device "%DEVICE%" >nul 2>&1
-timeout /t 2 /nobreak >nul
-pnputil /enable-device "%DEVICE%" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Restart-Service AudioEndpointBuilder -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3" >nul 2>&1
 echo       已删除设备显示名，Windows 会恢复为「Steam Streaming Speakers」。
 echo       想再改成「立体声链设备」等任意名字：打开 StereoLink 面板，
 echo       在「虚拟声卡」区用「应用重命名」，或重跑「安装虚拟声卡.cmd」。
@@ -73,7 +71,7 @@ exit /b 1
 :no_script
 echo.
 echo [错误] 找不到改名脚本：%PS1%
-echo        请确认本文件位于仓库根目录，且 scripts\rename-endpoint.ps1 存在。
+echo        请确认本文件位于仓库根目录，且 scripts\ 下的脚本存在。
 echo.
 pause
 exit /b 1

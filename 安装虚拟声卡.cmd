@@ -4,7 +4,7 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 title 安装虚拟声卡 — StereoLink 立体声链
 
-set "PS1=%~dp0scripts\rename-endpoint.ps1"
+set "PS1=%~dp0scripts\gui-set-name.ps1"
 set "DEVICE=ROOT\STEAMSTREAMINGSPEAKERS\0000"
 set "NAME=立体声链设备"
 
@@ -16,7 +16,7 @@ echo  原理：借用机器上已有的已签名虚拟声卡（Steam Streaming S
 echo        只改注册表里的设备显示名，不写驱动、不开 test signing。
 echo        改名前会自动备份到 scripts\backups\，可用「卸载虚拟声卡.cmd」回滚。
 echo.
-echo  安装时设备会 disable/enable 一次（约 2-5 秒，期间音频可能中断）。
+echo  安装时会重启音频端点服务 AudioEndpointBuilder（约 2-4 秒音频中断）。
 echo  需要管理员权限；请右键本文件，选择「以管理员身份运行」。
 echo ------------------------------------------------------------
 net session >nul 2>&1
@@ -27,7 +27,7 @@ if errorlevel 1 goto :no_device
 
 echo.
 echo [1/2] 正在改名，先备份再写设备名...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -DeviceInstanceId "%DEVICE%" -NewName "%NAME%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -NewName "%NAME%"
 if errorlevel 1 goto :rename_failed
 
 echo.
@@ -52,7 +52,7 @@ exit /b 1
 :no_script
 echo.
 echo [错误] 找不到改名脚本：%PS1%
-echo        请确认本文件位于仓库根目录，且 scripts\rename-endpoint.ps1 存在。
+echo        请确认本文件位于仓库根目录，且 scripts\gui-set-name.ps1 存在。
 echo.
 pause
 exit /b 1
