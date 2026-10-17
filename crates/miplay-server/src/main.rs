@@ -8,9 +8,6 @@
 //!
 //! 目前刻意不引入 clap，用手写参数解析保持依赖精简。
 
-mod hub;
-mod stream;
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,10 +19,11 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use miplay_core::mina::PlayApi;
 use miplay_core::{MiToken, MinaClient, XiaomiDevice};
+use miplay_server::load_index_html;
+use miplay_server::{hub, stream};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-const INDEX_HTML: &str = include_str!("../../../web/index.html");
 const DEVICE_CACHE_TTL: Duration = Duration::from_secs(10);
 
 // ---------------------------------------------------------------- 状态与错误
@@ -98,20 +96,6 @@ type ApiResult<T> = std::result::Result<T, AppError>;
 
 async fn index() -> Html<String> {
     Html(load_index_html())
-}
-
-/// 优先读磁盘上的 `web/index.html`（改前端不用重编译），
-/// 读不到就回退到编译期嵌入的副本（保证单文件分发仍可用）。
-pub(crate) fn load_index_html() -> String {
-    for dir in [std::env::var("MIPLAY_WEB_DIR").ok(), Some("web".to_string())] {
-        if let Some(dir) = dir {
-            let p = std::path::Path::new(&dir).join("index.html");
-            if let Ok(s) = std::fs::read_to_string(&p) {
-                return s;
-            }
-        }
-    }
-    INDEX_HTML.to_string()
 }
 
 async fn api_health(State(st): State<Arc<AppState>>) -> Json<Value> {

@@ -5,6 +5,7 @@ members = [
     "crates/miplay-server",
     "crates/miplay-audio",
     "crates/miplay-airplay",
+    "crates/miplay-desktop",
 ]
 
 [workspace.package]

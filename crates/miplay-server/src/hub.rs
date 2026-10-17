@@ -1047,6 +1047,10 @@ pub async fn run(_argv: &[String]) -> anyhow::Result<()> {
 #[cfg(windows)]
 pub use win::run;
 
+/// 桌面 GUI 用的引擎外壳（把 `win::run` 那套装配流程塞进后台线程）。
+#[cfg(windows)]
+pub mod engine;
+
 #[cfg(windows)]
 mod win {
     use super::*;
@@ -1309,7 +1313,9 @@ mod win {
     }
 
     /// 名单 → 设备列表（did/uuid 都认），并给每条流定好声道源。
-    fn build_roster(
+    ///
+    /// `pub(crate)`：桌面 GUI 的引擎（`hub::engine`）要复用它装配同一份名单。
+    pub(crate) fn build_roster(
         all: &[XiaomiDevice],
         args: &Args,
         url_base: &str,

@@ -1,8 +1,10 @@
 # miplay-bridge
 
-把**小米妙播（MiPlay）**上的设备变成 Windows「声音输出」列表里可以直接选择的音频端点，并提供一个网页前端来查看和管理这些设备。
+把**小米妙播（MiPlay）**上的设备变成 Windows「声音输出」列表里可以直接选择的音频端点，并提供一个网页前端 / **桌面投放面板 exe** 来查看和管理这些设备。
 
 > 用 Rust 重写。**当前唯一路线：PC 系统声音 → 本机局域网 WAV 流 → 小米云 `play_url` → 音箱自己来拉流。**
+>
+> 日常使用推荐 **`miplay-bridge-desktop.exe`（桌面投放面板）**：双击打开，窗口里点投放、看连接和电平，不用开控制台。
 
 ---
 
@@ -40,6 +42,7 @@
 | P1 | 音箱局域网通路探测（`research/lan/`） | ✅ 结论明确 |
 | P2 | **妙播拉流 hub 产品化**（`hub` 子命令 + 网页控制） | 🚧 task-15 |
 | P2 | **延迟实测与瓶颈拆解** | 🚧 task-14 |
+| P2 | **桌面投放面板**（`crates/miplay-desktop`，单 exe = GUI + hub 引擎） | ✅ 真机投放出声 / 28 测试 |
 | P2 | 虚拟端点产品化（零驱动改名 / 自签驱动） | ⏸ 非主路径，待定 |
 | — | ~~AirPlay 2 发送端（`crates/miplay-airplay`）~~ | 📦 已归档 |
 
@@ -51,7 +54,8 @@ miplay-bridge/
 │  ├─ miplay-core/      # 设备模型、小米账号凭据、MiNA 云 API 客户端
 │  ├─ miplay-audio/     # WASAPI 回环采集、RingBuffer、声道分发、WAV 头
 │  ├─ miplay-airplay/   # AirPlay 2 发送端（📦 已归档，不再演进）
-│  └─ miplay-server/    # 主程序：CLI + HTTP API + 静态前端
+│  ├─ miplay-desktop/   # 桌面投放面板（eframe/egui；单 exe = GUI + hub 引擎）
+│  └─ miplay-server/    # 主程序：CLI + HTTP API + 静态前端 + hub 引擎
 ├─ web/                 # 网页前端（零构建依赖的静态页面）
 ├─ docs/                # 架构决策、API 参考、端到端与防火墙说明
 ├─ research/            # 技术调研（vad / miplay / lan / airplay / latency）
@@ -68,9 +72,23 @@ miplay-bridge/
 cargo build --workspace
 cargo run -q -p miplay-server -- devices        # 列出账号下的妙播设备
 cargo run -q -p miplay-server -- serve --port 8901   # 网页前端
+cargo build --release -p miplay-desktop        # 桌面投放面板 exe
 ```
 
 网页前端默认 `http://127.0.0.1:8900`（`serve` 默认端口），`serve --port 8901` 可改。
+
+## 桌面投放面板（推荐日常使用）
+
+```
+cargo build --release -p miplay-desktop
+# 双击 target\release\miplay-bridge-desktop.exe
+```
+
+一个 exe 里同时跑 GUI 和 hub 引擎：窗口开着 = 8931 在监听 = 播放器随时放歌都有声音。
+面板里可以投放/停止、看每台设备的在线/连接/延迟/已发流量、实时左右电平、日志，以及端口/增益/音量/
+左右分离/采集端点等设置；关窗口会先让云端 stop 再关流。
+
+详细说明（架构、配置、排障）见 [`docs/desktop-gui.md`](docs/desktop-gui.md)。
 
 ## 凭据
 
