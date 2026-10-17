@@ -1,162 +1,203 @@
-# 虚拟声卡：在 Windows 输出列表里直接选「扬声器 (立体声链设备)」
+# 虚拟声卡：Windows 输出列表里的「扬声器 (立体声链虚拟声卡)」
 
-> 目标：给 StereoLink 一个普通的「系统输出」入口——任何程序把输出切到它，声音就进入左右声道
-> 分离链路，不需要在每个播放器里单独选设备。
->
-> 实现：**借用机器上已有的已签名虚拟声卡（Steam Streaming Speakers），只改设备显示名**。
-> 不写驱动、不签驱动、不装用户态服务。
+> 实现：StereoLink 自研内核驱动 **StereoLinkVad**（render-only 虚拟声卡，从 Scream 派生，MS-PL）。
+> 安装需要开启测试签名（testsigning）并重启一次；卸载会移除驱动、设备、服务与自签证书，
+> 也可以顺手把 testsigning 关掉。
 
-## 1. 整条链路
+## 1. 这条链路怎么走
 
 ```text
-任何播放器
-   │  （输出选到「扬声器 (立体声链设备)」）
-   ▼
-虚拟声卡端点（Steam Streaming Speakers，设备名改成了「立体声链设备」）
-   │  WASAPI loopback 采集
-   │  48 kHz/2ch/32f 等混音格式 → 44100 Hz / 2 ch / 16 bit 交错 PCM
-   ▼
-stereo-link 面板内的路由引擎（stereo-audio）
-   ├─ 左声道 → 播放设备 A（例如蓝牙音箱 1）
-   └─ 右声道 → 播放设备 B（例如蓝牙音箱 2）
+Windows 播放器（浏览器 / 音乐播放器 / 视频 / 游戏 …）
+        │  默认输出 = 「扬声器 (立体声链虚拟声卡)」
+        ▼
+System 默认播放端点：StereoLinkVad 提供的 render 端点
+        │  WASAPI loopback 采集（44.1 kHz / 2 ch / 16 bit）
+        ▼
+StereoLink 路由引擎（每 10 ms 一块）
+        ├── 左声道 → 设备 A（如 Xiaomi Sound-1695）
+        └── 右声道 → 设备 B（如 Xiaomi Sound-5320）
 ```
 
-虚拟声卡本身**不处理音频**：它只是一个有 render 端点的空设备，声音写进去就被回环采走
-（Steam 客户端平时用它把游戏声音串流到其它设备）。StereoLink 借它的端点 + 设备名。
+播放器不需要任何配置：只要系统默认输出选到这台虚拟声卡，声音就会流进分离链路。
 
-## 2. 为什么不是「装一个自己的驱动」
+## 2. 为什么需要虚拟声卡
 
-用户态程序**不可能**凭空注册 render 端点：端点由 `AudioEndpointBuilder` 从内核驱动注册的
-`KSCATEGORY_AUDIO` 接口派生。三条路线都评估/试过：
+StereoLink 要在**系统级**拆左右声道，就必须有一个所有播放器都会把声音送进去的端点。
+用户态程序没法把自己变成「系统默认播放设备」，只有内核音频驱动能提供这样的端点。
+所以这个端点由一个小内核驱动提供；路由与播放仍在用户态完成（WASAPI），没有常驻服务、不联网。
 
-| 路线 | 结论 |
+驱动只提供 render（播放）端点，不提供录音端点；WASAPI 回环采集对 render 端点有效
+（在音频引擎里取数），两者不冲突。
+
+## 3. 驱动来源与许可
+
+| 项目 | 说明 |
 | --- | --- |
-| 自研 / 改造驱动（Scream 派生） | 签名能装上，但驱动载不起来：`0xC0000428 STATUS_INVALID_IMAGE_HASH`（`CM_PROB_UNSIGNED_DRIVER`）。必须开 test signing 或买 EV 证书做 attestation，不适合普通用户 |
-| USB/IP 虚拟设备 | Windows 侧 VHCI 只有未签名的 `usbip-win2`，同样要常开 test signing |
-| **借用已有虚拟声卡 + 改设备名** | ✅ **唯一免驱动、免证书、免重启的可行路线**，当前实现 |
+| 上游 | Scream（<https://github.com/duncanthrax/scream>，commit `d789743c248b11d1df7e5ecc546b1bc60b90cd91`），再往上是微软 WDK 的 MSVAD 示例 |
+| 许可证 | MS-PL（Microsoft Public License） |
+| 我们改了什么 | 设备/端点显示名改成「立体声链虚拟声卡」、硬件 id 改为 `*StereoLinkVad`、内核服务名改为 `StereoLinkVad`、补充构建/签名/安装脚本与 INF 注释 |
+| 再分发 | MS-PL 允许改名与再分发（含二进制），但必须保留版权与许可声明；`LICENSE-MS-PL.txt` 全文随驱动包一起放了 |
+| 商标 | MS-PL 不授予商标许可：`Scream` 只能作为出处说明出现，不能当产品名 |
 
-Steam Streaming Speakers 是 Valve 随 Steam 安装的**已签名**虚拟声卡（不是 StereoLink 分发
-的），文件名 `C:\Windows\System32\drivers\SteamStreamingSpeakers.sys`，约 40 KB，内核态运行，
-没有用户态进程。本仓库只改它的注册表显示名，不碰驱动文件。
+驱动本体落地为 `C:\Windows\System32\drivers\StereoLinkVad.sys`（约 37 KB，内核态运行），
+服务名 `StereoLinkVad`，设备类 `MEDIA`，实例 id **`ROOT\MEDIA\0001`**。
 
-## 3. 改名做了什么
+驱动包（`StereoLinkVad.inf` / `StereoLinkVad.sys` / `stereolinkvad.cat` / `LICENSE-MS-PL.txt`）
+由 `.scratch/vad/` 下的构建流水线生成（该目录是本机开发目录，不进仓库）。仓库里如果存在
+`drivers\pkg-stereolink\`，安装脚本会优先用仓库里的包；否则回退到 `.scratch\vad\pkg-stereolink\`。
 
-活路是写**设备硬件键**里的 `FriendlyName`，再让 `AudioEndpointBuilder` 重建一次端点：
+## 4. 构建与自签（开发机）
+
+需要 WDK 10.0.26100.0（`signtool.exe`、`Inf2Cat.exe`、`devcon.exe`）与 VS 生成工具：
 
 ```powershell
-# 1) 备份整个设备键
-reg export "HKLM\SYSTEM\CurrentControlSet\Enum\ROOT\STEAMSTREAMINGSPEAKERS\0000" backup.reg /y
-
-# 2) 写设备级名字
-reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ROOT\STEAMSTREAMINGSPEAKERS\0000" `
-  /v FriendlyName /t REG_SZ /d "立体声链设备" /f
-
-# 3) 让端点显示名跟着更新（重启 AudioEndpointBuilder，约 2–4 秒音频中断）
-Restart-Service AudioEndpointBuilder -Force
+cd .scratch\vad
+powershell -File .\drivers\build.ps1 -Config Release -BinName StereoLinkVad
+powershell -File .\make_package.ps1        # 生成 pkg-stereolink\
+powershell -File .\sign-vad.ps1            # 自签证书 + Inf2Cat + signtool 签名
+powershell -File .\install-vad.ps1         # 信任证书 + 暂存驱动 + 创建设备（不含 bcdedit）
 ```
 
-注意：不要用 `pnputil /disable-device` + `/enable-device` 或 `Disable-PnpDevice`。当前 Windows 11
-上这样会让设备停在 pending-reboot 状态（本机实测 `0x80041001`），改名反而不生效。重启
-`AudioEndpointBuilder` 就够了。
+签名用自签开发证书（`CN=StereoLink Virtual Audio Driver (dev)`，有效期 2026–2031，
+PFX 口令是本机开发口令）。自签证书只能过用户态的 `signtool verify /pa`；
+内核加载要求驱动证书链到微软根，所以 `signtool verify /kp` 会报
+`Signing Cert does not chain to a Microsoft Root Cert.`——这就是必须开测试签名的原因。
 
-结果：设备名 `立体声链设备` → Windows 输出列表里显示为 **`扬声器 (立体声链设备)`**。
-前缀「扬声器 」是系统按端点类型自动加的，不是我们写的。
+**改驱动内容时记得同时递增 INF 里的 `DriverVer`**：同版本号重装时 DriverStore 可能复用旧副本。
 
-已经确认的**死路**（不要再试）：
+## 5. 安装（用户）
 
-- `HKLM\SYSTEM\CurrentControlSet\Control\MMDevices\Audio\Render\{GUID}\Properties` 下的 `,14`
-  （设备属性存储里的 FriendlyName）：`reg add` 报 `Access is denied`，官方
-  `IPropertyStore::SetValue` 也是 `0x80070005 E_ACCESSDENIED`（提权管理员同样被拒，是
-  Audiosrv 的 ACL 保护），而且音频服务重启后会被覆盖。
-- 想去掉「扬声器 」前缀：那是端点/驱动 pin 名，零驱动改不掉。
+前提：Windows 10 / 11 x64、管理员权限、**Secure Boot 关闭**（开着的话测试签名驱动无法加载）。
 
-## 4. 脚本与面板入口
-
-| 入口 | 作用 |
-| --- | --- |
-| `安装虚拟声卡.cmd` | 管理员运行；把设备名改成「立体声链设备」（写 `FriendlyName` + 重启 `AudioEndpointBuilder`），输出列表出现「扬声器 (立体声链设备)」 |
-| `卸载虚拟声卡.cmd` | 管理员运行；删除 `FriendlyName` 并重启 `AudioEndpointBuilder`，设备名恢复成 Steam Streaming Speakers |
-| 面板 →「虚拟声卡」→「应用重命名」 | 面板内改名：弹 UAC 后执行 `scripts\gui-set-name.ps1`（写 `FriendlyName` + 重启 `AudioEndpointBuilder`，约 2–4 秒音频中断） |
-| `scripts\gui-set-name.ps1` | 安装 / 面板改名共用的底层实现（未提权时自己拉 UAC） |
-| `scripts\rename-endpoint.ps1` | 备用命令行脚本：支持 `-DryRun` / `-BackupOnly` / `-Rollback`，主路径仍会 disable/enable 设备（Win11 上可能 pending-reboot），正常使用不必跑它 |
-
-脚本参数：
-
-| 参数 | 说明 |
-| --- | --- |
-| `-DeviceInstanceId` | 设备实例路径，Steam Streaming Speakers 固定为 `ROOT\STEAMSTREAMINGSPEAKERS\0000` |
-| `-NewName` | 新设备名（面板限制 1–64 个字符、不能含 `\ / : * ? " < > \|`、不能全是空格） |
-| `-Rollback <reg>` | 从某个备份 `.reg` 回滚；**不能和 `-DeviceInstanceId` 同时传**（不同参数集，会报 `AmbiguousParameterSet`） |
-| `-BackupDir` | 备份目录，默认 `scripts\backups` |
-| `-DryRun` | 只打印将要做的事，不写注册表 |
-| `-BackupOnly` | 只备份、不改名 |
+1. 右键仓库根目录的 `安装虚拟声卡.cmd` → 「以管理员身份运行」，UAC 确认。
+2. 脚本自动完成：
+   - 检查 Secure Boot（开着会直接报错退出）；
+   - 检查 `bcdedit` 里的 `testsigning`，没开就执行 `bcdedit /set testsigning on`；
+   - 把自签证书导入「受信任的根证书颁发机构」和「受信任的发布者」（`certutil -addstore`）；
+   - `pnputil /add-driver StereoLinkVad.inf /install` 暂存驱动包；
+   - 如果没有设备实例，用 WDK 的 `devcon install StereoLinkVad.inf *StereoLinkVad`
+     创建 root 设备节点（`pnputil` 只能装驱动，不能建 root 设备）；
+   - 已有设备时跳过安装，只做状态检查。
+3. 如果脚本提示需要重启：**重启电脑**（脚本不会自己重启）。重启后桌面右下角出现
+   「测试模式」水印，属正常现象。
+4. 重启后验证（脚本也可以再跑一次，会自动走「已存在设备」分支）：
 
 ```powershell
-# 手动改名（管理员 PowerShell；脚本自己会先备份到 scripts\backups）
-powershell -ExecutionPolicy Bypass -File scripts\rename-endpoint.ps1 `
-  -DeviceInstanceId ROOT\STEAMSTREAMINGSPEAKERS\0000 -NewName "立体声链设备"
-
-# 试运行
-powershell -ExecutionPolicy Bypass -File scripts\rename-endpoint.ps1 `
-  -DeviceInstanceId ROOT\STEAMSTREAMINGSPEAKERS\0000 -NewName "立体声链设备" -DryRun
-
-# 从备份回滚
-powershell -ExecutionPolicy Bypass -File scripts\rename-endpoint.ps1 `
-  -Rollback scripts\backups\backup-Enum-ROOT_STEAMSTREAMINGSPEAKERS_0000-Steam_Streaming_Speakers-<时间戳>.reg
+pnputil /enum-devices /instanceid "ROOT\MEDIA\0001"   # 期望 Status: Started
+cargo run -q -p stereo-audio --bin endpoints           # 列表里应有「扬声器 (立体声链虚拟声卡)」
 ```
 
-备份目录 `scripts\backups\` 下改名前都会留下：
+之后「设置 → 系统 → 声音 → 输出」里就能看到 **「扬声器 (立体声链虚拟声卡)」**，打开
+`stereo-link.exe` 给左右声道各选一台设备即可。
 
-- `backup-Enum-steamstreamingspeakers-0000.<时间戳>.reg`（`gui-set-name.ps1` 的命名，小写、无元数据）
-  或 `backup-Enum-ROOT_STEAMSTREAMINGSPEAKERS_0000-<原始设备名>-<时间戳>.reg`（`rename-endpoint.ps1`
-  的命名，附带同名 `.meta.json`）：改名前导出的整个设备键。
-- `rename-<时间戳>.json` / `rollback-<时间戳>.json`（仅 `rename-endpoint.ps1`）：每次执行的结果证据。
+> 说明：`devcon.exe` 不在系统 PATH 里，脚本按以下顺序查找：
+> WDK `Tools\10.0.26100.0\x64\devcon.exe` → 仓库 `tools\devcon.exe` → 在 WDK 目录里搜任意
+> `*\x64\devcon.exe`。驱动包目录也可以作为脚本的第一个参数传进来。
+> UAC 被取消、或 Secure Boot 开着时，脚本只退出、不改系统。
 
-**注意**：现在卸载脚本不再依赖「原始名备份」挑拣——重复改名后备份里的 `FriendlyName` 可能已经是
-上一次的名字，导入它等于没恢复。卸载统一是「删除 `FriendlyName` 值 + 重启 `AudioEndpointBuilder`」，
-设备回到系统默认名 `Steam Streaming Speakers`。
+## 6. 卸载
 
-## 5. 安装 / 卸载 / 改名步骤
+先退出 StereoLink 面板（停止路由、恢复默认输出），然后右键 `卸载虚拟声卡.cmd` →
+「以管理员身份运行」。脚本会做：
 
-安装（一次即可）：
+1. 移除所有用 `StereoLinkVad` 服务的设备节点（`pnputil /remove-device`）；
+2. 在驱动仓库里找到原始 INF 名是 `stereolinkvad.inf` 的包（发布名通常是 `oem19.inf`），
+   执行 `pnputil /delete-driver <发布名> /uninstall /force`；
+3. `sc delete StereoLinkVad` 删除内核服务；
+4. 从「受信任的根证书颁发机构」和「受信任的发布者」里删除 StereoLink 自签证书；
+5. 询问是否同时关闭 testsigning（`bcdedit /set testsigning off`）；
+6. 提示重启（脚本不会自己重启）。
 
-1. 右键 `安装虚拟声卡.cmd` →「以管理员身份运行」，UAC 确认（需要管理员）。
-2. 脚本备份注册表 → 写设备名 `FriendlyName` → 重启 `AudioEndpointBuilder`（约 2–4 秒音频中断）→
-   回读校验。
-3. 「设置 → 系统 → 声音 → 输出」里出现 **「扬声器 (立体声链设备)」** 即成功；面板诊断
-   也会显示虚拟声卡可用。
+重启后「扬声器 (立体声链虚拟声卡)」会从输出列表消失，驱动文件、服务、证书都不在了。
 
-卸载（恢复原名）：
+手动卸载（等价命令，供高级用户复核）：
 
-1. 先退出面板（停止路由、默认输出切回）。
-2. 右键 `卸载虚拟声卡.cmd` →「以管理员身份运行」，UAC 确认。
-3. 脚本删除 `FriendlyName` 值并重启 `AudioEndpointBuilder`，设备名恢复成 Steam Streaming Speakers。
-4. 设备管理器里若显示黄色感叹号，先「禁用」再「启用」一次。
+```powershell
+pnputil /remove-device "ROOT\MEDIA\0001"
+pnputil /delete-driver oem19.inf /uninstall /force   # 先确认 oem19.inf 是 stereolinkvad.inf！
+sc.exe delete StereoLinkVad
+bcdedit /set testsigning off                         # 可选
+# 重启
+```
 
-改名（面板内）：
+## 7. testsigning 的代价与撤销
 
-1. 面板右侧「虚拟声卡」区，在「虚拟声卡名称」输入框里填新名字。
-2. 点「应用重命名」→ UAC 确认 → 写设备名 + 重启 `AudioEndpointBuilder`（约 2–4 秒，期间音频可能中断）。
-3. 完成后点「刷新设备」，输出列表和面板都会显示新名字。改名失败可在 `scripts\backups\`
-   里找到改动前的备份回滚（导入 `.reg` 后重启 `AudioEndpointBuilder`）。
+- **桌面水印**：右下角「测试模式」字样，只影响观感。
+- **Secure Boot**：开测试签名要求 Secure Boot 关闭；以后重新打开 Secure Boot 后驱动会加载失败。
+- **安全模型**：测试签名模式允许加载自签内核驱动，属于开发/自用阶段的折中。
+- 未来走向正式发布时，应改用 EV 代码签名证书 + 微软 attestation/WHQL 签名（周期长、要花钱，
+  但没有这些限制）。
 
-## 6. 常见问题
+关闭 testsigning：`bcdedit /set testsigning off`，重启后生效（驱动随即不再加载）。
 
-| 现象 | 处理 |
+## 8. 实例 id、端点名与改名
+
+| 项目 | 值 |
 | --- | --- |
-| 输出列表里没有「扬声器 (立体声链设备)」 | 管理员运行 `安装虚拟声卡.cmd`；若跑过，检查是否被卸载脚本还原；设备管理器 → 声音、视频和游戏控制器里确认 Steam Streaming Speakers 存在且启用 |
-| 装的时候提示找不到设备 | 确认 Steam 已安装且这台机器上出现过 Steam Streaming Speakers；没有该设备就无法借用，需要先让 Steam 安装它（或用已安装的其它同签名虚拟声卡，改脚本里的实例 id） |
-| 改名后输出列表名字没变 | 点面板「刷新设备」；仍不变则在设备管理器里禁用/启用一次该设备，或重跑脚本；UAC 被取消会回滚 |
-| 改名后提示名字不合法 | 名字需 1–64 个字符、不能含 `\ / : * ? " < > \|`、不能全是空格 |
-| 卸载后还有旧名字 | 面板缓存点「刷新设备」；必要时重启 Windows |
-| Steam 更新 / 系统重装后又变回旧名 | 重跑 `安装虚拟声卡.cmd`（或面板「应用重命名」）即可；驱动本身不受影响 |
-| 备份目录里有很多 .reg | 每次安装/改名都会留一份；确认改名无误后可手工清理旧的 |
-| 改名前需要退出面板吗 | 不需要，但改名前建议先停止路由，避免 2–4 秒的服务重启造成播放异常 |
+| 设备实例 id | `ROOT\MEDIA\0001` |
+| 内核服务 / 驱动文件 | `StereoLinkVad` / `C:\Windows\System32\drivers\StereoLinkVad.sys` |
+| 默认端点名 | **「扬声器 (立体声链虚拟声卡)」** |
+| 端点名来源 | 「扬声器」前缀由 Windows 按设备类型本地化；括号里是设备名，来自 INF `[Strings]` 的 `Wave.szPname` / `Topo.szPname`（以及 `HKR,,FriendlyName`） |
 
-## 7. 注意
+**在面板里改名**：虚拟声卡卡片 →「设备名」输入框 →「应用改名」。面板会释放内嵌的
+`scripts\gui-set-name.ps1` 并调用（脚本自己弹 UAC），流程是：
 
-- 改名需要管理员权限；写名后重启 `AudioEndpointBuilder` 会有约 2–4 秒的音频中断，属正常现象。
-- 驱动归 Steam/Valve 所有，本仓库不修改、不重签、不分发驱动文件，只改注册表里的显示名。
-- 「扬声器 (立体声链设备)」只是**名字**：如果 Steam 客户端把驱动卸载了，端点会消失，需要重装
-  Steam 或重新安装该驱动。
-- 虚拟声卡没有用户态进程，也不联网；数据只在 `stereo-link.exe` 进程里流转。
+1. 用 `reg export` 备份整个 `Enum\ROOT\MEDIA\0001` 键到 `%TEMP%\stereo-link\backups\`；
+2. 写入 `HKLM\SYSTEM\CurrentControlSet\Enum\ROOT\MEDIA\0001` 的 `FriendlyName`；
+3. 重启 `AudioEndpointBuilder`（约 2–4 秒音频中断），轮询读回校验；
+4. 面板刷新设备列表。
+
+校验规则：名字 1–64 个字符、不能含 `\ / : * ? " < > |`、不能全是空格；不合法时面板红字提示、
+不会发起提权。UAC 取消则什么都不改；日志在 `%TEMP%\stereo-link\rename.log`。
+
+`scripts\rename-endpoint.ps1` 是通用命令行改名工具（支持 `-Rollback` 回滚、`-DryRun` 试运行、
+备份到 `scripts\backups\`），它会额外 disable/enable 一次设备，在 Win11 上可能留下 pending-reboot，
+面板不直接用它；一般不需要手动跑。
+
+> 改名只改注册表里的运行时设备名，不改 INF：重装驱动后设备名会回到「立体声链虚拟声卡」。
+> 想永久改默认名，要改 INF 的 `Wave.szPname` / `Topo.szPname` 并递增 `DriverVer`，重新打包、
+> 签名、安装。
+
+## 9. render-only 与 WASAPI 回环
+
+| 项目 | 结论 |
+| --- | --- |
+| 端点类型 | 仅 render（播放），没有录音端点 |
+| 回环采集 | 已验证可用（实测连续采集 83759 帧、峰值 0.8014） |
+| 采样格式 | 共享格式 48 kHz / 2 ch / 32 bit float；StereoLink 内部转 44.1 kHz / 16 bit 后路由 |
+| 用户态开销 | 无驱动侧混音线程；只在有程序播放时占 CPU，静音时基本为 0 |
+
+## 10. 与 Steam Streaming Speakers 的关系
+
+早期版本没有自己的驱动，临时借用了 Steam 随客户端安装的已签名虚拟声卡
+（Steam Streaming Speakers），只改设备显示名。这条路线的缺点（不属于我们、Steam 卸载后端点
+消失、名字只是表面功夫）已经被自研驱动取代，**现在不再需要 Steam**：
+
+- 旧 Steam 设备 `ROOT\STEAMSTREAMINGSPEAKERS\0000` 的显示名已恢复成原厂的
+  `Steam Streaming Speakers`，并保持停用状态；
+- 不要再启用、改名或删除 Steam 的 `SteamStreamingSpeakers.sys` / `SteamStreamingMicrophone.sys`
+  及其设备——那是 Steam 自己的东西，和 StereoLink 无关；
+- 系统里现在应该只有一台 StereoLink 提供的虚拟声卡。
+
+## 11. 常见问题
+
+| 问题 | 处理 |
+| --- | --- |
+| 输出列表里没有「扬声器 (立体声链虚拟声卡)」 | 管理员运行 `安装虚拟声卡.cmd`，按提示重启；重启后仍没有就跑 `pnputil /enum-devices /instanceid "ROOT\MEDIA\0001"` 看状态 |
+| 设备管理器里 StereoLinkVad 带黄色叹号 / Code 52 | 说明测试签名没生效：确认 `bcdedit /enum {current}` 里有 `testsigning Yes`，改完要重启；Secure Boot 必须是关闭状态 |
+| 桌面右下角出现「测试模式」水印 | testsigning 已开启的正常现象，不影响使用；卸载时可选关闭 |
+| 安装时提示 Secure Boot 已开启 | 进 BIOS/UEFI 关闭 Secure Boot 再装；开 Secure Boot 时测试签名驱动无法加载 |
+| 安装时提示找不到 devcon.exe | 安装 WDK 10.0.26100.0，或把 devcon.exe 放到仓库 `tools\devcon.exe` |
+| 改名弹 UAC 后没反应 / 取消 | 取消 UAC 不会改任何东西；失败原因看 `%TEMP%\stereo-link\rename.log` |
+| 改名后「声音」列表里还是旧名 | 等 2–4 秒并点面板「刷新设备」；必要时重启面板 |
+| 卸载后列表里还有旧端点 | 重启一次让设备节点彻底消失；确认 `pnputil /enum-devices /instanceid "ROOT\MEDIA\0001"` 返回设备不存在 |
+| 卸载后还想用 | 重新跑 `安装虚拟声卡.cmd`；如果 testsigning 还在，可以少重启一次 |
+| 会不会和 Steam 的虚拟声卡冲突 | 不会：Steam 那台已停用并恢复原名，StereoLink 只用自己的 `ROOT\MEDIA\0001` |
+| 驱动二进制在哪、是否随仓库分发 | 构建产物在 `.scratch\vad\pkg-stereolink\`；仓库目前不提交驱动二进制，按第 4 节自行构建签名 |
+
+## 12. 注意
+
+- 驱动属于自签开发件：只适合本机/自用，对外分发会让每台机器都要开测试签名，正式发布前应换成
+  微软签名的驱动。
+- MS-PL 要求保留许可证与版权声明；驱动包里已经带了 `LICENSE-MS-PL.txt`，不要删。
+- 改格式、改名、装/卸驱动都会动系统音频栈，短暂中断音频是正常现象。

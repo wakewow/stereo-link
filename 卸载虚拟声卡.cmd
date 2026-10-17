@@ -1,94 +1,106 @@
 @echo off
+setlocal enabledelayedexpansion
 chcp 65001 >nul
-setlocal EnableExtensions
+title StereoLink 立体声链 - 卸载虚拟声卡
 cd /d "%~dp0"
-title 卸载虚拟声卡 — StereoLink 立体声链
-
-set "PS1=%~dp0scripts\rename-endpoint.ps1"
-set "DEVICE=ROOT\STEAMSTREAMINGSPEAKERS\0000"
-set "BACKUP_DIR=%~dp0scripts\backups"
 
 echo ============================================================
-echo  卸载虚拟声卡：把设备名改回原样
+echo  StereoLink 立体声链 - 虚拟声卡卸载
+echo  移除自研驱动 StereoLinkVad 及其输出端点，需要重启一次
 echo ============================================================
 echo.
-echo  优先用「原始状态」的备份回滚：scripts\backups\ 下文件名含
-echo  Steam_Streaming_Speakers 的 backup-Enum-*.reg（不受重复安装影响）。
-echo  找不到原始备份时，回退为直接删除 FriendlyName 值并重启一次设备。
-echo.
-echo  卸载时设备会 disable/enable 一次（约 2-5 秒，期间音频可能中断）。
-echo  需要管理员权限；请右键本文件，选择「以管理员身份运行」。
-echo ------------------------------------------------------------
+
 net session >nul 2>&1
-if errorlevel 1 goto :no_admin
-if not exist "%PS1%" goto :no_script
-reg query "HKLM\SYSTEM\CurrentControlSet\Enum\%DEVICE%" >nul 2>&1
-if errorlevel 1 goto :no_device
+if errorlevel 1 goto no_admin
 
-set "BACKUP="
-for /f "delims=" %%F in ('dir /b /o:d "%BACKUP_DIR%\backup-Enum-*Steam_Streaming_Speakers*.reg" 2^>nul') do if not defined BACKUP set "BACKUP=%BACKUP_DIR%\%%F"
+tasklist /fi "imagename eq stereo-link.exe" 2>nul | findstr /i /c:"stereo-link.exe" >nul
+if not errorlevel 1 goto panel_running
 
-if defined BACKUP goto :rollback
-goto :fallback
-
-:rollback
+echo 本脚本会做这些事：
+echo   - 移除虚拟声卡设备与「扬声器 (立体声链虚拟声卡)」输出端点
+echo   - 从驱动仓库删除 StereoLinkVad 驱动包，删除内核服务和自签证书
+echo   - 可选同时关闭测试签名模式 testsigning
+echo   - 需要重启电脑后完全生效，本脚本不会自动重启
 echo.
-echo [1/2] 使用原始备份回滚：
-echo       %BACKUP%
-rem 注意：-Rollback 与 -DeviceInstanceId 属于不同参数集，不能同时传
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -Rollback "%BACKUP%"
-if errorlevel 1 goto :rollback_failed
-goto :done
+choice /c YN /m "确定继续卸载"
+if errorlevel 2 goto cancelled
 
-:fallback
+rem ------------------------------------------------------------ 移除设备实例 ----
+set "ANY=0"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$svc='StereoLinkVad'; foreach($d in @(Get-PnpDevice -Class MEDIA -ErrorAction SilentlyContinue)){ $s=''; try { $s=[string](Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction Stop).Data } catch { $s='' }; if($s -eq $svc){ Write-Output $d.InstanceId } }" >"%TEMP%\stereolink-vad-devices.txt"
+for /f "usebackq tokens=*" %%D in ("%TEMP%\stereolink-vad-devices.txt") do (
+  echo 移除设备：%%D
+  pnputil /remove-device "%%D" >nul
+  if errorlevel 1 echo   [警告] 移除失败，可能设备正被占用；重启后再运行一次本脚本。
+  set "ANY=1"
+)
+if "!ANY!"=="0" echo 未发现 StereoLinkVad 设备，跳过设备移除。
+
+rem ------------------------------------------------------------ 删除驱动包 ----
+pnputil /enum-drivers >"%TEMP%\stereolink-drivers.txt" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$t = [IO.File]::ReadAllText($env:TEMP + '\stereolink-drivers.txt'); $b = $t -split '(?:\r?\n){2,}'; foreach($x in $b){ if($x -match '(?i)stereolinkvad\.inf'){ $m = [regex]::Match($x, '(?im)\boem\d+\.inf\b'); if($m.Success){ Write-Output $m.Value } } }" >"%TEMP%\stereolink-vad-oem.txt"
+set "FOUND=0"
+for /f "usebackq tokens=*" %%O in ("%TEMP%\stereolink-vad-oem.txt") do (
+  echo 删除驱动包：%%O
+  pnputil /delete-driver "%%O" /uninstall /force
+  if errorlevel 1 echo   [警告] 删除失败，重启后再运行一次本脚本。
+  set "FOUND=1"
+)
+if "!FOUND!"=="0" echo 未在驱动仓库里找到 stereolinkvad.inf，跳过。
+
+rem ------------------------------------------------------------ 删除内核服务 ----
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\StereoLinkVad" >nul 2>&1
+if errorlevel 1 goto service_done
+echo 删除内核服务 StereoLinkVad ...
+sc delete StereoLinkVad >nul
+if errorlevel 1 echo   [警告] 删除服务失败，重启后系统会自动清理。
+:service_done
+
+rem ------------------------------------------------------------ 删除自签证书 ----
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$n=0; foreach($store in @('Root','TrustedPublisher')){ foreach($c in @(Get-ChildItem (('Cert:\LocalMachine\') + $store) -ErrorAction SilentlyContinue)){ if($c.Subject -like '*StereoLink Virtual Audio Driver*'){ Remove-Item (('Cert:\LocalMachine\') + $store + '\' + $c.Thumbprint) -Force; Write-Output ($store + ' cert removed ' + $c.Thumbprint); $n = $n + 1 } } }; if($n -eq 0){ Write-Output 'no cert found' }"
+if errorlevel 1 echo   [警告] 证书删除失败，可在 certmgr.msc 里手动删除 StereoLink Virtual Audio Driver。
+
+rem ------------------------------------------------------------ testsigning ----
 echo.
-echo [1/2] scripts\backups\ 里没有找到 Steam_Streaming_Speakers 的原始备份。
-echo       回退为直接删除 FriendlyName 值，并重启 AudioEndpointBuilder。
-reg delete "HKLM\SYSTEM\CurrentControlSet\Enum\%DEVICE%" /v FriendlyName /f >nul 2>&1
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Restart-Service AudioEndpointBuilder -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3" >nul 2>&1
-echo       已删除设备显示名，Windows 会恢复为「Steam Streaming Speakers」。
-echo       想再改成「立体声链设备」等任意名字：打开 StereoLink 面板，
-echo       在「虚拟声卡」区用「应用重命名」，或重跑「安装虚拟声卡.cmd」。
-goto :done
+choice /c YN /m "是否同时关闭测试签名模式 testsigning"
+if errorlevel 2 goto keep_ts
+bcdedit /set testsigning off >nul
+if errorlevel 1 echo   [警告] 关闭失败，请手动执行 bcdedit /set testsigning off。
+if not errorlevel 1 echo 已关闭 testsigning：重启后「测试模式」水印会消失，驱动也就不再加载。
+goto reboot_hint
+
+:keep_ts
+echo 保留 testsigning：以后重新安装驱动可以直接加载，不需要再改启动项。
+echo 想关闭时随时可以手动执行 bcdedit /set testsigning off，然后重启。
+
+:reboot_hint
+echo.
+echo ============================================================
+echo  卸载步骤已完成，请重启电脑。
+echo  重启后确认：
+echo   1. 设置 - 系统 - 声音 - 输出 里不再有「扬声器 (立体声链虚拟声卡)」
+echo   2. pnputil /enum-devices /instanceid "ROOT\MEDIA\0001" 返回设备不存在
+echo   3. 若之前默认输出指向虚拟声卡，重启后系统会自动切到其它输出设备
+echo ============================================================
+goto done
+
+:cancelled
+echo.
+echo 已取消，没有做任何修改。
 
 :done
 echo.
-echo [2/2] 卸载完成。
-echo       请到 设置 -^> 系统 -^> 声音 -^> 输出 确认设备名已恢复。
-echo       备份文件仍保留在 scripts\backups\，确认无误后可自行删除。
-echo.
+echo 本窗口不会自动重启电脑。
 pause
 exit /b 0
 
+:panel_running
+echo [错误] 检测到 StereoLink 面板（stereo-link.exe）正在运行。
+echo        请先退出面板（停止路由、恢复默认输出）再运行卸载脚本。
+pause
+exit /b 1
+
 :no_admin
-echo.
-echo [错误] 需要管理员权限。
-echo        请右键本文件，选择「以管理员身份运行」。
-echo.
-pause
-exit /b 1
-
-:no_script
-echo.
-echo [错误] 找不到改名脚本：%PS1%
-echo        请确认本文件位于仓库根目录，且 scripts\ 下的脚本存在。
-echo.
-pause
-exit /b 1
-
-:no_device
-echo.
-echo [错误] 找不到 Steam Streaming Speakers 设备（%DEVICE%）。
-echo        可能已经卸载过了，或本机从未安装过 Steam。
-echo.
-pause
-exit /b 1
-
-:rollback_failed
-echo.
-echo [失败] 回滚没有成功，请查看上面的输出。
-echo        可以手动挑一个更早的备份重试：
-echo        powershell -ExecutionPolicy Bypass -File scripts\rename-endpoint.ps1 -Rollback ^<备份.reg^>
-echo.
+echo [错误] 需要管理员权限。请右键本文件，选择「以管理员身份运行」。
 pause
 exit /b 1

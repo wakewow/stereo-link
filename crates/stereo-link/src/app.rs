@@ -17,8 +17,9 @@ use eframe::egui::{
     Align, Color32, CornerRadius, FontId, Layout, Margin, Rect, RichText, Sense, Stroke, Vec2,
 };
 use stereo_audio::{
-    DataFlow, EndpointFormat, EndpointInfo, PcmFormat, RouteChannel, RouteConfig,
-    RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats,
+    DataFlow, EndpointFormat, EndpointInfo, MicCandidate, MicHealth, PcmFormat, RouteChannel,
+    RouteConfig, RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats, SyncConfig,
+    SyncMethod, SyncResult,
 };
 
 use crate::audio_default;
@@ -233,6 +234,24 @@ pub struct StereoLinkApp {
     format_choices: BTreeMap<String, EndpointFormat>,
     /// 正在应用格式。
     format_busy: bool,
+    /// 声学自校验：本机可选麦克风（含虚拟/回环端点，标出类别）。
+    sync_mics: Vec<MicCandidate>,
+    /// 自校验选中的麦克风端点 id（`{GUID}`）；空 = 还没选。
+    sync_mic: String,
+    /// 选中麦克风的体检结果（决定能不能自动对齐）。
+    sync_health: Option<MicHealth>,
+    /// 自校验状态说明，直接显示在按钮下方。
+    sync_status: String,
+    /// 自校验（测量）进行中。
+    sync_busy: bool,
+    /// 后台自校验线程的结果通道。
+    sync_rx: Option<std::sync::mpsc::Receiver<Result<SyncResult, String>>>,
+    /// 最近一次自校验结果。
+    sync_result: Option<SyncResult>,
+    /// 手动对齐点击串正在播。
+    clicks_busy: bool,
+    /// 点击串开始时间（用于自动解除忙碌标记）。
+    clicks_at: Option<Instant>,
 }
 
 impl StereoLinkApp {
@@ -245,6 +264,7 @@ impl StereoLinkApp {
         }
 
         let cfg = AppConfig::load();
+        let cfg_sync_mic = cfg.sync_mic.clone();
         let mut app = Self {
             rename_input: cfg.virtual_card.name.clone(),
             cfg,
@@ -268,10 +288,20 @@ impl StereoLinkApp {
             format_rx: None,
             format_choices: BTreeMap::new(),
             format_busy: false,
+            sync_mics: Vec::new(),
+            sync_mic: cfg_sync_mic,
+            sync_health: None,
+            sync_status: "还没选麦克风。".to_string(),
+            sync_busy: false,
+            sync_rx: None,
+            sync_result: None,
+            clicks_busy: false,
+            clicks_at: None,
         };
         app.refresh_endpoints();
         app.refresh_formats();
         app.refresh_default_output(true);
+        app.refresh_mics();
         tracing::info!("StereoLink 面板启动");
         app
     }
@@ -329,7 +359,17 @@ impl StereoLinkApp {
     fn tick(&mut self) {
         self.poll_rename();
         self.poll_format_probe();
+        self.poll_sync();
         self.refresh_default_output(false);
+
+        if self.clicks_busy
+            && self
+                .clicks_at
+                .map(|t| t.elapsed() > Duration::from_millis(3_500))
+                .unwrap_or(true)
+        {
+            self.clicks_busy = false;
+        }
 
         if let Some(engine) = &self.engine {
             if engine.alive() {
@@ -367,7 +407,7 @@ impl StereoLinkApp {
         }
         let ep = audio_default::default_render();
         self.live_default_at = Some(Instant::now());
-        self.live_default_is_virtual = ep
+        let is_virtual = ep
             .as_ref()
             .map(|e| {
                 audio_default::is_virtual(e)
@@ -380,6 +420,17 @@ impl StereoLinkApp {
                         .unwrap_or(false)
             })
             .unwrap_or(false);
+        self.live_default_is_virtual = is_virtual;
+        // 记住最后一次见到的「真实」默认输出：即使启动时默认已经是虚拟声卡
+        // （上次被强杀没来得及恢复），退出时也能切回去。
+        if !is_virtual {
+            if let Some(id) = ep.as_ref().map(|e| e.id.clone()) {
+                if self.cfg.virtual_card.last_real_output.as_deref() != Some(id.as_str()) {
+                    self.cfg.virtual_card.last_real_output = Some(id);
+                    self.save();
+                }
+            }
+        }
         self.live_default_output = ep.map(|e| e.name);
     }
 
@@ -776,7 +827,20 @@ impl StereoLinkApp {
     }
 
     fn restore_previous_output(&mut self) {
-        let Some(id) = self.cfg.virtual_card.previous_output.clone() else {
+        // 优先用本次切换前记录的；没有（启动时默认已经是虚拟声卡）就用最后一次
+        // 见到的真实默认输出兜底。
+        let id = self
+            .cfg
+            .virtual_card
+            .previous_output
+            .clone()
+            .or_else(|| self.cfg.virtual_card.last_real_output.clone());
+        let Some(id) = id else {
+            if self.live_default_is_virtual {
+                tracing::warn!(
+                    "[默认输出] 没有可恢复的记录（启动时默认输出已经是虚拟声卡），退出后请在 Windows 声音设置里手动切回音箱"
+                );
+            }
             return;
         };
         match audio_default::switch_to_id(&id) {
@@ -833,6 +897,171 @@ impl StereoLinkApp {
 
     fn save(&mut self) {
         self.cfg.save();
+    }
+
+    // -----------------------------------------------------------------------
+    // 声学自校验：用麦克风量出两台音箱的真实到达时间差，自动垫延迟
+    // -----------------------------------------------------------------------
+
+    /// 枚举本机采集端点（含虚拟/回环，标出类别供用户判断）。
+    fn refresh_mics(&mut self) {
+        self.sync_mics = stereo_audio::list_microphones();
+        if self.sync_mic.is_empty() {
+            // 默认挑第一个「可能可用」的；没有就挑第一个。
+            if let Some(m) = self
+                .sync_mics
+                .iter()
+                .find(|m| m.likely_usable)
+                .or_else(|| self.sync_mics.first())
+            {
+                self.sync_mic = m.id().to_string();
+                self.cfg.sync_mic = self.sync_mic.clone();
+                self.save();
+            }
+        }
+        // 自动选中后给一句明确的状态（只在还没体检过时写，避免覆盖体检/测量结果）。
+        if !self.sync_mic.is_empty() && (self.sync_status.is_empty() || self.sync_status == "还没选麦克风。")
+        {
+            let name = self
+                .sync_mics
+                .iter()
+                .find(|m| m.id() == self.sync_mic)
+                .map(|m| m.name().to_string())
+                .unwrap_or_else(|| self.sync_mic.clone());
+            self.sync_status = format!("已选中「{name}」，点「体检」看它能不能采到声音。");
+        }
+        tracing::info!(
+            "[自校验] 找到 {} 个采集端点（{} 个可能可用）",
+            self.sync_mics.len(),
+            self.sync_mics.iter().filter(|m| m.likely_usable).count()
+        );
+    }
+
+    /// 对选中麦克风做一次体检（决定「自动对齐」能不能用）。
+    fn check_mic(&mut self) {
+        if self.sync_mic.is_empty() {
+            self.sync_status = "先选一个麦克风。".to_string();
+            return;
+        }
+        let mic = self.sync_mic.clone();
+        self.sync_status = "正在体检麦克风（请保持环境安静）…".to_string();
+        match stereo_audio::mic_health(&mic, 1_000) {
+            Ok(h) => {
+                self.sync_status = h.describe();
+                tracing::info!("[自校验] 麦克风体检：{}", h.describe());
+                self.sync_health = Some(h);
+            }
+            Err(e) => {
+                self.sync_status = format!("体检失败：{e}");
+                self.sync_health = None;
+            }
+        }
+    }
+
+    /// 后台跑一次双路标定（同时法优先，失败退回依次法）。
+    fn start_sync(&mut self) {
+        if self.sync_busy {
+            return;
+        }
+        let mic = self.sync_mic.clone();
+        if mic.is_empty() {
+            self.sync_status = "先选一个麦克风。".to_string();
+            return;
+        }
+        let left = self.cfg.split.left_endpoint.clone();
+        let right = self.cfg.split.right_endpoint.clone();
+        if left.is_empty() || right.is_empty() {
+            self.sync_status = "先选好左右两台音箱。".to_string();
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mic_t = mic.clone();
+        let (left_t, right_t) = (left.clone(), right.clone());
+        std::thread::spawn(move || {
+            let cfg = SyncConfig::new(mic_t.clone(), left_t.clone());
+            let out = stereo_audio::calibrate_pair(&mic_t, &left_t, &right_t, &cfg)
+                .map_err(|e| e.to_string());
+            let _ = tx.send(out);
+        });
+        self.sync_rx = Some(rx);
+        self.sync_busy = true;
+        self.sync_status = if self.engine.is_some() {
+            "正在测量（先试同时法、失败退回依次法，约 5 秒）… 提示：路由正在运行，若此刻正在放音乐请先「停止」，否则麦克风会同时收到音乐、测量会不准。".to_string()
+        } else {
+            "正在测量（先试同时法、失败退回依次法，约 5 秒）… 请保持环境安静。".to_string()
+        };
+        tracing::info!("[自校验] 开始标定：mic={mic} left={left} right={right}");
+    }
+
+    /// 收后台标定结果；成功后把建议延迟写进两条路由（运行中实时生效）。
+    fn poll_sync(&mut self) {
+        let Some(rx) = self.sync_rx.as_ref() else {
+            return;
+        };
+        let received = rx.try_recv();
+        match received {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.sync_rx = None;
+                self.sync_busy = false;
+                self.sync_status = "标定线程异常退出。".to_string();
+                return;
+            }
+            Ok(Ok(result)) => {
+                self.sync_rx = None;
+                self.sync_busy = false;
+                let (l, r) = result.delays();
+                self.cfg.split.left_delay_ms = l;
+                self.cfg.split.right_delay_ms = r;
+                self.save();
+                if let Some(engine) = self.engine.as_ref() {
+                    engine.set_delays_ms(&[l, r]);
+                }
+                self.sync_status = format!(
+                    "{}  → 已应用左垫 {l} ms、右垫 {r} ms{}",
+                    result.describe(),
+                    if result.method == SyncMethod::Sequential {
+                        "（依次法精度只有 ±4 ms，建议再用手动点击串微调）"
+                    } else {
+                        ""
+                    }
+                );
+                tracing::info!("[自校验] {}", self.sync_status);
+                self.sync_result = Some(result);
+                self.toast("已按测量结果自动对齐左右延迟");
+            }
+            Ok(Err(e)) => {
+                self.sync_rx = None;
+                self.sync_busy = false;
+                self.sync_status = format!("测量失败：{e}");
+                tracing::warn!("[自校验] 测量失败：{e}");
+            }
+        }
+    }
+
+    /// 手动对齐：按当前左右延迟值同时向两台音箱放点击串，人耳听是否重合成一下。
+    fn play_alignment(&mut self) {
+        if self.clicks_busy {
+            return;
+        }
+        let left = self.cfg.split.left_endpoint.clone();
+        let right = self.cfg.split.right_endpoint.clone();
+        let (l, r) = (
+            self.cfg.split.left_delay_ms,
+            self.cfg.split.right_delay_ms,
+        );
+        if left.is_empty() || right.is_empty() {
+            self.toast("先选好左右两台音箱");
+            return;
+        }
+        self.clicks_busy = true;
+        self.clicks_at = Some(Instant::now());
+        std::thread::spawn(move || {
+            if let Err(e) = stereo_audio::play_alignment_clicks(&left, &right, l, r, 3.0) {
+                tracing::warn!("[自校验] 点击串播放失败：{e}");
+            }
+        });
+        self.toast("正在放点击串：听到两下就是没对齐，调到重合成一下");
     }
 
     fn toast(&mut self, text: impl Into<String>) {
@@ -1349,6 +1578,88 @@ impl StereoLinkApp {
                 ui.label(muted("两箱固定时差（比如左箱偏慢）可以在这里补齐。"));
             });
 
+            // ---- 声学自校验 ----
+            ui.add_space(6.0);
+            ui.separator();
+            ui.label(RichText::new("声学自校验：用麦克风量出两台音箱的真实时差").strong());
+
+            let mic_label = self
+                .sync_mics
+                .iter()
+                .find(|m| m.id() == self.sync_mic)
+                .map(|m| m.name().to_string())
+                .unwrap_or_default();
+            let mut pick_mic: Option<String> = None;
+            let mut action: Option<&'static str> = None;
+            ui.horizontal_wrapped(|ui| {
+                egui::ComboBox::from_id_salt("sync_mic")
+                    .width(230.0)
+                    .selected_text(if mic_label.is_empty() {
+                        RichText::new("（未选择麦克风）").color(MUTED)
+                    } else {
+                        RichText::new(short_endpoint(&mic_label)).color(TEXT)
+                    })
+                    .show_ui(ui, |ui| {
+                        for m in &self.sync_mics {
+                            let id = m.id().to_string();
+                            let text = format!(
+                                "{} [{}]{}",
+                                short_endpoint(m.name()),
+                                m.kind.as_str(),
+                                if m.likely_usable { "" } else { " · 可能不可用" }
+                            );
+                            if ui.selectable_label(self.sync_mic == id, text).clicked() {
+                                pick_mic = Some(id);
+                            }
+                        }
+                    });
+                if ui.button("刷新").clicked() {
+                    action = Some("refresh");
+                }
+                if ui.button("体检").clicked() {
+                    action = Some("check");
+                }
+                if ui
+                    .add_enabled(
+                        !self.sync_busy && !self.sync_mic.is_empty(),
+                        egui::Button::new(if self.sync_busy {
+                            "测量中…"
+                        } else {
+                            "测量并对齐"
+                        }),
+                    )
+                    .on_hover_text("向两台音箱依次放扫频声，用麦克风算出真实时差，自动垫延迟")
+                    .clicked()
+                {
+                    action = Some("sync");
+                }
+                if ui
+                    .add_enabled(!self.clicks_busy, egui::Button::new("点击串试听"))
+                    .on_hover_text("不需要麦克风：按当前延迟值同时放点击串，听到两下就手动微调")
+                    .clicked()
+                {
+                    action = Some("clicks");
+                }
+            });
+            if let Some(id) = pick_mic {
+                self.sync_mic = id.clone();
+                self.cfg.sync_mic = id;
+                self.cfg.save();
+                self.sync_health = None;
+                self.sync_result = None;
+                self.sync_status = "已选麦克风，点「体检」看它能不能采到声音。".to_string();
+            }
+            match action {
+                Some("refresh") => self.refresh_mics(),
+                Some("check") => self.check_mic(),
+                Some("sync") => self.start_sync(),
+                Some("clicks") => self.play_alignment(),
+                _ => {}
+            }
+            if !self.sync_status.is_empty() {
+                ui.label(RichText::new(&self.sync_status).color(MUTED).size(12.0));
+            }
+
             if let Some(stats) = &self.stats {
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
@@ -1410,13 +1721,21 @@ impl StereoLinkApp {
             if let Some(route) = self.route_of(channel) {
                 // 电平条用感知刻度（sqrt），否则 -30 dB 的音乐只有一两像素，看着像没声音。
                 level_bar(ui, 64.0, route.level.sqrt(), color);
-                ui.label(mini(format!(
+                let stats = ui.label(mini(format!(
                     "{:>3.0}% · {:.2} MB · {:.0} ms · 欠载 {}",
                     route.level * 100.0,
                     route.sent_bytes as f64 / 1_048_576.0,
                     route.queued_ms,
                     route.underruns
                 )));
+                // 开流走的是哪条路（自动转换 / 原生混音格式 + 软件转换），排障时很关键。
+                if let Some(path) = route.format_path.as_ref() {
+                    stats.on_hover_text(format!("开流路径：{path}"));
+                }
+                if let Some(err) = route.error.as_ref() {
+                    ui.label(RichText::new("链路错误").color(ERR).size(12.0))
+                        .on_hover_text(err);
+                }
             } else {
                 level_bar(ui, 64.0, 0.0, color);
                 ui.label(muted("未运行"));

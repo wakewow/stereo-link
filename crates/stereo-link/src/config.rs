@@ -58,15 +58,21 @@ pub struct VirtualCardConfig {
     pub auto_switch_default: bool,
     /// 自动切换前记录的默认输出端点 id，用于恢复（None = 不需要恢复）。
     pub previous_output: Option<String>,
+    /// 最后一次看到的「真实」默认输出（非虚拟声卡）。
+    ///
+    /// 兜底用：如果启动时默认输出已经是虚拟声卡（例如上次被强杀、没来得及恢复），
+    /// `previous_output` 会是 None，此时退出就靠它切回去。
+    pub last_real_output: Option<String>,
 }
 
 impl Default for VirtualCardConfig {
     fn default() -> Self {
         Self {
-            name: "立体声链设备".to_string(),
+            name: "立体声链虚拟声卡".to_string(),
             endpoint_id: None,
             auto_switch_default: true,
             previous_output: None,
+            last_real_output: None,
         }
     }
 }
@@ -86,6 +92,8 @@ pub struct AppConfig {
     /// 面板启动时自动开始路由。
     #[serde(default = "default_auto_start")]
     pub auto_start: bool,
+    /// 声学自校验用的麦克风端点 id（`{GUID}`），空 = 还没选。
+    pub sync_mic: String,
 }
 
 fn default_auto_start() -> bool {
@@ -100,6 +108,7 @@ impl Default for AppConfig {
             show_log: true,
             tone_seconds: 3.0,
             auto_start: true,
+            sync_mic: String::new(),
         }
     }
 }

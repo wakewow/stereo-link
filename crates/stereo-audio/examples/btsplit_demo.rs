@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .unwrap_or_else(|| "Xiaomi Sound-5320".to_owned());
 
-    let mut config = BtSplitConfig {
+    let config = BtSplitConfig {
         left_endpoint: left.clone(),
         right_endpoint: right.clone(),
         ..Default::default()
@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("配置: {}", config.describe());
     println!("软件侧缓冲估计: {} ms（不含蓝牙链路本身）", config.software_latency_ms());
 
+    let source = config.source_endpoint.clone();
     let mut split = BtSplitHandle::start(config)?;
     println!("分离输出已启动，稍等 300 ms 让两条链路起流…");
     thread::sleep(Duration::from_millis(300));
@@ -67,7 +68,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     pcm.extend(tone_pcm(3.0, |t| (sine(440.0, t), sine(880.0, t))));
     pcm.extend(tone_pcm(3.0, |t| (sine(660.0, t), sine(660.0, t))));
 
-    let source = config.source_endpoint.clone();
     let player = thread::spawn(move || {
         play_pcm_s16(
             &DeviceSelector::name_contains(source),

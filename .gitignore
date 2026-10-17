@@ -44,3 +44,9 @@ scripts/backups/
 # ---------- 面板调试/验证产物 ----------
 /.scratch/
 /tools/
+
+# ---------- 驱动签名私钥（绝不入库；只提交公钥证书 stereolink-dev.cer） ----------
+*.pfx
+*.pvk
+*.snk
+drivers/certs/*.pfx

@@ -150,13 +150,14 @@ fn run_once(source: &str, dest: &str, delay_ms: u32) -> anyhow::Result<Option<f6
     }
     for route in &stats.routes {
         println!(
-            "  路由「{}」{:?}：已发 {} 字节 · 欠载 {} · 排队 {:.0} ms · 错误 {:?}",
+            "  路由「{}」{:?}：已发 {} 字节 · 欠载 {} · 排队 {:.0} ms · 错误 {:?} · 路径：{}",
             route.endpoint,
             route.channel,
             route.sent_bytes,
             route.underruns,
             route.queued_ms,
-            route.error
+            route.error,
+            route.format_path.as_deref().unwrap_or("<未开流>")
         );
     }
     println!("  采集端：{}", capture.device_name().unwrap_or("<未知>"));

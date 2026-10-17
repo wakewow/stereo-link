@@ -1,20 +1,24 @@
-//! 虚拟声卡（借用已签名驱动）的改名操作。
+//! 自研虚拟声卡（StereoLinkVad，render-only）的改名操作。
 //!
-//! 改名必须写 `HKLM\SYSTEM\CurrentControlSet\Enum\ROOT\STEAMSTREAMINGSPEAKERS\0000`
+//! 改名必须写 `HKLM\SYSTEM\CurrentControlSet\Enum\ROOT\MEDIA\0001`
 //! 的 `FriendlyName`，这一步需要管理员令牌；面板本身通常不是管理员，
-//! 所以走 `scripts/gui-set-name.ps1`：脚本自己用 UAC 重新启动，再调用
-//! `scripts/rename-endpoint.ps1`（备份 + 写入 + 禁用/启用设备 + 校验）。
+//! 所以走 `scripts/gui-set-name.ps1`：脚本自己用 UAC 重新启动，然后
+//! **自己**完成「备份 Enum 键 → 写 FriendlyName → 重启 AudioEndpointBuilder → 校验」
+//! （不调用 `scripts/rename-endpoint.ps1`；那个脚本是命令行工具，备份落在
+//! `scripts\backups\`，而本路径的备份落在 `%TEMP%\stereo-link\backups\`）。
+//!
+//! 端点显示名由 Windows 组装成「扬声器 (设备名)」，所以这里改的是设备名。
 
 use anyhow::{bail, Context, Result};
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// 虚拟声卡设备的 PnP 实例 id（Steam Streaming Speakers 驱动）。
-pub const VIRTUAL_DEVICE_INSTANCE: &str = r"ROOT\STEAMSTREAMINGSPEAKERS\0000";
+/// 虚拟声卡设备的 PnP 实例 id（自研 StereoLinkVad 驱动）。
+pub const VIRTUAL_DEVICE_INSTANCE: &str = r"ROOT\MEDIA\0001";
 
-/// 面板里显示的建议名字。
-pub const SUGGESTED_NAME: &str = "立体声链设备";
+/// 面板里显示的建议名字（对应端点「扬声器 (立体声链虚拟声卡)」）。
+pub const SUGGESTED_NAME: &str = "立体声链虚拟声卡";
 
 const RENAME_SCRIPT: &str = include_str!("../../../scripts/gui-set-name.ps1");
 

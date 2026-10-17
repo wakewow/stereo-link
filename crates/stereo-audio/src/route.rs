@@ -24,9 +24,15 @@
 //! 10 ms；队列空补静音（计欠载），队列满丢最旧（计 `dropped_ms`）——两条链路的时钟互相
 //! 独立，只能靠丢帧/补静音吸收漂移。
 //!
+//! 开流优先请求 `44100/2ch/s16 + AUTOCONVERTPCM`，由 WASAPI 转成端点混音格式；真机实测
+//! 端点混音采样率为 44100 Hz 时会拒绝该标志（`AUDCLNT_E_UNSUPPORTED_FORMAT 0x88890008`），
+//! 此时自动回退为「按端点混音格式（`GetMixFormat`）打开 + Rust 侧重采样/采样格式转换」，
+//! 实际走通的路径记录在 [`RouteStats::format_path`]。
+//!
 //! 这是**用户态**实现，不碰内核驱动；虚拟声卡沿用已有的 Steam Streaming Speakers 改名端点。
 
 use std::collections::VecDeque;
+use std::ffi::c_void;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -37,10 +43,12 @@ use windows::Win32::Media::Audio::{
     IAudioRenderClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
     AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
 };
+use windows::Win32::System::Com::CoTaskMemFree;
 
 use crate::capture::{AudioCapture, CaptureConfig, CaptureMode};
 use crate::com::{self, ComGuard};
-use crate::endpoint::{DataFlow, DeviceSelector, PcmFormat};
+use crate::convert::{s16_to_f32, SampleFormat, StreamResampler};
+use crate::endpoint::{DataFlow, DeviceSelector, FormatInfo, PcmFormat};
 use crate::error::{AudioError, Result};
 
 /// 路由输出的采样率（与采集、HTTP 流一致：44100 Hz / 2 ch / 16 bit）。
@@ -297,7 +305,10 @@ pub struct RouteStats {
     pub endpoint: String,
     /// 这条路由送哪个声道。
     pub channel: RouteChannel,
-    /// 已经写进 render 端缓冲的字节数（双声道 16 bit，一帧 4 字节）。
+    /// 已经写进 render 端缓冲的字节数。
+    ///
+    /// 原生 `AUTOCONVERTPCM` 路径是 44100/2ch/s16（一帧 4 字节）；回退到「混音格式 +
+    /// 软件转换」时按实际混音格式的一帧字节数（`channels × bytes_per_sample`）计算。
     pub sent_bytes: u64,
     /// 欠载次数：这次写缓冲时队列被抽干、只能补静音（采集已经出数据后才计）。
     pub underruns: u64,
@@ -309,6 +320,11 @@ pub struct RouteStats {
     pub delay_ms: f64,
     /// 这条链路输出的峰值电平（0..1，带衰减，GUI 电平条用）。
     pub level: f32,
+    /// 实际走通的 render 开流/转换路径：`None` = 还没打开或失败。
+    ///
+    /// * `wasapi-autoconvert（…）`：WASAPI 自己把 44100/2ch/s16 转成端点混音格式；
+    /// * `mix-format 软件转换（…）`：按端点混音格式打开，Rust 侧重采样 + 采样格式转换。
+    pub format_path: Option<String>,
     /// 打开/运行失败原因；`None` = 正常（含尚在打开中）。
     pub error: Option<String>,
 }
@@ -331,6 +347,9 @@ impl RouteStats {
             self.delay_ms,
             self.level
         );
+        if let Some(path) = &self.format_path {
+            text.push_str(&format!(" | 路径：{path}"));
+        }
         if let Some(err) = &self.error {
             text.push_str(&format!(" | 失败：{err}"));
         }
@@ -574,6 +593,7 @@ impl RouteEngineHandle {
                     queued_ms: samples_to_ms(sink.queue.len() as u64),
                     delay_ms: samples_to_ms(sink.delay_frames as u64),
                     level: sink.level,
+                    format_path: sink.format_path.clone(),
                     error: sink.error.clone(),
                 }),
                 // 锁被 poison 只可能是音频线程 panic（正常情况下不会），给个占位不拖垮快照。
@@ -630,6 +650,8 @@ struct SinkState {
     delay_frames: usize,
     /// 输出峰值电平（0..1，带衰减）。
     level: f32,
+    /// 实际走通的输出路径描述（开流成功后写入；见 [`RouteStats::format_path`]）。
+    format_path: Option<String>,
 }
 
 impl SinkState {
@@ -648,6 +670,7 @@ impl SinkState {
             dropped_samples: 0,
             delay_frames: 0,
             level: 0.0,
+            format_path: None,
         }
     }
 
@@ -850,6 +873,246 @@ fn spawn_failure(
 // sink 线程：一条路由一个，独立打开、独立写、独立失败
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 输出格式：AUTOCONVERTPCM 优先，失败则按端点混音格式 + 软件转换
+// ---------------------------------------------------------------------------
+
+/// render 流实际走通的输出路径。
+///
+/// 优先 `AutoConvert`（WASAPI 自动转换）。真机实测（Win11 26100）端点混音采样率为
+/// 44100 Hz 时 `AUTOCONVERTPCM` 必定被拒（`0x88890008`
+/// `AUDCLNT_E_UNSUPPORTED_FORMAT`），混音 48000 Hz 时同样的请求却能成功；所以不能只靠
+/// 自动转换，失败时回退成 `Converted`：按端点自己的混音格式开流，Rust 侧把队列里的
+/// 44.1k 单声道 i16 重采样/编码成混音格式的字节再写。
+#[derive(Debug)]
+enum SinkOutput {
+    /// WASAPI 自动转换到 44100/2ch/s16。
+    AutoConvert,
+    /// 按端点混音格式打开，Rust 侧转换。
+    Converted {
+        /// 端点混音格式（决定写数据的采样率 / 声道 / 采样类型）。
+        mix: MixOutputFormat,
+        /// 流式转换器（44.1k 单声道 i16 → 混音格式字节）。
+        converter: MixConverter,
+    },
+}
+
+impl SinkOutput {
+    /// 写进 [`RouteStats::format_path`] 的路径描述。
+    fn describe(&self) -> String {
+        match self {
+            SinkOutput::AutoConvert => "wasapi-autoconvert（44100/2ch/s16）".to_owned(),
+            SinkOutput::Converted { mix, .. } => {
+                format!("mix-format 软件转换（{}）", mix.describe())
+            }
+        }
+    }
+
+    /// 一帧输出的字节数。
+    fn bytes_per_frame(&self) -> usize {
+        match self {
+            SinkOutput::AutoConvert => FRAME_BYTES as usize,
+            SinkOutput::Converted { mix, .. } => mix.bytes_per_frame(),
+        }
+    }
+
+    /// 实际输出采样率（预填静音帧数用）。
+    fn samplerate(&self) -> u32 {
+        match self {
+            SinkOutput::AutoConvert => ROUTE_SAMPLE_RATE,
+            SinkOutput::Converted { mix, .. } => mix.samplerate,
+        }
+    }
+
+    /// render 缓冲还剩 `available` 帧时，本次最多消费多少 44.1k 输入帧。
+    ///
+    /// 原生路径就是 10 ms 一块；回退路径要先按重采样比例反推，保证转换后不超缓冲。
+    fn input_frames_for_available(&self, available: usize) -> usize {
+        match self {
+            SinkOutput::AutoConvert => available.min(RENDER_CHUNK_FRAMES),
+            SinkOutput::Converted { converter, .. } => converter
+                .input_frames_for_available(available)
+                .min(RENDER_CHUNK_FRAMES),
+        }
+    }
+}
+
+/// 回退路径的目标输出格式：端点混音格式里我们支持软件转换的子集。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MixOutputFormat {
+    samplerate: u32,
+    channels: u16,
+    sample_format: SampleFormat,
+}
+
+impl MixOutputFormat {
+    /// 从端点混音格式里取出可转换的目标格式。
+    ///
+    /// 只支持 1/2 声道 + 16/32-bit int + 32-bit float。**不支持的组合返回明确错误**，
+    /// 绝不静默写错格式（例如 6 声道混音下把单声道塞进前置声道会错位）。
+    fn from_info(info: &FormatInfo) -> Result<Self> {
+        if !info.is_valid() {
+            return Err(AudioError::UnsupportedFormat(format!(
+                "端点混音格式无效：{}",
+                info.describe()
+            )));
+        }
+        let sample_format = info.sample_format.ok_or_else(|| {
+            AudioError::UnsupportedFormat(format!(
+                "回退路径不认识的混音采样格式：{}",
+                info.describe()
+            ))
+        })?;
+        if !matches!(
+            sample_format,
+            SampleFormat::S16 | SampleFormat::S32 | SampleFormat::F32
+        ) {
+            return Err(AudioError::UnsupportedFormat(format!(
+                "回退路径暂不支持 {sample_format:?} 混音格式（{}），需要 16/32-bit int 或 32-bit float",
+                info.describe()
+            )));
+        }
+        if info.channels == 0 || info.channels > 2 {
+            return Err(AudioError::UnsupportedFormat(format!(
+                "回退路径暂不支持 {} 声道混音格式（{}），请把设备默认格式改成 1 或 2 声道",
+                info.channels,
+                info.describe()
+            )));
+        }
+        let expected_align = info.channels as usize * sample_format.bytes_per_sample();
+        if info.block_align as usize != expected_align {
+            return Err(AudioError::UnsupportedFormat(format!(
+                "回退路径混音格式的 nBlockAlign={} 与 {} 声道 × {sample_format:?} 不一致（{}）",
+                info.block_align,
+                info.channels,
+                info.describe()
+            )));
+        }
+        Ok(Self {
+            samplerate: info.samplerate,
+            channels: info.channels,
+            sample_format,
+        })
+    }
+
+    /// 一帧字节数（= `nBlockAlign`）。
+    fn bytes_per_frame(&self) -> usize {
+        self.channels as usize * self.sample_format.bytes_per_sample()
+    }
+
+    /// 人读描述：`48000 Hz / 2 ch / 32-bit float`。
+    fn describe(&self) -> String {
+        let kind = match self.sample_format {
+            SampleFormat::S16 => "16-bit int",
+            SampleFormat::S24 => "24-bit int",
+            SampleFormat::S32 => "32-bit int",
+            SampleFormat::F32 => "32-bit float",
+        };
+        format!("{} Hz / {} ch / {}", self.samplerate, self.channels, kind)
+    }
+}
+
+/// 44.1k 单声道 i16 → 端点混音格式字节的流式转换器（纯逻辑，可离线单测）。
+#[derive(Debug)]
+struct MixConverter {
+    mix: MixOutputFormat,
+    /// 44.1k 单声道 → 混音采样率的流式线性重采样器。
+    resampler: StreamResampler,
+    /// 中间缓冲（避免每个音频块都分配）。
+    mono_f32: Vec<f32>,
+    resampled: Vec<f32>,
+    interleaved: Vec<f32>,
+}
+
+impl MixConverter {
+    /// 为指定混音格式建转换器。
+    fn new(mix: MixOutputFormat) -> Self {
+        Self {
+            mix,
+            resampler: StreamResampler::new(ROUTE_SAMPLE_RATE, mix.samplerate, 1),
+            mono_f32: Vec::new(),
+            resampled: Vec::new(),
+            interleaved: Vec::new(),
+        }
+    }
+
+    /// 给定 render 缓冲剩余帧数，最多能消费多少 44.1k 输入帧（转换后不超容量）。
+    fn input_frames_for_available(&self, available: usize) -> usize {
+        if available == 0 {
+            return 0;
+        }
+        // 输出帧数 ≈ 输入帧数 / step（step = 44100 / 目标采样率，见 StreamResampler）。
+        let frames = (available as f64 * self.resampler.step()).floor() as usize;
+        if self.resampler.is_passthrough() {
+            frames
+        } else {
+            // 线性插值要等下一帧才能出点，输出可能比换算值少 1；再留 1 帧余量。
+            frames.saturating_sub(1)
+        }
+    }
+
+    /// 把一块单声道 44.1k i16 采样编码成混音格式字节（追加到 `out`），返回输出帧数。
+    ///
+    /// 采样率不同则流式重采样；单声道复制到左右两个输出声道（只接一只箱子也不缺节目）。
+    fn convert(&mut self, mono: &[i16], out: &mut Vec<u8>) -> usize {
+        out.clear();
+        self.mono_f32.clear();
+        self.mono_f32
+            .extend(mono.iter().map(|&sample| s16_to_f32(sample)));
+        self.resampled.clear();
+        self.resampler.process(&self.mono_f32, &mut self.resampled);
+        let frames = self.resampled.len();
+        if self.mix.channels == 1 {
+            self.mix.sample_format.encode_into(&self.resampled, out);
+        } else {
+            self.interleaved.clear();
+            self.interleaved.reserve(frames * 2);
+            for &sample in &self.resampled {
+                self.interleaved.push(sample);
+                self.interleaved.push(sample);
+            }
+            self.mix.sample_format.encode_into(&self.interleaved, out);
+        }
+        frames
+    }
+}
+
+/// 回退路径：按端点自己的混音格式（原始 `WAVEFORMATEX*`）打开 render 流。
+///
+/// `GetMixFormat` 返回的内存由 COM 分配，初始化后立刻 `CoTaskMemFree`。不加
+/// `AUTOCONVERTPCM`（这正是失败的那条路），由 [`MixConverter`] 负责数据格式转换。
+fn initialize_with_mix_format(
+    client: &windows::Win32::Media::Audio::IAudioClient,
+    render_buffer_ms: u32,
+) -> Result<MixOutputFormat> {
+    let format = unsafe { client.GetMixFormat() }
+        .map_err(|e| AudioError::wasapi(e.code().0, "GetMixFormat(route fallback)"))?;
+    if format.is_null() {
+        return Err(AudioError::invalid("GetMixFormat 返回空指针"));
+    }
+    // SAFETY: GetMixFormat 成功时返回至少 18 字节的 WAVEFORMATEX（扩展格式更长）。
+    let info = unsafe { com::format_info_from_raw(format as *const u8) };
+    let init = unsafe {
+        client.Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            0,
+            com::ms_to_hns(render_buffer_ms),
+            0,
+            format,
+            None,
+        )
+    };
+    // SAFETY: format 来自 GetMixFormat，所有权在本函数，Initialize 已复制所需字段。
+    unsafe { CoTaskMemFree(Some(format as *const c_void)) };
+    init.map_err(|e| {
+        AudioError::wasapi(
+            e.code().0,
+            format!("Initialize(route fallback {})", info.describe()),
+        )
+    })?;
+    MixOutputFormat::from_info(&info)
+}
+
 fn run_sink(shared: Arc<Shared>, index: usize, route: RouteConfig, render_buffer_ms: u32) {
     if let Err(e) = sink_loop(&shared, index, &route, render_buffer_ms) {
         if let Ok(mut sink) = shared.sinks[index].lock() {
@@ -874,40 +1137,75 @@ fn sink_loop(
     let enumerator = com::enumerator()?;
     let selector = DeviceSelector::name_contains(route.endpoint.clone());
     let device = com::resolve(&enumerator, &selector, DataFlow::Render)?;
-    let client = com::activate_client(&device.device)?;
+    let mut client = com::activate_client(&device.device)?;
     let _mix = com::mix_format(&client)?;
 
+    // 路径一（首选）：让 WASAPI 自动转换到 44100/2ch/s16。混音 48k 的端点都走这条。
     let format = PcmFormat::new(ROUTE_SAMPLE_RATE, 2, 16);
     let wave_format = com::pcm16_waveformatex(format);
     let flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-    unsafe {
-        client.Initialize(
-            AUDCLNT_SHAREMODE_SHARED,
-            flags,
-            com::ms_to_hns(render_buffer_ms),
-            0,
-            &wave_format,
-            None,
-        )
-    }
-    .map_err(|e| AudioError::wasapi(e.code().0, "Initialize(route render)"))?;
+    // 诊断开关：设置 MIPLAY_ROUTE_FORCE_MIX_FORMAT=1 可跳过自动转换、强制走混音格式
+    // 回退路径（排障/真机验证用，正常播放不要设置）。
+    let force_mix_fallback = std::env::var_os("MIPLAY_ROUTE_FORCE_MIX_FORMAT").is_some();
+    let init_error = if force_mix_fallback {
+        Some(windows::core::Error::from_hresult(
+            windows::Win32::Foundation::E_FAIL,
+        ))
+    } else {
+        match unsafe {
+            client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                flags,
+                com::ms_to_hns(render_buffer_ms),
+                0,
+                &wave_format,
+                None,
+            )
+        } {
+            Ok(()) => None,
+            Err(e) => Some(e),
+        }
+    };
+
+    // 路径二：AUTOCONVERTPCM 被拒时按端点自己的混音格式开流，数据在 Rust 侧转换。
+    // 真机实测（Win11 26100）：端点混音 44100 Hz 时这条自动转换路径必定返回
+    // 0x88890008（AUDCLNT_E_UNSUPPORTED_FORMAT），混音 48000 Hz 时同样的请求却成功。
+    let mut output = match init_error {
+        None => SinkOutput::AutoConvert,
+        Some(primary) => {
+            // 失败后这个 client 的状态不可靠，重新 Activate 一个干净的再试。
+            client = com::activate_client(&device.device)?;
+            let mix = initialize_with_mix_format(&client, render_buffer_ms).map_err(|fallback| {
+                AudioError::invalid(format!(
+                    "初始化 render 失败：自动转换路径报 WASAPI 错误 (0x{:08X})，回退混音格式也失败：{fallback}",
+                    primary.code().0 as u32
+                ))
+            })?;
+            SinkOutput::Converted {
+                mix,
+                converter: MixConverter::new(mix),
+            }
+        }
+    };
 
     let buffer_frames = unsafe { client.GetBufferSize() }
         .map_err(|e| AudioError::wasapi(e.code().0, "GetBufferSize(route)"))? as usize;
     let render: IAudioRenderClient = unsafe { client.GetService() }
         .map_err(|e| AudioError::wasapi(e.code().0, "GetService(IAudioRenderClient, route)"))?;
 
-    // 预填一点静音，避免 Start 后第一轮就欠载。
-    let prefill = (RENDER_PREFILL_MS as usize * ROUTE_SAMPLE_RATE as usize / 1000)
+    // 预填一点静音，避免 Start 后第一轮就欠载。帧数按实际输出采样率算。
+    let bytes_per_frame = output.bytes_per_frame();
+    let prefill = (RENDER_PREFILL_MS as usize * output.samplerate() as usize / 1000)
         .min(buffer_frames);
     if prefill > 0 {
-        write_silence(&render, prefill)?;
+        write_silence(&render, prefill, bytes_per_frame)?;
     }
     unsafe { client.Start() }.map_err(|e| AudioError::wasapi(e.code().0, "Start(route)"))?;
 
     // 从这里开始 start() 认为这条路由"已打开"。
     if let Ok(mut sink) = shared.sinks[index].lock() {
         sink.opened = true;
+        sink.format_path = Some(output.describe());
     }
 
     // 左右微调延迟：真正的延迟线（见 DelayLine 的注释——"跳过 N 帧"会被抖动队列的
@@ -916,6 +1214,8 @@ fn sink_loop(
     delay.set_frames(delay_frames_for_ms(route.delay_ms));
 
     let result = (|| -> Result<()> {
+        // 编码后的混音格式字节缓冲，循环里复用（不每块分配）。
+        let mut bytes: Vec<u8> = Vec::with_capacity(RENDER_CHUNK_FRAMES * FRAME_BYTES as usize * 2);
         while !shared.stop.load(Ordering::Relaxed) {
             // 延迟可以在播放中实时调整（GUI 拖动即时生效，不用重启引擎）。
             if let Some(slot) = shared.delays_ms.get(index) {
@@ -929,9 +1229,13 @@ fn sink_loop(
                 thread::sleep(Duration::from_millis(1));
                 continue;
             }
-            let want = available.min(RENDER_CHUNK_FRAMES);
+            let want = output.input_frames_for_available(available);
+            if want == 0 {
+                thread::sleep(Duration::from_millis(1));
+                continue;
+            }
 
-            let mut stereo: Vec<i16> = Vec::with_capacity(want * 2);
+            let mut mono: Vec<i16> = Vec::with_capacity(want);
             let mut starved = 0usize;
             let mut peak = 0.0f32;
             {
@@ -949,11 +1253,9 @@ fn sink_loop(
                     };
                     let out = delay.process(sample);
                     peak = peak.max((out as f32 / 32_768.0).abs());
-                    // 单声道样本同时填 L/R：只接一只箱子也不会少一半节目。
-                    stereo.push(out);
-                    stereo.push(out);
+                    // 单声道样本交给输出编码：原生路径填 L/R，回退路径按混音格式转换。
+                    mono.push(out);
                 }
-                sink.sent_bytes += (want * FRAME_BYTES as usize) as u64;
                 // 输出电平：本块峰值与旧值取大（旧值每块衰减 20%）。
                 sink.level = peak.max(sink.level * LEVEL_DECAY).min(1.0);
                 sink.delay_frames = delay.frames();
@@ -962,7 +1264,24 @@ fn sink_loop(
                     sink.underruns += 1;
                 }
             }
-            write_stereo(&render, &stereo)?;
+
+            let frames = match &mut output {
+                SinkOutput::AutoConvert => encode_native_stereo(&mono, &mut bytes),
+                SinkOutput::Converted { converter, .. } => converter.convert(&mono, &mut bytes),
+            };
+            if frames == 0 {
+                thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+            if frames > available {
+                return Err(AudioError::invalid(format!(
+                    "输出转换后 {frames} 帧超过 render 缓冲剩余 {available} 帧"
+                )));
+            }
+            write_bytes(&render, &bytes, frames)?;
+            if let Ok(mut sink) = shared.sinks[index].lock() {
+                sink.sent_bytes += bytes.len() as u64;
+            }
         }
         Ok(())
     })();
@@ -971,8 +1290,8 @@ fn sink_loop(
     result
 }
 
-/// 往 render 缓冲写 `frames` 帧静音（双声道 16 bit）。
-fn write_silence(render: &IAudioRenderClient, frames: usize) -> Result<()> {
+/// 往 render 缓冲写 `frames` 帧静音（每帧 `bytes_per_frame` 字节）。
+fn write_silence(render: &IAudioRenderClient, frames: usize, bytes_per_frame: usize) -> Result<()> {
     if frames == 0 {
         return Ok(());
     }
@@ -983,31 +1302,42 @@ fn write_silence(render: &IAudioRenderClient, frames: usize) -> Result<()> {
             "IAudioRenderClient::GetBuffer 返回空指针",
         ));
     }
-    unsafe { std::ptr::write_bytes(ptr, 0, frames * FRAME_BYTES as usize) };
+    unsafe { std::ptr::write_bytes(ptr, 0, frames * bytes_per_frame) };
     unsafe { render.ReleaseBuffer(frames as u32, 0) }
         .map_err(|e| AudioError::wasapi(e.code().0, "ReleaseBuffer(silence)"))?;
     Ok(())
 }
 
-/// 往 render 缓冲写交错立体声（`samples.len()` 必须是偶数）。
-fn write_stereo(render: &IAudioRenderClient, samples: &[i16]) -> Result<()> {
-    let frames = samples.len() / 2;
+/// 把已编码好的输出格式字节写进 render 缓冲（`frames` 帧）。
+fn write_bytes(render: &IAudioRenderClient, bytes: &[u8], frames: usize) -> Result<()> {
     if frames == 0 {
         return Ok(());
     }
     let ptr = unsafe { render.GetBuffer(frames as u32) }
-        .map_err(|e| AudioError::wasapi(e.code().0, "GetBuffer(stereo)"))?;
+        .map_err(|e| AudioError::wasapi(e.code().0, "GetBuffer(route)"))?;
     if ptr.is_null() {
         return Err(AudioError::invalid(
             "IAudioRenderClient::GetBuffer 返回空指针",
         ));
     }
-    unsafe {
-        std::ptr::copy_nonoverlapping(samples.as_ptr() as *const u8, ptr, samples.len() * 2);
-    }
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
     unsafe { render.ReleaseBuffer(frames as u32, 0) }
-        .map_err(|e| AudioError::wasapi(e.code().0, "ReleaseBuffer(stereo)"))?;
+        .map_err(|e| AudioError::wasapi(e.code().0, "ReleaseBuffer(route)"))?;
     Ok(())
+}
+
+/// 原生路径（AUTOCONVERTPCM）：单声道样本直接交织成 44100/2ch/s16 字节，返回帧数。
+///
+/// 同一个 i16 直接复制成 L/R，避免 i16→f32→i16 的额外舍入。
+fn encode_native_stereo(mono: &[i16], out: &mut Vec<u8>) -> usize {
+    out.clear();
+    out.reserve(mono.len() * FRAME_BYTES as usize);
+    for &sample in mono {
+        let bytes = sample.to_le_bytes();
+        out.extend_from_slice(&bytes);
+        out.extend_from_slice(&bytes);
+    }
+    mono.len()
 }
 
 // ---------------------------------------------------------------------------
@@ -1474,6 +1804,9 @@ mod tests {
                     queued_ms: 10.0,
                     delay_ms: 30.0,
                     level: 0.5,
+                    format_path: Some(
+                        "mix-format 软件转换（44100 Hz / 2 ch / 32-bit float）".to_owned(),
+                    ),
                     error: None,
                 },
                 RouteStats {
@@ -1485,6 +1818,7 @@ mod tests {
                     queued_ms: 0.0,
                     delay_ms: 0.0,
                     level: 0.0,
+                    format_path: None,
                     error: Some("设备已拔出".to_owned()),
                 },
             ],
@@ -1494,6 +1828,8 @@ mod tests {
         assert!(describe.contains("箱B"), "{describe}");
         assert!(describe.contains("设备已拔出"), "{describe}");
         assert!(describe.contains("44100 帧"), "{describe}");
+        // 回退路径（混音格式 + 软件转换）要在 describe() 里能看到，便于 GUI 显示。
+        assert!(describe.contains("mix-format"), "{describe}");
     }
 
     #[test]
@@ -1568,5 +1904,217 @@ mod tests {
         assert!(!stats.running);
         assert_eq!(stats.captured_frames, 0);
         assert_eq!(stats.frame_bytes, 0);
+    }
+
+    // ---- 回退路径（混音格式 + 软件转换）的纯逻辑测试 ----
+
+    /// 造一个混音格式（回退路径的目标）。
+    fn mix_info(
+        samplerate: u32,
+        channels: u16,
+        sample_format: Option<SampleFormat>,
+    ) -> FormatInfo {
+        let bytes = sample_format.map(SampleFormat::bytes_per_sample).unwrap_or(2);
+        FormatInfo {
+            sample_format,
+            channels,
+            samplerate,
+            bits: (bytes * 8) as u16,
+            block_align: channels * bytes as u16,
+            avg_bytes_per_sec: samplerate * channels as u32 * bytes as u32,
+            raw_format_tag: match sample_format {
+                Some(SampleFormat::F32) => 3,
+                _ => 1,
+            },
+            is_extensible: false,
+        }
+    }
+
+    fn mix_output(samplerate: u32, channels: u16, sample_format: SampleFormat) -> MixOutputFormat {
+        MixOutputFormat {
+            samplerate,
+            channels,
+            sample_format,
+        }
+    }
+
+    #[test]
+    fn native_stereo_encoding_duplicates_mono_sample() {
+        let mut out = Vec::new();
+        let frames = encode_native_stereo(&[0x1234i16, -2], &mut out);
+        assert_eq!(frames, 2);
+        assert_eq!(out.len(), 8);
+        // 小端、同一个样本同时填 L/R。
+        assert_eq!(&out[0..4], &[0x34, 0x12, 0x34, 0x12]);
+        assert_eq!(&out[4..8], &[0xFE, 0xFF, 0xFE, 0xFF]);
+        out.clear();
+        assert_eq!(encode_native_stereo(&[], &mut out), 0);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn mix_output_format_accepts_convertible_mix_formats() {
+        let float_44k =
+            MixOutputFormat::from_info(&mix_info(44_100, 2, Some(SampleFormat::F32))).unwrap();
+        assert_eq!(float_44k.describe(), "44100 Hz / 2 ch / 32-bit float");
+        assert_eq!(float_44k.bytes_per_frame(), 8);
+
+        let int_48k =
+            MixOutputFormat::from_info(&mix_info(48_000, 2, Some(SampleFormat::S16))).unwrap();
+        assert_eq!(int_48k.describe(), "48000 Hz / 2 ch / 16-bit int");
+        assert_eq!(int_48k.bytes_per_frame(), 4);
+
+        let mono_48k =
+            MixOutputFormat::from_info(&mix_info(48_000, 1, Some(SampleFormat::S32))).unwrap();
+        assert_eq!(mono_48k.bytes_per_frame(), 4);
+
+        // 44.1k 混音（正是 AUTOCONVERTPCM 失败的那种端点）也必须能回退。
+        assert!(MixOutputFormat::from_info(&mix_info(44_100, 2, Some(SampleFormat::F32))).is_ok());
+    }
+
+    #[test]
+    fn mix_output_format_rejects_unsupported_mix_formats() {
+        // 24-bit 不在软件转换支持范围：必须明确报错，不能静默写错格式。
+        let err = MixOutputFormat::from_info(&mix_info(48_000, 2, Some(SampleFormat::S24)));
+        assert!(err.is_err());
+
+        // 多声道（6 ch）暂不支持。
+        assert!(MixOutputFormat::from_info(&mix_info(48_000, 6, Some(SampleFormat::F32))).is_err());
+
+        // 未知采样格式。
+        assert!(MixOutputFormat::from_info(&mix_info(48_000, 2, None)).is_err());
+
+        // nBlockAlign 与声道 × 采样字节数不一致。
+        let mut broken = mix_info(48_000, 2, Some(SampleFormat::F32));
+        broken.block_align = 4;
+        assert!(MixOutputFormat::from_info(&broken).is_err());
+
+        // 混音格式本身无效（channels/block_align 为 0）。
+        let mut invalid = mix_info(48_000, 0, Some(SampleFormat::F32));
+        invalid.block_align = 0;
+        assert!(MixOutputFormat::from_info(&invalid).is_err());
+    }
+
+    #[test]
+    fn converter_passthrough_44100_s16_duplicates_channels() {
+        let mix = mix_output(44_100, 2, SampleFormat::S16);
+        let mut converter = MixConverter::new(mix);
+        let mut out = Vec::new();
+        let frames = converter.convert(&[1_000, -1_000, 0], &mut out);
+        assert_eq!(frames, 3);
+        assert_eq!(out.len(), 3 * 4);
+        // 左右声道都是同一个样本（单声道复制到双声道）。
+        assert_eq!(i16::from_le_bytes([out[0], out[1]]), 1_000);
+        assert_eq!(i16::from_le_bytes([out[2], out[3]]), 1_000);
+        assert_eq!(i16::from_le_bytes([out[4], out[5]]), -1_000);
+        assert_eq!(i16::from_le_bytes([out[6], out[7]]), -1_000);
+    }
+
+    #[test]
+    fn converter_resamples_to_48000_f32() {
+        let mix = mix_output(48_000, 2, SampleFormat::F32);
+        let mut converter = MixConverter::new(mix);
+        let mut out = Vec::new();
+        let frames = converter.convert(&vec![1_000i16; RENDER_CHUNK_FRAMES], &mut out);
+        // 44100 → 48000：441 帧大约变 480 帧（流式重采样可能有 1 帧出入）。
+        assert!((470..=482).contains(&frames), "{frames}");
+        assert_eq!(out.len(), frames * 8);
+        // 每帧 2 个 f32，左右相同，且是正数。
+        let left = f32::from_le_bytes([out[0], out[1], out[2], out[3]]);
+        let right = f32::from_le_bytes([out[4], out[5], out[6], out[7]]);
+        assert!(left > 0.0, "{left}");
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn converter_handles_mono_mix_format() {
+        let mix = mix_output(48_000, 1, SampleFormat::F32);
+        let mut converter = MixConverter::new(mix);
+        let mut out = Vec::new();
+        let frames = converter.convert(&vec![-2_000i16; RENDER_CHUNK_FRAMES], &mut out);
+        assert!((470..=482).contains(&frames), "{frames}");
+        assert_eq!(out.len(), frames * 4);
+        let first = f32::from_le_bytes([out[0], out[1], out[2], out[3]]);
+        assert!(first < 0.0, "{first}");
+    }
+
+    #[test]
+    fn converter_s32_frames_are_four_bytes() {
+        let mix = mix_output(44_100, 2, SampleFormat::S32);
+        let mut converter = MixConverter::new(mix);
+        let mut out = Vec::new();
+        let frames = converter.convert(&[1_000, 0, -1_000], &mut out);
+        assert_eq!(frames, 3);
+        assert_eq!(out.len(), 3 * 8);
+        let left = i32::from_le_bytes([out[0], out[1], out[2], out[3]]);
+        let right = i32::from_le_bytes([out[4], out[5], out[6], out[7]]);
+        assert!(left > 0, "{left}");
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn input_frame_limit_never_exceeds_available() {
+        // 原生路径：最多 10 ms 一块。
+        assert_eq!(
+            SinkOutput::AutoConvert.input_frames_for_available(10_000),
+            RENDER_CHUNK_FRAMES
+        );
+        assert_eq!(SinkOutput::AutoConvert.input_frames_for_available(0), 0);
+
+        let mix = mix_output(48_000, 2, SampleFormat::F32);
+        let mut converter = MixConverter::new(mix);
+        for available in [100usize, RENDER_CHUNK_FRAMES, 480, 960] {
+            let want = converter.input_frames_for_available(available);
+            assert!(want > 0, "available={available}");
+            let mut out = Vec::new();
+            let frames = converter.convert(&vec![1_000i16; want], &mut out);
+            // 转换后绝不能超过 render 缓冲剩余帧数。
+            assert!(frames <= available, "available={available} frames={frames}");
+        }
+        // 真正的 sink 侧入口还要再夹到 10 ms 一块，防止一块吃太多造成延迟抖动。
+        let converted = SinkOutput::Converted {
+            mix,
+            converter: MixConverter::new(mix),
+        };
+        assert!(converted.input_frames_for_available(960) <= RENDER_CHUNK_FRAMES);
+    }
+
+    #[test]
+    fn sink_output_describe_mentions_actual_path() {
+        assert!(SinkOutput::AutoConvert
+            .describe()
+            .contains("wasapi-autoconvert"));
+        let mix = mix_output(44_100, 2, SampleFormat::F32);
+        let converted = SinkOutput::Converted {
+            mix,
+            converter: MixConverter::new(mix),
+        };
+        let describe = converted.describe();
+        assert!(describe.contains("mix-format"), "{describe}");
+        assert!(describe.contains("44100 Hz"), "{describe}");
+        assert_eq!(converted.bytes_per_frame(), 8);
+        assert_eq!(converted.samplerate(), 44_100);
+    }
+
+    #[test]
+    fn fallback_initialize_error_mentions_both_paths() {
+        // 这条纯逻辑不碰设备：只校验失败时的错误文案同时包含两条路径的关键字。
+        let primary = AudioError::wasapi(0x88890008u32 as i32, "Initialize(route render)");
+        let fallback = AudioError::invalid("回退也失败");
+        let text = format!(
+            "初始化 render 失败：自动转换路径报 WASAPI 错误 (0x{:08X})，回退混音格式也失败：{fallback}",
+            primary_hr(&primary)
+        );
+        assert!(text.contains("0x88890008"), "{text}");
+        assert!(text.contains("自动转换"), "{text}");
+        assert!(text.contains("回退混音格式"), "{text}");
+    }
+
+    /// 取错误里记录的 HRESULT（测试辅助）。
+    fn primary_hr(error: &AudioError) -> u32 {
+        match error {
+            AudioError::Wasapi(hr, _) => *hr as u32,
+            _ => 0,
+        }
     }
 }
