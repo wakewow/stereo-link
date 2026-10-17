@@ -288,30 +288,58 @@ pub(crate) fn resolve(
         }
         DeviceSelector::NameContains(_) => {
             let all = devices(en, flow).unwrap_or_default();
-            let mut candidates = Vec::new();
+            let mut matched: Vec<ResolvedDevice> = Vec::new();
+            let mut others: Vec<String> = Vec::new();
             for device in all {
                 let id = device_id(&device)?;
                 let name = device_name(&device).unwrap_or_default();
+                let is_default = default_id.as_deref() == Some(id.as_str());
                 if sel.matches(&name, &id) {
-                    let is_default = default_id.as_deref() == Some(id.as_str());
-                    return Ok(ResolvedDevice {
+                    matched.push(ResolvedDevice {
                         device,
                         id,
                         name,
                         is_default,
                     });
-                }
-                candidates.push(describe_one(&device, flow));
-            }
-            Err(AudioError::DeviceNotFound(format!(
-                "{}（{flow} 方向）；本机候选：{}",
-                sel.describe(),
-                if candidates.is_empty() {
-                    "<无活动端点>".to_string()
                 } else {
-                    candidates.join(" / ")
+                    others.push(describe_one(&device, flow));
                 }
-            )))
+            }
+            match matched.len() {
+                0 => Err(AudioError::DeviceNotFound(format!(
+                    "{}（{flow} 方向）；本机候选：{}",
+                    sel.describe(),
+                    if others.is_empty() {
+                        "<无活动端点>".to_string()
+                    } else {
+                        others.join(" / ")
+                    }
+                ))),
+                1 => Ok(matched.remove(0)),
+                _ => {
+                    // 多个端点撞名（自研虚拟声卡 vs 改名过的 Steam 设备）：先试精确匹配，
+                    // 仍不唯一就报错，绝不静默挑第一个。
+                    let exact: Vec<usize> = matched
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, d)| sel.matches_exact(&d.name, &d.id))
+                        .map(|(i, _)| i)
+                        .collect();
+                    if exact.len() == 1 {
+                        return Ok(matched.swap_remove(exact[0]));
+                    }
+                    let names: Vec<String> = matched
+                        .iter()
+                        .map(|d| format!("「{}」({})", d.name, d.id))
+                        .collect();
+                    Err(AudioError::DeviceNotFound(format!(
+                        "{}（{flow} 方向）匹配到 {} 个端点，请用完整名字或 id 指定：{}",
+                        sel.describe(),
+                        names.len(),
+                        names.join(" / ")
+                    )))
+                }
+            }
         }
     }
 }

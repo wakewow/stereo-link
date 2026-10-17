@@ -48,7 +48,7 @@ pub struct BtSplitConfig {
     pub left_endpoint: String,
     /// 右声道目标端点（友好名子串，如 `Xiaomi Sound-5320`）。
     pub right_endpoint: String,
-    /// 采集源端点（回环）。虚拟声卡友好名子串，默认 `立体声链`。
+    /// 采集源端点（回环）。虚拟声卡友好名子串，默认 `立体声链虚拟声卡`。
     pub source_endpoint: String,
     /// 采集增益（0.0–8.0）。
     pub capture_gain: f32,
@@ -67,7 +67,7 @@ impl Default for BtSplitConfig {
         Self {
             left_endpoint: String::new(),
             right_endpoint: String::new(),
-            source_endpoint: "立体声链".to_owned(),
+            source_endpoint: "立体声链虚拟声卡".to_owned(),
             capture_gain: 1.0,
             render_buffer_ms: 40,
             queue_ms: 40,

@@ -138,7 +138,7 @@ impl RouteConfig {
 
     /// 额外延迟换算成 44.1k 的帧数。
     pub fn delay_frames(&self) -> usize {
-        delay_skip_frames(self.delay_ms)
+        delay_frames_for_ms(self.delay_ms)
     }
 
     /// 人读一行：`Left ← "Xiaomi Sound-1695" | 增益 1.00 | 延迟 0 ms`。
@@ -172,7 +172,9 @@ pub struct RouteEngineConfig {
 impl Default for RouteEngineConfig {
     fn default() -> Self {
         Self {
-            source_endpoint: "立体声链".to_owned(),
+            // 自研虚拟声卡的端点名（`扬声器 (立体声链虚拟声卡)`）。历史安装里借用改名过的
+            // Steam 设备时，请显式传 `--source "<你的虚拟声卡名>"`。
+            source_endpoint: "立体声链虚拟声卡".to_owned(),
             routes: Vec::new(),
             capture_gain: 1.0,
             render_buffer_ms: 40,
@@ -303,6 +305,8 @@ pub struct RouteStats {
     pub dropped_ms: f64,
     /// 当前队列里排队的音频时长（毫秒），稳态应接近配置的 `queue_ms`。
     pub queued_ms: f64,
+    /// 这条链路**实际生效**的微调延迟（毫秒），来自延迟线当前长度。
+    pub delay_ms: f64,
     /// 这条链路输出的峰值电平（0..1，带衰减，GUI 电平条用）。
     pub level: f32,
     /// 打开/运行失败原因；`None` = 正常（含尚在打开中）。
@@ -313,7 +317,7 @@ impl RouteStats {
     /// 人读一行（GUI 日志 / 自检用）。
     pub fn describe(&self) -> String {
         let mut text = format!(
-            "{} → {} | 已发 {} B | 欠载 {} | 丢 {:.0} ms | 队列 {:.0} ms | 电平 {:.2}",
+            "{} → {} | 已发 {} B | 欠载 {} | 丢 {:.0} ms | 队列 {:.0} ms | 延迟 {:.0} ms | 电平 {:.2}",
             self.channel.as_str(),
             if self.endpoint.is_empty() {
                 "<未知端点>"
@@ -324,6 +328,7 @@ impl RouteStats {
             self.underruns,
             self.dropped_ms,
             self.queued_ms,
+            self.delay_ms,
             self.level
         );
         if let Some(err) = &self.error {
@@ -415,6 +420,10 @@ impl RouteEngineHandle {
             .iter()
             .map(|route| Mutex::new(SinkState::new(route, queue_cap_samples)))
             .collect();
+        let delays_ms: Vec<AtomicU32> = enabled
+            .iter()
+            .map(|route| AtomicU32::new(route.delay_ms))
+            .collect();
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             sinks_alive: AtomicU32::new(sink_count as u32),
@@ -425,6 +434,7 @@ impl RouteEngineHandle {
             source_device: Mutex::new(String::new()),
             source_error: Mutex::new(None),
             sinks,
+            delays_ms,
         });
 
         let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(sink_count + 1);
@@ -503,6 +513,40 @@ impl RouteEngineHandle {
             && self.shared.sinks_alive.load(Ordering::Relaxed) > 0
     }
 
+    /// 播放中实时调整某条路由的微调延迟（毫秒），**不需要重启引擎**。
+    ///
+    /// `index` 是**启用**路由里的下标，与 [`RouteEngineStats::routes`] 的顺序一致
+    /// （0 = 配置里第一条 `enabled=true` 的路由）。
+    ///
+    /// 变大 = 立刻多垫一段静音（这条链路慢一点）；变小 = 立刻丢掉最老的样本追上。
+    /// 越界或引擎已停返回 `false`。
+    pub fn set_delay_ms(&self, index: usize, delay_ms: u32) -> bool {
+        match self.shared.delays_ms.get(index) {
+            Some(slot) if !self.shared.stop.load(Ordering::Relaxed) => {
+                slot.store(delay_ms, Ordering::Relaxed);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 批量设置微调延迟（下标同 [`Self::set_delay_ms`]）；返回成功设置的条数。
+    pub fn set_delays_ms(&self, delays_ms: &[u32]) -> usize {
+        delays_ms
+            .iter()
+            .enumerate()
+            .filter(|(index, ms)| self.set_delay_ms(*index, **ms))
+            .count()
+    }
+
+    /// 某条路由当前生效的微调延迟（毫秒）；越界返回 `None`。
+    pub fn delay_ms(&self, index: usize) -> Option<u32> {
+        self.shared
+            .delays_ms
+            .get(index)
+            .map(|slot| slot.load(Ordering::Relaxed))
+    }
+
     /// 拍一张统计快照（加锁读，不影响音频线程）。
     pub fn stats(&self) -> RouteEngineStats {
         let source_device = self
@@ -528,6 +572,7 @@ impl RouteEngineHandle {
                     underruns: sink.underruns,
                     dropped_ms: samples_to_ms(sink.dropped_samples),
                     queued_ms: samples_to_ms(sink.queue.len() as u64),
+                    delay_ms: samples_to_ms(sink.delay_frames as u64),
                     level: sink.level,
                     error: sink.error.clone(),
                 }),
@@ -581,6 +626,8 @@ struct SinkState {
     sent_bytes: u64,
     underruns: u64,
     dropped_samples: u64,
+    /// 延迟线当前长度（帧），`stats()` 用它报「实际生效的微调延迟」。
+    delay_frames: usize,
     /// 输出峰值电平（0..1，带衰减）。
     level: f32,
 }
@@ -599,6 +646,7 @@ impl SinkState {
             sent_bytes: 0,
             underruns: 0,
             dropped_samples: 0,
+            delay_frames: 0,
             level: 0.0,
         }
     }
@@ -627,6 +675,8 @@ struct Shared {
     source_error: Mutex<Option<String>>,
     /// 每条启用路由一份；下标与启用顺序一致。
     sinks: Vec<Mutex<SinkState>>,
+    /// 每条启用路由的微调延迟（毫秒），下标与 `sinks` 一致；可在播放中随时改。
+    delays_ms: Vec<AtomicU32>,
 }
 
 /// 一块采集 PCM 解码后的结果。
@@ -680,8 +730,53 @@ fn apply_gain(sample: i16, gain: f32) -> i16 {
     scaled.clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 
-/// `delay_ms` 换算成 44.1k 下要跳过的帧数。
-fn delay_skip_frames(delay_ms: u32) -> usize {
+/// 一条路由的微调延迟线。
+///
+/// 与输入侧的抖动队列分工不同：抖动队列是「攒够就发、满了丢最旧」，它的占用时长由
+/// 采集/输出两条链路的时钟差决定，**不能被用来做固定延时**（丢最旧会把多出来的延迟
+/// 吃回去，这正是之前「左右微调延迟没有效果」的原因）。延迟线则是一个固定长度的
+/// FIFO：先把输出垫 `frames` 个静音，之后每个采样都晚 `frames` 个样本出来，容量可以
+/// 在播放中随时增减（增 = 立刻多等一会儿，减 = 立刻追上）。
+#[derive(Debug, Default)]
+struct DelayLine {
+    line: VecDeque<i16>,
+}
+
+impl DelayLine {
+    /// 空延迟线（0 ms，直通）。
+    fn new() -> Self {
+        Self {
+            line: VecDeque::new(),
+        }
+    }
+
+    /// 当前延迟帧数。
+    fn frames(&self) -> usize {
+        self.line.len()
+    }
+
+    /// 把延迟调整到 `frames`：变长就垫静音，变短就丢掉最老的样本（立即生效）。
+    fn set_frames(&mut self, frames: usize) {
+        while self.line.len() < frames {
+            self.line.push_back(0);
+        }
+        while self.line.len() > frames {
+            self.line.pop_front();
+        }
+    }
+
+    /// 送一个采样进去，取出延迟后的采样（延迟为 0 时直通）。
+    fn process(&mut self, sample: i16) -> i16 {
+        if self.line.is_empty() {
+            return sample;
+        }
+        self.line.push_back(sample);
+        self.line.pop_front().unwrap_or(0)
+    }
+}
+
+/// `delay_ms` 换算成 44.1k 下延迟线要保留的帧数。
+fn delay_frames_for_ms(delay_ms: u32) -> usize {
     (delay_ms as u64 * ROUTE_SAMPLE_RATE as u64 / 1000) as usize
 }
 
@@ -815,10 +910,17 @@ fn sink_loop(
         sink.opened = true;
     }
 
-    // 额外延迟：启动时先写 N 帧静音（采集数据照常进队列，填满后按上限丢最旧）。
-    let mut skip_frames = route.delay_frames();
+    // 左右微调延迟：真正的延迟线（见 DelayLine 的注释——"跳过 N 帧"会被抖动队列的
+    // 丢最旧吃回去，所以之前怎么调都没效果）。
+    let mut delay = DelayLine::new();
+    delay.set_frames(delay_frames_for_ms(route.delay_ms));
+
     let result = (|| -> Result<()> {
         while !shared.stop.load(Ordering::Relaxed) {
+            // 延迟可以在播放中实时调整（GUI 拖动即时生效，不用重启引擎）。
+            if let Some(slot) = shared.delays_ms.get(index) {
+                delay.set_frames(delay_frames_for_ms(slot.load(Ordering::Relaxed)));
+            }
             let padding = unsafe { client.GetCurrentPadding() }
                 .map_err(|e| AudioError::wasapi(e.code().0, "GetCurrentPadding(route)"))?
                 as usize;
@@ -829,57 +931,38 @@ fn sink_loop(
             }
             let want = available.min(RENDER_CHUNK_FRAMES);
 
-            if skip_frames > 0 {
-                let n = want.min(skip_frames);
-                write_silence(&render, n)?;
-                skip_frames -= n;
-                continue;
-            }
-
             let mut stereo: Vec<i16> = Vec::with_capacity(want * 2);
-            let mut got = 0usize;
-            let mut queue_empty = false;
+            let mut starved = 0usize;
             let mut peak = 0.0f32;
             {
                 let mut sink = shared.sinks[index]
                     .lock()
                     .map_err(|_| AudioError::invalid("route sink 状态锁被 poison"))?;
-                while got < want {
-                    match sink.queue.pop_front() {
-                        Some(sample) => {
-                            peak = peak.max((sample as f32 / 32_768.0).abs());
-                            // 单声道样本同时填 L/R：只接一只箱子也不会少一半节目。
-                            stereo.push(sample);
-                            stereo.push(sample);
-                            got += 1;
-                        }
+                for _ in 0..want {
+                    let sample = match sink.queue.pop_front() {
+                        Some(sample) => sample,
                         None => {
-                            queue_empty = true;
-                            break;
+                            // 队列暂时空了：补静音，但延迟线照常前进（延迟量不因此漂移）。
+                            starved += 1;
+                            0
                         }
-                    }
+                    };
+                    let out = delay.process(sample);
+                    peak = peak.max((out as f32 / 32_768.0).abs());
+                    // 单声道样本同时填 L/R：只接一只箱子也不会少一半节目。
+                    stereo.push(out);
+                    stereo.push(out);
                 }
-                sink.sent_bytes += (got * FRAME_BYTES as usize) as u64;
+                sink.sent_bytes += (want * FRAME_BYTES as usize) as u64;
                 // 输出电平：本块峰值与旧值取大（旧值每块衰减 20%）。
                 sink.level = peak.max(sink.level * LEVEL_DECAY).min(1.0);
-                if queue_empty
-                    && got == 0
-                    && shared.captured_frames.load(Ordering::Relaxed) > 0
-                {
-                    // 采集已经在出数据、这一路却一个样本都没有：补静音并计一次欠载。
+                sink.delay_frames = delay.frames();
+                if starved > 0 && shared.captured_frames.load(Ordering::Relaxed) > 0 {
+                    // 采集已经在出数据、这一路却断供：计一次欠载。
                     sink.underruns += 1;
                 }
             }
-
-            if got == 0 {
-                write_silence(&render, want)?;
-                continue;
-            }
             write_stereo(&render, &stereo)?;
-            if got < want {
-                // 队列暂时不够：剩下的补静音，别让设备整块欠载。
-                write_silence(&render, want - got)?;
-            }
         }
         Ok(())
     })();
@@ -1027,7 +1110,7 @@ mod tests {
     /// 两条路由（左 / 右）的合法配置。
     fn config() -> RouteEngineConfig {
         RouteEngineConfig {
-            source_endpoint: "立体声链".to_owned(),
+            source_endpoint: "立体声链虚拟声卡".to_owned(),
             routes: vec![
                 route("Xiaomi Sound-1695", RouteChannel::Left),
                 route("Xiaomi Sound-5320", RouteChannel::Right),
@@ -1052,7 +1135,7 @@ mod tests {
         assert!(default.routes.is_empty());
         // 空 routes 不合法：GUI 必须先配至少一条路由。
         assert!(default.validate().is_err());
-        assert_eq!(default.source_endpoint, "立体声链");
+        assert_eq!(default.source_endpoint, "立体声链虚拟声卡");
         assert_eq!(default.capture_gain, 1.0);
         assert_eq!(default.render_buffer_ms, 40);
         assert_eq!(default.queue_ms, 40);
@@ -1140,11 +1223,11 @@ mod tests {
 
     #[test]
     fn delay_milliseconds_convert_to_frames() {
-        assert_eq!(delay_skip_frames(0), 0);
-        assert_eq!(delay_skip_frames(1), 44);
-        assert_eq!(delay_skip_frames(10), 441);
-        assert_eq!(delay_skip_frames(1_000), 44_100);
-        assert_eq!(delay_skip_frames(2_000), 88_200);
+        assert_eq!(delay_frames_for_ms(0), 0);
+        assert_eq!(delay_frames_for_ms(1), 44);
+        assert_eq!(delay_frames_for_ms(10), 441);
+        assert_eq!(delay_frames_for_ms(1_000), 44_100);
+        assert_eq!(delay_frames_for_ms(2_000), 88_200);
         // 路由上的便捷方法走同一套换算
         let mut r = route("箱A", RouteChannel::Left);
         r.delay_ms = 500;
@@ -1157,6 +1240,70 @@ mod tests {
         assert_eq!(queue_capacity_samples(10), 441);
         assert_eq!(queue_capacity_samples(40), 1_764);
         assert_eq!(queue_capacity_samples(500), 22_050);
+    }
+
+    #[test]
+    fn delay_line_passes_through_when_empty() {
+        let mut delay = DelayLine::new();
+        assert_eq!(delay.frames(), 0);
+        assert_eq!(delay.process(123), 123);
+        assert_eq!(delay.frames(), 0);
+    }
+
+    #[test]
+    fn delay_line_shifts_signal_exactly() {
+        let mut delay = DelayLine::new();
+        delay.set_frames(3);
+        let input = [1i16, 2, 3, 4, 5, 6];
+        let out: Vec<i16> = input.iter().map(|sample| delay.process(*sample)).collect();
+        // 先垫 3 帧静音，之后严格延迟 3 个样本。
+        assert_eq!(out, vec![0, 0, 0, 1, 2, 3]);
+        assert_eq!(delay.frames(), 3);
+    }
+
+    #[test]
+    fn delay_line_resize_takes_effect_immediately() {
+        let mut delay = DelayLine::new();
+        delay.set_frames(2);
+        assert_eq!(delay.process(7), 0);
+        assert_eq!(delay.process(8), 0);
+        assert_eq!(delay.process(9), 7);
+        // 变短 = 立刻追上（丢掉最老的样本）。
+        delay.set_frames(0);
+        assert_eq!(delay.frames(), 0);
+        assert_eq!(delay.process(10), 10);
+        // 变长 = 立刻多等两帧。
+        delay.set_frames(2);
+        assert_eq!(delay.process(11), 0);
+        assert_eq!(delay.process(12), 0);
+        assert_eq!(delay.process(13), 11);
+    }
+
+    /// 回归测试：**抖动队列丢最旧不能把微调延迟吃掉**。
+    ///
+    /// 旧实现是「启动时跳过 N 帧」，而采集快于输出时队列会丢最旧样本，多出来的延迟
+    /// 被吃回去，用户看到的「左右微调延迟没有效果」就是这个原因。现在延迟由独立的
+    /// 延迟线承担，队列再丢也不影响延迟量。
+    #[test]
+    fn delay_line_survives_queue_drops() {
+        let mut sink = SinkState::new(&route("箱A", RouteChannel::Left), 4);
+        let mut delay = DelayLine::new();
+        delay.set_frames(10);
+        let mut out = Vec::new();
+        for i in 0..30i16 {
+            // 每轮塞 3 个采样、只取 1 个：队列必然打满并丢最旧（模拟采集快于输出）。
+            for _ in 0..3 {
+                sink.push_sample(100 + i);
+            }
+            let sample = sink.queue.pop_front().unwrap_or(0);
+            out.push(delay.process(sample));
+        }
+        assert!(sink.dropped_samples > 0, "这个测试需要队列真的丢过样本");
+        assert!(out[..10].iter().all(|value| *value == 0), "前 10 帧应是延迟线垫的静音");
+        assert!(
+            out[10..].iter().all(|value| *value >= 100),
+            "延迟线之后的每一帧都必须是真实音频（丢最旧只发生在队列侧）"
+        );
     }
 
     #[test]
@@ -1325,6 +1472,7 @@ mod tests {
                     underruns: 0,
                     dropped_ms: 0.0,
                     queued_ms: 10.0,
+                    delay_ms: 30.0,
                     level: 0.5,
                     error: None,
                 },
@@ -1335,6 +1483,7 @@ mod tests {
                     underruns: 2,
                     dropped_ms: 1.0,
                     queued_ms: 0.0,
+                    delay_ms: 0.0,
                     level: 0.0,
                     error: Some("设备已拔出".to_owned()),
                 },
@@ -1356,6 +1505,7 @@ mod tests {
         state.sent_bytes = 8;
         state.underruns = 1;
         state.level = 0.25;
+        state.delay_frames = 441;
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             sinks_alive: AtomicU32::new(1),
@@ -1366,6 +1516,7 @@ mod tests {
             source_device: Mutex::new("立体声链".to_owned()),
             source_error: Mutex::new(None),
             sinks: vec![Mutex::new(state)],
+            delays_ms: vec![AtomicU32::new(10)],
         });
         let handle = RouteEngineHandle {
             shared,
@@ -1406,6 +1557,7 @@ mod tests {
                 &route("箱A", RouteChannel::Left),
                 4,
             ))],
+            delays_ms: vec![AtomicU32::new(0)],
         });
         let handle = RouteEngineHandle {
             shared,

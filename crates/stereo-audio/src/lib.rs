@@ -56,7 +56,11 @@ pub mod btsplit;
 #[cfg(windows)]
 pub mod route;
 #[cfg(windows)]
+pub mod sync;
+#[cfg(windows)]
 pub mod endpoint_format;
+#[cfg(windows)]
+pub mod format_support;
 #[cfg(windows)]
 pub mod capture;
 #[cfg(windows)]
@@ -80,6 +84,10 @@ pub use route::{
 pub use endpoint_format::{
     build_waveformat_ext, default_render as default_render_format, get_format as get_endpoint_format,
     parse_waveformat, set_format as set_endpoint_format, EndpointFormat, COMMON_FORMATS,
+};
+#[cfg(windows)]
+pub use format_support::{
+    format_supported, supported_formats, supported_summary,
 };
 #[cfg(windows)]
 pub use capture::{

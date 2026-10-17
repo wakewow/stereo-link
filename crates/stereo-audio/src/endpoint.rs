@@ -209,6 +209,34 @@ impl DeviceSelector {
         }
     }
 
+    /// 是否是「精确」匹配：完整名字相等，或者名字括号里的部分相等
+    /// （Windows 端点显示名形如 `扬声器 (立体声链虚拟声卡)`）。
+    ///
+    /// 用来在多个端点撞名（例如自研虚拟声卡与改名过的 Steam 设备都含「立体声链」）
+    /// 时挑出唯一那个，挑不出来就报错，绝不静默选错。
+    pub fn matches_exact(&self, name: &str, id: &str) -> bool {
+        match self {
+            DeviceSelector::Default => false,
+            DeviceSelector::Id(want) => want == id,
+            DeviceSelector::NameContains(pat) => {
+                let pat = pat.trim().to_lowercase();
+                if pat.is_empty() {
+                    return false;
+                }
+                let name = name.to_lowercase();
+                if name == pat {
+                    return true;
+                }
+                match (name.find('('), name.rfind(')')) {
+                    (Some(open), Some(close)) if close > open => {
+                        name[open + 1..close].trim() == pat
+                    }
+                    _ => false,
+                }
+            }
+        }
+    }
+
     /// 人读描述（出错信息里会用到）。
     pub fn describe(&self) -> String {
         match self {

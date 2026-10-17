@@ -3,7 +3,7 @@
 //!
 //! 用法（先把要用的输出设备都连到本机）：
 //! ```powershell
-//! cargo run -p stereo-audio --example route_demo -- --left "Xiaomi Sound-1695" --right "Xiaomi Sound-5320" [--both "USB 耳机"] [--source "立体声链"]
+//! cargo run -p stereo-audio --example route_demo -- --left "Xiaomi Sound-1695" --right "Xiaomi Sound-5320" [--both "USB 耳机"] [--source "立体声链虚拟声卡"]
 //! ```
 //!
 //! 内置测试音每段 3 秒（**直接往采集源端点播放**，这样回环采集才采得到）：
@@ -42,7 +42,7 @@ fn usage() -> &'static str {
   --left <子串>     RouteChannel::Left 的路由（只送采集左声道）
   --right <子串>    RouteChannel::Right 的路由（只送采集右声道）
   --both <子串>     可选：RouteChannel::Both 的路由（送 (L+R)/2 混音）
-  --source <子串>   回环采集的 render 端点，默认 \"立体声链\"
+  --source <子串>   回环采集的 render 端点，默认 \"立体声链虚拟声卡\"
   --tone-to <子串>  内置测试音播到哪个端点（默认 = --source；传 none 关闭自动播放）
   --manual          不自动播测试音，只启动引擎等外部声音；跑 --wait 秒后自动停止
   --wait <秒>       --manual 模式下等待多久（默认 15）
@@ -137,7 +137,7 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
         index += 1;
     }
 
-    let source = source.unwrap_or_else(|| "立体声链".to_owned());
+    let source = source.unwrap_or_else(|| "立体声链虚拟声卡".to_owned());
     let tone_target = if manual || tone_disabled {
         None
     } else {

@@ -67,9 +67,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     pcm.extend(tone_pcm(3.0, |t| (sine(440.0, t), sine(880.0, t))));
     pcm.extend(tone_pcm(3.0, |t| (sine(660.0, t), sine(660.0, t))));
 
+    let source = config.source_endpoint.clone();
     let player = thread::spawn(move || {
         play_pcm_s16(
-            &DeviceSelector::name_contains("立体声链"),
+            &DeviceSelector::name_contains(source),
             PcmFormat::new(RATE, 2, 16),
             &pcm,
         )

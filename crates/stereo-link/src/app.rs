@@ -9,7 +9,7 @@
 //! - 引擎跑在自己的线程里（见 `stereo_audio::route`），UI 线程只读快照 + 发命令。
 //! - 状态用少量自定义绘制（电平条、胶囊、卡片）代替默认控件外观，避免糊成一团。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -18,7 +18,7 @@ use eframe::egui::{
 };
 use stereo_audio::{
     DataFlow, EndpointFormat, EndpointInfo, PcmFormat, RouteChannel, RouteConfig,
-    RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats, COMMON_FORMATS,
+    RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats,
 };
 
 use crate::audio_default;
@@ -68,12 +68,12 @@ fn pill(ui: &mut egui::Ui, text: &str, bg: Color32) {
 }
 
 /// 描边小徽标。
-fn badge(ui: &mut egui::Ui, text: &str, color: Color32) {
+fn badge(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
     let font = FontId::proportional(11.5);
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
     let pad = Vec2::new(7.0, 2.0);
     let size = galley.size() + pad * 2.0;
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(8), CARD_SOFT);
     painter.rect_stroke(
@@ -83,6 +83,7 @@ fn badge(ui: &mut egui::Ui, text: &str, color: Color32) {
         egui::StrokeKind::Inside,
     );
     painter.galley(rect.min + pad, galley, color);
+    response
 }
 
 /// 电平条。
@@ -222,8 +223,14 @@ pub struct StereoLinkApp {
     rename_rx: Option<std::sync::mpsc::Receiver<Result<Vec<String>, String>>>,
     /// 每个端点当前设备默认格式（含读取失败）。
     format_cache: BTreeMap<String, Option<EndpointFormat>>,
-    /// 每个设备在 [`COMMON_FORMATS`] 里选中的格式下标。
-    format_choices: BTreeMap<String, usize>,
+    /// 每个端点**真实支持**的格式（独占模式 `IsFormatSupported` 探测；后台线程填充）。
+    format_supported: BTreeMap<String, Option<Vec<EndpointFormat>>>,
+    /// 正在后台探测格式的端点 id。
+    format_probing: BTreeSet<String>,
+    /// 格式探测线程的结果通道。
+    format_rx: Option<std::sync::mpsc::Receiver<(String, Option<Vec<EndpointFormat>>)>>,
+    /// 每个端点选中的格式（只会从该端点的支持列表里挑）。
+    format_choices: BTreeMap<String, EndpointFormat>,
     /// 正在应用格式。
     format_busy: bool,
 }
@@ -256,6 +263,9 @@ impl StereoLinkApp {
             rename_busy: false,
             rename_rx: None,
             format_cache: BTreeMap::new(),
+            format_supported: BTreeMap::new(),
+            format_probing: BTreeSet::new(),
+            format_rx: None,
             format_choices: BTreeMap::new(),
             format_busy: false,
         };
@@ -318,6 +328,7 @@ impl StereoLinkApp {
 
     fn tick(&mut self) {
         self.poll_rename();
+        self.poll_format_probe();
         self.refresh_default_output(false);
 
         if let Some(engine) = &self.engine {
@@ -425,40 +436,99 @@ impl StereoLinkApp {
             .collect()
     }
 
-    /// 读取每个播放端点的“设备默认格式”（Windows 声音设置里那一项）。
+    /// 读取每个播放端点的“设备默认格式”（Windows 声音设置里那一项），
+    /// 并在后台探测每个端点**真正支持**哪些格式（独占模式，见 `format_support`）。
     fn refresh_formats(&mut self) {
         let mut cache = BTreeMap::new();
+        let mut ids = Vec::new();
         for ep in self.render_devices() {
             let format = stereo_audio::get_endpoint_format(&ep.id).ok();
             if let Some(f) = &format {
-                let index = COMMON_FORMATS
-                    .iter()
-                    .position(|&(rate, channels, bits, is_float)| {
-                        rate == f.samplerate
-                            && channels == f.channels
-                            && bits == f.valid_bits
-                            && is_float == f.is_float
-                    })
-                    .unwrap_or(1);
-                self.format_choices.insert(ep.id.clone(), index);
+                self.format_choices.entry(ep.id.clone()).or_insert(*f);
             }
-            cache.insert(ep.id, format);
+            cache.insert(ep.id.clone(), format);
+            ids.push(ep.id);
         }
         self.format_cache = cache;
+        self.spawn_format_probe(ids);
+    }
+
+    /// 后台探测端点支持的格式。
+    ///
+    /// 每个端点要试 90 个候选（6 采样率 × 5 声道 × 3 位深），同步做会卡住界面，
+    /// 所以丢到线程里、结果通过通道回到 [`Self::poll_format_probe`]。
+    fn spawn_format_probe(&mut self, ids: Vec<String>) {
+        if ids.is_empty() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.format_rx = Some(rx);
+        self.format_supported.clear();
+        self.format_probing = ids.iter().cloned().collect();
+        std::thread::spawn(move || {
+            for id in ids {
+                let list = stereo_audio::supported_formats(&id).ok();
+                if tx.send((id, list)).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// 只探测一个端点（界面上「探测格式」按钮用）。
+    fn probe_one_format(&mut self, id: String) {
+        if self.format_probing.contains(&id) {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.format_rx = Some(rx);
+        self.format_probing.insert(id.clone());
+        std::thread::spawn(move || {
+            let list = stereo_audio::supported_formats(&id).ok();
+            let _ = tx.send((id, list));
+        });
+    }
+
+    /// 轮询格式探测线程的结果。
+    fn poll_format_probe(&mut self) {
+        let mut received: Vec<(String, Option<Vec<EndpointFormat>>)> = Vec::new();
+        let mut disconnected = false;
+        if let Some(rx) = &self.format_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(item) => received.push(item),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        for (id, list) in received {
+            self.format_probing.remove(&id);
+            self.format_supported.insert(id, list);
+        }
+        if disconnected {
+            self.format_rx = None;
+            self.format_probing.clear();
+        }
     }
 
     /// 把某个播放设备的默认格式改成下拉框里选的那一项。
     fn apply_format(&mut self, endpoint_id: &str, label: &str) {
-        let Some(&index) = self.format_choices.get(endpoint_id) else {
+        let Some(chosen) = self.format_choices.get(endpoint_id).copied() else {
             self.toast("没有选中格式");
             return;
         };
-        let Some(&(rate, channels, bits, is_float)) = COMMON_FORMATS.get(index) else {
-            self.toast("格式下标无效");
-            return;
-        };
         self.format_busy = true;
-        match stereo_audio::set_endpoint_format(endpoint_id, rate, channels, bits, is_float) {
+        match stereo_audio::set_endpoint_format(
+            endpoint_id,
+            chosen.samplerate,
+            chosen.channels,
+            chosen.valid_bits,
+            chosen.is_float,
+        ) {
             Ok(applied) => {
                 tracing::info!("[设备格式] {label} → {}", applied.describe());
                 self.toast(format!("{label} 已改为 {}", applied.describe()));
@@ -471,6 +541,26 @@ impl StereoLinkApp {
             }
         }
         self.format_busy = false;
+    }
+
+    /// 从支持列表里挑一个「最接近当前格式」的候选（优先同采样率同声道，其次同声道）。
+    fn closest_supported(
+        list: &[EndpointFormat],
+        current: &EndpointFormat,
+    ) -> Option<EndpointFormat> {
+        list.iter()
+            .find(|f| {
+                f.samplerate == current.samplerate
+                    && f.channels == current.channels
+                    && f.is_float == current.is_float
+            })
+            .or_else(|| {
+                list.iter()
+                    .find(|f| f.samplerate == current.samplerate && f.channels == current.channels)
+            })
+            .or_else(|| list.iter().find(|f| f.channels == current.channels))
+            .or_else(|| list.first())
+            .copied()
     }
 
     /// 启动虚拟声卡改名（后台线程 + UAC，不阻塞界面）。
@@ -1347,12 +1437,9 @@ impl StereoLinkApp {
         let mut set_left: Option<String> = None;
         let mut set_right: Option<String> = None;
         let mut refresh = false;
-        let mut format_change: Option<(String, String, usize)> = None;
-
-        let fmt_text = |(rate, channels, bits, is_float): (u32, u16, u16, bool)| {
-            let kind = if is_float { " float" } else { "" };
-            format!("{rate} Hz / {channels} ch / {bits}{kind} bit")
-        };
+        let mut format_change: Option<(String, String)> = None;
+        let mut probe_one: Option<String> = None;
+        let mut fix_format: Option<(String, String, EndpointFormat)> = None;
 
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -1401,45 +1488,106 @@ impl StereoLinkApp {
                         }
                         ui.label(title);
                         let current = self.format_cache.get(&ep.id).cloned().flatten();
-                        let choice = self
-                            .format_choices
-                            .entry(ep.id.clone())
-                            .or_insert(1usize);
-                        let before = *choice;
-                        let selected = COMMON_FORMATS
-                            .get(*choice)
-                            .map(|&f| fmt_text(f))
-                            .unwrap_or_else(|| "自定义".to_string());
+                        let supported = self.format_supported.get(&ep.id).cloned().flatten();
+                        let probing = self.format_probing.contains(&ep.id);
                         ui.horizontal(|ui| {
-                            let combo = egui::ComboBox::from_id_salt(format!("fmt_{}", ep.id))
-                                .width(150.0)
-                                .selected_text(RichText::new(selected).size(12.0))
-                                .show_ui(ui, |ui| {
-                                    for (index, &format) in COMMON_FORMATS.iter().enumerate() {
-                                        ui.selectable_value(
-                                            choice,
-                                            index,
-                                            RichText::new(fmt_text(format)).size(12.0),
-                                        );
+                            match (&supported, probing) {
+                                // 只列这个端点**真正支持**的格式。
+                                (Some(list), _) if !list.is_empty() => {
+                                    let choice = self
+                                        .format_choices
+                                        .entry(ep.id.clone())
+                                        .or_insert(list[0]);
+                                    let before = *choice;
+                                    let in_list = list.contains(choice);
+                                    let selected = if in_list {
+                                        choice.describe()
+                                    } else {
+                                        format!("{}（当前格式不受支持）", choice.describe())
+                                    };
+                                    egui::ComboBox::from_id_salt(format!("fmt_{}", ep.id))
+                                        .width(190.0)
+                                        .selected_text(RichText::new(selected).size(12.0))
+                                        .show_ui(ui, |ui| {
+                                            for f in list {
+                                                ui.selectable_value(
+                                                    choice,
+                                                    *f,
+                                                    RichText::new(f.describe()).size(12.0),
+                                                );
+                                            }
+                                        })
+                                        .response
+                                        .on_hover_text(format!(
+                                            "只列出这个端点真正支持的 {} 种格式（独占模式 IsFormatSupported 实测）\n当前混音格式：{}",
+                                            list.len(),
+                                            endpoint_format(ep)
+                                        ));
+                                    if *choice != before {
+                                        format_change = Some((
+                                            ep.id.clone(),
+                                            short_endpoint(&ep.name),
+                                        ));
                                     }
-                                });
-                            combo.response.on_hover_text(format!(
-                                "改成这里选的格式（立即生效，不用重启）\n当前混音格式：{}",
-                                endpoint_format(ep)
-                            ));
-                            if let Some(f) = &current {
-                                ui.label(mini(f.describe())).on_hover_text("当前设备默认格式");
-                            } else {
-                                badge(ui, "读取失败", ERR);
+                                }
+                                (Some(_), _) => {
+                                    badge(ui, "无支持格式", ERR);
+                                }
+                                (None, true) => {
+                                    ui.label(muted("探测格式中…"));
+                                }
+                                (None, false) => {
+                                    if ui
+                                        .small_button("探测格式")
+                                        .on_hover_text("用独占模式逐个试探这个端点支持的格式")
+                                        .clicked()
+                                    {
+                                        probe_one = Some(ep.id.clone());
+                                    }
+                                }
+                            }
+                            match &current {
+                                Some(f) => {
+                                    let ok = supported.as_ref().map(|l| l.contains(f));
+                                    match ok {
+                                        Some(false) => {
+                                            let fixed = supported
+                                                .as_ref()
+                                                .and_then(|l| Self::closest_supported(l, f));
+                                            let hint = match &fixed {
+                                                Some(t) => format!(
+                                                    "当前设备格式 {} 不在这个端点的独占支持列表里（共享模式仍可用）。\n最接近的受支持格式：{}",
+                                                    f.describe(),
+                                                    t.describe()
+                                                ),
+                                                None => format!(
+                                                    "当前设备格式 {} 不在独占支持列表里（共享模式仍可用）",
+                                                    f.describe()
+                                                ),
+                                            };
+                                            badge(ui, "不受支持", WARN).on_hover_text(hint);
+                                            if let Some(t) = fixed {
+                                                if ui
+                                                    .small_button("修正")
+                                                    .on_hover_text(format!("改成 {}", t.describe()))
+                                                    .clicked()
+                                                {
+                                                    fix_format =
+                                                        Some((ep.id.clone(), short_endpoint(&ep.name), t));
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            ui.label(mini(f.describe()))
+                                                .on_hover_text("当前设备默认格式");
+                                        }
+                                    }
+                                }
+                                None => {
+                                    badge(ui, "读取失败", ERR);
+                                }
                             }
                         });
-                        if *choice != before {
-                            format_change = Some((
-                                ep.id.clone(),
-                                short_endpoint(&ep.name),
-                                *choice,
-                            ));
-                        }
 
                         ui.horizontal(|ui| {
                             if is_default {
@@ -1494,8 +1642,14 @@ impl StereoLinkApp {
             self.set_route_endpoint(RouteChannel::Right, name);
             self.toast("右声道已改为新设备（已应用）");
         }
-        if let Some((id, label, index)) = format_change {
-            self.format_choices.insert(id.clone(), index);
+        if let Some((id, label)) = format_change {
+            self.apply_format(&id, &label);
+        }
+        if let Some(id) = probe_one {
+            self.probe_one_format(id);
+        }
+        if let Some((id, label, format)) = fix_format {
+            self.format_choices.insert(id.clone(), format);
             self.apply_format(&id, &label);
         }
     }

@@ -14,11 +14,20 @@ use std::process::Command;
 /// 内嵌的切换脚本。保持 ASCII-only：Windows PowerShell 5.1 读无 BOM 文件按 ANSI 解析。
 const SWITCH_SCRIPT: &str = include_str!("../../../scripts/switch-audio-default.ps1");
 
-/// 虚拟声卡的端点名提示词。
+/// 虚拟声卡的端点名提示词，**按优先级排列**。
 ///
-/// 新名字是「立体声链设备」（重命名功能的目标名），保留旧名是为了兼容重命名前/未成功
-/// 重命名的机器（Steam Streaming Speakers 改名成「小米妙播设备」的历史安装）。
-const VAD_NAME_HINTS: &[&str] = &["立体声链", "StereoLink", "小米妙播", "妙播设备"];
+/// 第一位是自研驱动「立体声链虚拟声卡」（1.0 起的产品形态）；后面是历史安装：
+/// 借用 Steam Streaming Speakers 改名的「立体声链设备」/「小米妙播设备」，
+/// 最后兜底是没改过名的 Steam 设备本身（过渡期还能用）。
+const VAD_NAME_HINTS: &[&str] = &[
+    "立体声链虚拟声卡",
+    "立体声链设备",
+    "立体声链",
+    "StereoLink",
+    "小米妙播",
+    "妙播设备",
+    "Steam Streaming",
+];
 
 /// `powershell.exe` 启动参数：不加载 profile、非交互、绕执行策略，且不弹黑框。
 #[cfg(windows)]
@@ -49,10 +58,21 @@ pub fn is_virtual_name(name: &str) -> bool {
 }
 
 /// 找出虚拟声卡端点（没有就返回 None，比如驱动被卸了）。
+///
+/// 按 [`VAD_NAME_HINTS`] 的优先级找：自研虚拟声卡优先于历史借用的 Steam 设备，
+/// 避免两块都叫「立体声链…」的端点同时存在时选错。
 pub fn virtual_endpoint() -> Option<stereo_audio::EndpointInfo> {
     let list = stereo_audio::list_endpoints().ok()?;
-    list.into_iter()
-        .find(|e| e.flow == stereo_audio::DataFlow::Render && is_virtual(e))
+    let renders: Vec<stereo_audio::EndpointInfo> = list
+        .into_iter()
+        .filter(|e| e.flow == stereo_audio::DataFlow::Render)
+        .collect();
+    for hint in VAD_NAME_HINTS {
+        if let Some(ep) = renders.iter().find(|e| e.name.contains(hint)) {
+            return Some(ep.clone());
+        }
+    }
+    None
 }
 
 /// 按端点 id 找端点（id 形如 `{0.0.0.00000000}.{guid}`）。
