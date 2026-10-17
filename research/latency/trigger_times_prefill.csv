@@ -1,0 +1,7 @@
+attempt,target,path,ip,t_post,t_post_done,t_first_get,delta_s,post_return_ms,get_since_post_ms,ok
+1,左,/left.wav,192.168.1.21,9.922,10.047,10.062,0.015,125.0,140.0,True
+1,右,/right.wav,192.168.1.171,10.047,10.219,10.172,-0.047,172.0,125.0,True
+2,左,/left.wav,,19.281,19.766,,,485.0,,False
+2,右,/right.wav,,19.766,20.234,,,468.0,,False
+3,左,/left.wav,192.168.1.21,78.531,78.656,78.656,0.0,125.0,125.0,True
+3,右,/right.wav,192.168.1.171,78.656,78.781,78.797,0.016,125.0,141.0,True

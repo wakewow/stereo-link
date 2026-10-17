@@ -1,0 +1,131 @@
+{
+  "phase": "steady",
+  "started": "2026-10-18 00:35:09",
+  "steady": {
+    "t_connect": 1.391,
+    "left_live": {
+      "n": 0
+    },
+    "right_live": {
+      "n": 0
+    },
+    "left_all": {
+      "n": 482,
+      "min": 0.0,
+      "p10": 2.8793,
+      "median": 14.8143,
+      "p90": 26.7494,
+      "max": 29.8144,
+      "mean": 14.8376
+    },
+    "right_all": {
+      "n": 481,
+      "min": 0.0,
+      "p10": 2.2291,
+      "median": 14.2106,
+      "p90": 26.1921,
+      "max": 29.1643,
+      "mean": 14.2278
+    },
+    "skips": 0,
+    "gets": [
+      {
+        "t": 1.1410000000032596,
+        "path": "/left.wav",
+        "ip": "192.168.1.21",
+        "bytes_sent": null
+      },
+      {
+        "t": 1.3910000000032596,
+        "path": "/right.wav",
+        "ip": "192.168.1.171",
+        "bytes_sent": null
+      }
+    ],
+    "conns": [
+      {
+        "tag": "左声道",
+        "ip": "192.168.1.21",
+        "start": 1.1410000000032596,
+        "end": 1.4690000000118744,
+        "seconds": 0.32800000000861473,
+        "bytes": 65536,
+        "reads": 4,
+        "blocked_ms": 0.0,
+        "slow_writes": 0
+      },
+      {
+        "tag": "右声道",
+        "ip": "192.168.1.171",
+        "start": 1.3910000000032596,
+        "end": 2.125,
+        "seconds": 0.7339999999967404,
+        "bytes": 147456,
+        "reads": 9,
+        "blocked_ms": 0.0,
+        "slow_writes": 0
+      }
+    ],
+    "sock_bufs": [
+      {
+        "t": 1.141,
+        "tag": "左声道",
+        "ip": "192.168.1.21",
+        "so_sndbuf": 65536
+      },
+      {
+        "t": 1.391,
+        "tag": "右声道",
+        "ip": "192.168.1.171",
+        "so_sndbuf": 65536
+      }
+    ],
+    "slow_writes": []
+  },
+  "capture_calls": {
+    "n": 337,
+    "bytes_median": 16384,
+    "dt_ms_median": 94.0,
+    "dt_ms_p90": 110.0,
+    "bytes_per_call_seconds": 0.093
+  },
+  "conn_events": [
+    {
+      "tag": "左声道",
+      "ip": "192.168.1.21",
+      "start": 1.1410000000032596,
+      "end": 1.4690000000118744,
+      "seconds": 0.32800000000861473,
+      "bytes": 65536,
+      "reads": 4,
+      "blocked_ms": 0.0,
+      "slow_writes": 0
+    },
+    {
+      "tag": "右声道",
+      "ip": "192.168.1.171",
+      "start": 1.3910000000032596,
+      "end": 2.125,
+      "seconds": 0.7339999999967404,
+      "bytes": 147456,
+      "reads": 9,
+      "blocked_ms": 0.0,
+      "slow_writes": 0
+    }
+  ],
+  "get_events": [
+    {
+      "t": 1.1410000000032596,
+      "path": "/left.wav",
+      "ip": "192.168.1.21",
+      "bytes_sent": null
+    },
+    {
+      "t": 1.3910000000032596,
+      "path": "/right.wav",
+      "ip": "192.168.1.171",
+      "bytes_sent": null
+    }
+  ],
+  "skips": []
+}

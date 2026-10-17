@@ -12,6 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 miplay-core = { path = "../miplay-core" }
+# `stream` 子命令：本机系统声音（WASAPI 回环）→ AirPlay 2 发送端
+miplay-audio = { path = "../miplay-audio" }
+miplay-airplay = { path = "../miplay-airplay" }
 
 anyhow.workspace = true
 serde.workspace = true
@@ -20,3 +23,5 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 axum.workspace = true
+# `hub` 子命令：把环形缓冲读成 axum 的流式响应体
+futures-util = "0.3"

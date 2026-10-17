@@ -3,8 +3,13 @@
 //! 子命令：
 //! - `devices`  —— 命令行列出账号下的小米设备（用于快速验证凭据与连通性）
 //! - `serve`    —— 启动 HTTP API + 网页前端
+//! - `stream`   —— 把本机系统声音实时推给 AirPlay 2 音箱（局域网直达，不需要小米账号）
+//! - `hub`      —— 系统声音 → 局域网 WAV 服务 → 音箱自己来拉（小米云只负责下发 URL）
 //!
 //! 目前刻意不引入 clap，用手写参数解析保持依赖精简。
+
+mod hub;
+mod stream;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -97,7 +102,7 @@ async fn index() -> Html<String> {
 
 /// 优先读磁盘上的 `web/index.html`（改前端不用重编译），
 /// 读不到就回退到编译期嵌入的副本（保证单文件分发仍可用）。
-fn load_index_html() -> String {
+pub(crate) fn load_index_html() -> String {
     for dir in [std::env::var("MIPLAY_WEB_DIR").ok(), Some("web".to_string())] {
         if let Some(dir) = dir {
             let p = std::path::Path::new(&dir).join("index.html");
@@ -233,6 +238,10 @@ fn usage() -> String {
          用法:\n\
            miplay-bridge devices [--json]        列出账号下的设备\n\
            miplay-bridge serve [--port 8900]     启动 HTTP API + 网页前端\n\
+           miplay-bridge stream [选项]           把本机系统声音实时推给 AirPlay 2 音箱\n\
+                                                 （局域网直达，不需要小米账号；--help 看选项）\n\
+           miplay-bridge hub --devices <列表>    系统声音 → 局域网 WAV 服务 → 音箱自己拉流\n\
+                                                 （走小米云只下发 URL；网页控制默认 <本机IP>:8931）\n\
            miplay-bridge token                   显示脱敏后的凭据信息\n\
 miplay-bridge ubus <设备> <path> <method> [message-json]\n\
                                       直接调用 MiNA ubus 并原样打印响应\n\
@@ -323,6 +332,10 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&resp)?);
             Ok(())
         }
+
+        "stream" => stream::run(&args[1..]).await,
+
+        "hub" => hub::run(&args[1..]).await,
 
         "serve" => {
             let port: u16 = flag(&args, "--port")

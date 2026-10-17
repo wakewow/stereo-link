@@ -69,6 +69,26 @@
   .empty { color: var(--muted); padding: 30px; text-align: center; border: 1px dashed var(--border); border-radius: 12px; }
   a { color: var(--accent); }
   .foot { margin-top: 26px; color: var(--muted); font-size: 12px; line-height: 1.9; }
+  /* ---- hub（系统声音投放）面板 ---- */
+  .panel {
+    background: #14171e; border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px 16px 14px; margin: 0 0 16px;
+  }
+  .panel h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 9px; }
+  .panel .sub-line { color: var(--muted); font-size: 12px; margin: 8px 0 0; line-height: 1.8; }
+  .hub-list { display: flex; flex-direction: column; gap: 7px; margin-top: 12px; }
+  .hub-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: #10131a; border: 1px solid var(--border); border-radius: 9px; padding: 7px 11px;
+  }
+  .hub-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; min-width: 190px; }
+  .hub-row input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
+  .hub-row .st { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .hub-row.live { border-color: #2f6b4f; background: #10201a; }
+  .pill { font-size: 11px; padding: 1.5px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .pill.live { background: #123524; color: #7ee2b8; border-color: #2f6b4f; }
+  .pill.idle { background: #22262f; }
+  .pill.bad { background: #3a1a1a; color: #f0a0a0; border-color: #6b2f2f; }
 </style>
 </head>
 <body>
@@ -85,10 +105,26 @@
     <span class="sub" id="account"></span>
   </div>
 
+  <section class="panel">
+    <h2>系统声音投放（妙播拉流）<span class="pill idle" id="hub-tag">检测中…</span></h2>
+    <div class="row">
+      <button class="primary" id="hub-start">投放到选中设备</button>
+      <button id="hub-stop">停止选中设备</button>
+      <button id="hub-stop-all">全部停止</button>
+      <span style="flex:1"></span>
+      <button id="hub-all">全选</button>
+      <button id="hub-none">清空</button>
+      <button id="hub-copy">复制启动命令</button>
+    </div>
+    <div class="hub-list" id="hub-list"></div>
+    <div class="sub-line" id="hub-hint">正在探测本机 hub 服务…</div>
+  </section>
+
   <div class="grid" id="devices"></div>
 
   <div class="foot">
     <div>API：<code>GET /api/devices</code> · <code>POST /api/devices/{key}/play</code> · <code>POST /api/devices/{key}/volume</code> · <code>POST /api/devices/{key}/stop</code></div>
+    <div>hub API：<code>GET /api/hub/status</code> · <code>POST /api/hub/start</code> · <code>POST /api/hub/stop</code> · 拉流 <code>GET /hub/{did}.wav</code>（默认 8931 端口）</div>
     <div>本页只读取小米云设备列表并下发播放/音量指令；凭据保存在本机，不会上传。</div>
   </div>
 </div>
@@ -217,11 +253,172 @@ async function refresh() {
     const on = r.devices.filter((d) => d.online).length;
     setStatus(`共 ${r.count} 台设备，${on} 台在线 · ${new Date().toLocaleTimeString()}`);
   } catch (e) {
-    setStatus(`加载失败：${e.message}`, true);
+    // hub 服务(8931)只做投放，不提供 serve 模式的小米云设备列表；
+    // 404 属于正常形态，不要显示成红色的「加载失败」吓人。
+    if (/HTTP 404/.test(e.message)) {
+      devicesEl.innerHTML =
+        '<div class="empty">hub 模式：这里只做系统声音投放，小米云设备详情请在 <code>serve</code>（8900）查看</div>';
+      setStatus('hub 模式（投放面板在下方）');
+    } else {
+      setStatus(`加载失败：${e.message}`, true);
+    }
   } finally {
     $('#refresh').disabled = false;
   }
 }
+
+// ---------------------------------------------------------------- hub（系统声音投放）
+// 同一个 index.html 由两个服务共用：serve(8900) 和 hub(8931)。
+// 在 8931 上打开就是同源；在 8900 上打开则跨源访问 8931（hub 侧开了 CORS）。
+const HUB_PORT = 8931;
+const HUB_BASE = location.port === String(HUB_PORT)
+  ? ''
+  : `http://${location.hostname}:${HUB_PORT}`;
+
+const hubSelected = new Set();
+let hubStatus = null;
+
+async function hubApi(path, body) {
+  const opts = body === undefined ? {} : {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+  const r = await fetch(HUB_BASE + path, opts);
+  const data = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+  if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+function hubDeviceLabel(s) {
+  return s.devices.map((d) => d.name || d.did);
+}
+
+function hubCommand() {
+  const dids = hubSelected.size ? [...hubSelected].join(',') : '501718792,934947888';
+  return `miplay-bridge hub --devices ${dids} --gain 0.7`;
+}
+
+function hubRowHtml(d) {
+  const picked = hubSelected.has(d.did) || hubSelected.has(d.device_id);
+  const pill = d.active
+    ? (d.clients ? `live">投放中 · ${d.clients} 客户端` : `idle">已下发 · 等待拉流`)
+    : `idle">空闲`;
+  const src = { left: '左声道', right: '右声道', mixdown: '混音', stereo: '原样' }[d.source] || d.source;
+  const mb = ((d.bytes_sent || 0) / 1048576).toFixed(1);
+  const ago = d.last_client_seconds_ago == null ? '从未' : `${d.last_client_seconds_ago.toFixed(0)}s 前`;
+  // 重发次数：音箱在纯静音约 6.4s 后会自己断开，重连是常态，这里能看见它发生过几次。
+  const re = d.reissues ? ` · 重发 ${d.reissues}` : '';
+  return `
+    <div class="hub-row ${d.active ? 'live' : ''}" data-did="${esc(d.did)}">
+      <label><input type="checkbox" data-pick ${picked ? 'checked' : ''}>
+        <span>${esc(d.name || d.did)}</span></label>
+      <span class="tag">${esc(d.hardware || '?')}</span>
+      <span class="pill ${pill}</span>
+      <span class="st">落后 ${(d.lag_seconds || 0).toFixed(1)}s · 已发 ${mb}MB ·
+        下发 ${d.plays_sent}${d.play_failures ? `（失败 ${d.play_failures}）` : ''}${re} · ${esc(src)} · 最近客户端 ${ago}</span>
+      ${d.last_error ? `<span class="pill bad" title="${esc(d.last_error)}">下发出错</span>` : ''}
+    </div>`;
+}
+
+function renderHub(s) {
+  hubStatus = s;
+  const tag = $('#hub-tag');
+  tag.textContent = `运行中 · :${s.port}`;
+  tag.className = 'pill live';
+  $('#hub-list').innerHTML = s.devices.length
+    ? s.devices.map(hubRowHtml).join('')
+    : '<div class="empty">hub 里没有设备（启动时用 --devices 指定）</div>';
+  const active = s.devices.filter((d) => d.active).length;
+  const cap = s.capture || {};
+  const silent = cap.seconds_since_audio == null ? 0 : cap.seconds_since_audio;
+  // 采集静默要看得见（音源停了 / 采集断了），不要让人对着「投放中」猜为什么没声音。
+  const audioState = cap.audio_recent
+    ? '<span class="pill live">有声音</span>'
+    : `<span class="pill idle" title="系统输出当前没有声音，或采集断了。音箱约 6.4 秒后会主动断开连接，重连会自动补上。">已静默 ${silent.toFixed(1)}s</span>`;
+  $('#hub-hint').innerHTML =
+    `已投放 ${active}/${s.devices.length} 台 · 拉流客户端 ${s.clients_total} · 采集状态 ${audioState} · ` +
+    `采集 ${esc(cap.device)}（${esc(cap.format)}，采集积压 ${cap.backlog_seconds}s / 环 ${cap.ring_seconds}s）· ` +
+    `增益 ${Number(s.gain).toFixed(2)}×${s.split ? ' · 左右分离' : ''} · 运行 ${s.uptime_seconds}s<br>` +
+    `拉流地址 <code>${esc(s.url_base)}/hub/&lt;did&gt;.wav</code>`;
+}
+
+async function hubPoll() {
+  try {
+    renderHub(await hubApi('/api/hub/status'));
+  } catch (e) {
+    const tag = $('#hub-tag');
+    tag.textContent = '未运行';
+    tag.className = 'pill idle';
+    $('#hub-list').innerHTML = '';
+    $('#hub-hint').innerHTML =
+      `本机没有在跑的 hub 服务（${esc(e.message)}）。启动：<code>${esc(hubCommand())}</code><br>` +
+      `提示：不加 <code>--no-autostart</code> 时启动就会自动投放；跨源访问用的是 ${esc(HUB_BASE || '同源')}。`;
+  }
+}
+
+async function hubAction(kind) {
+  const body = kind === 'stop-all' ? {} : { devices: [...hubSelected] };
+  if (kind !== 'stop-all' && !hubSelected.size) {
+    return setStatus('请先在「系统声音投放」面板里勾选设备', true);
+  }
+  const path = kind === 'start' ? '/api/hub/start' : '/api/hub/stop';
+  const r = await hubApi(path, body);
+  const arr = (kind === 'start' ? r.started : r.stopped) || [];
+  const bad = arr.filter((x) => !x.ok);
+  const verb = kind === 'start' ? '投放' : '停止';
+  setStatus(bad.length
+    ? `${verb}：${arr.length - bad.length} 台成功，${bad.length} 台失败（${bad[0].error || ''}）`
+    : `${verb}指令已下发：${arr.map((x) => x.label).join('、') || '无设备'}`,
+    bad.length > 0);
+  renderHub(r);
+}
+
+$('#hub-list').addEventListener('change', (e) => {
+  const cb = e.target.closest('input[data-pick]');
+  if (!cb) return;
+  const did = cb.closest('.hub-row').dataset.did;
+  if (cb.checked) hubSelected.add(did); else hubSelected.delete(did);
+});
+
+$('#hub-start').onclick = async (e) => {
+  e.target.disabled = true;
+  try { await hubAction('start'); } catch (err) { setStatus(`投放失败：${err.message}`, true); }
+  finally { e.target.disabled = false; }
+};
+
+$('#hub-stop').onclick = async (e) => {
+  e.target.disabled = true;
+  try { await hubAction('stop'); } catch (err) { setStatus(`停止失败：${err.message}`, true); }
+  finally { e.target.disabled = false; }
+};
+
+$('#hub-stop-all').onclick = async (e) => {
+  e.target.disabled = true;
+  try { await hubAction('stop-all'); } catch (err) { setStatus(`停止失败：${err.message}`, true); }
+  finally { e.target.disabled = false; }
+};
+
+$('#hub-all').onclick = () => {
+  if (!hubStatus) return setStatus('hub 未运行，无法全选', true);
+  hubStatus.devices.forEach((d) => hubSelected.add(d.did));
+  renderHub(hubStatus);
+};
+
+$('#hub-none').onclick = () => {
+  hubSelected.clear();
+  if (hubStatus) renderHub(hubStatus);
+};
+
+$('#hub-copy').onclick = async () => {
+  const cmd = hubCommand();
+  try {
+    await navigator.clipboard.writeText(cmd);
+    setStatus(`已复制：${cmd}`);
+  } catch {
+    setStatus(`启动命令：${cmd}`);
+  }
+};
 
 (async () => {
   try {
@@ -229,9 +426,14 @@ async function refresh() {
     $('#account').textContent =
       `账号 ${h.account.userId} · 版本 ${h.version}`;
   } catch (e) {
-    $('#account').textContent = `账号信息不可用：${e.message}`;
+    // hub 模式没有 /api/health（那是 serve 的），不是故障。
+    $('#account').textContent = /HTTP 404/.test(e.message)
+      ? 'hub 模式 · 免小米账号'
+      : `账号信息不可用：${e.message}`;
   }
   refresh();
+  hubPoll();
+  setInterval(hubPoll, 1500);
 })();
 </script>
 </body>
