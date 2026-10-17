@@ -26,11 +26,22 @@ pub struct DesktopConfig {
     /// 引擎就绪后自动投放勾选的设备（默认开，省得每次开面板都要点一下）。
     #[serde(default = "default_auto_start")]
     pub auto_start: bool,
+    /// 已排除的设备（did / uuid）：不显示在投放列表里，也永远不会被投放。
+    #[serde(default = "default_ignored")]
+    pub ignored_devices: Vec<String>,
 }
 
 /// `auto_start` 缺省值：老配置文件里没有这个字段时也按「开」处理。
 fn default_auto_start() -> bool {
     true
+}
+
+/// `ignored_devices` 缺省值：默认排除「小爱音箱Play增强版」(L05C)。
+///
+/// 这台在卧室属于另一条使用场景，用户明确说「不需要在这台机器上面播放」；
+/// 老配置文件里没有这个字段时也照样排除，避免升级后又开始往它推流。
+fn default_ignored() -> Vec<String> {
+    vec!["931892755".to_string()]
 }
 
 impl Default for DesktopConfig {
@@ -42,6 +53,7 @@ impl Default for DesktopConfig {
             show_log: true,
             tone_seconds: 2.0,
             auto_start: true,
+            ignored_devices: default_ignored(),
         }
     }
 }

@@ -16,7 +16,10 @@ tokio.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
 tokio = { workspace = true }
 # 只给 tests/wire_requests.rs 用：解 SETUP 的二进制 plist，与真机参照记录逐字段对照。
 # 它本来就在依赖树里（cidermill-airplay 依赖 plist 1），不引入新的传递依赖。
 plist = "1"
+# 给 examples/loopback.rs 用：把 WASAPI 回环采集直接推成 AirPlay 流（低延迟通路验证）。
+miplay-audio = { path = "../miplay-audio" }

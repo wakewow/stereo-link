@@ -53,6 +53,8 @@ pub struct DesktopApp {
     font_warned: bool,
     /// 这一轮引擎是否已经做过「自动投放」（引擎重启后重置）。
     auto_started: bool,
+    /// 上一帧「系统默认输出是否虚拟声卡」，用来检测用户手动切换输出设备。
+    last_output_was_vad: bool,
 }
 
 impl DesktopApp {
@@ -86,9 +88,9 @@ impl DesktopApp {
         let mut selected = BTreeMap::new();
         for d in &snap.devices {
             let want = if cfg.selected.is_empty() {
-                d.online
+                d.online && !cfg.ignored_devices.contains(&d.id)
             } else {
-                cfg.selected.contains(&d.id)
+                cfg.selected.contains(&d.id) && !cfg.ignored_devices.contains(&d.id)
             };
             selected.insert(d.id.clone(), want);
         }
@@ -105,6 +107,7 @@ impl DesktopApp {
             font,
             font_warned: false,
             auto_started: false,
+            last_output_was_vad: false,
         }
     }
 
@@ -144,9 +147,21 @@ impl DesktopApp {
     }
 
     fn start_devices(&mut self, keys: Vec<String>) {
+        // 双保险：被排除的设备即使被别处塞进来也不投放。
+        let keys: Vec<String> = keys
+            .into_iter()
+            .filter(|k| !self.cfg.ignored_devices.contains(k))
+            .collect();
         if keys.is_empty() {
             self.toast("没有勾选在线设备：先在列表里勾选，或点「全部投放」", true);
             return;
+        }
+        if !self.snap.default_output_is_vad {
+            let device_out = self.snap.default_output.clone().unwrap_or_default();
+            self.toast(
+                format!("注意：系统输出是「{device_out}」而非虚拟声卡，妙播链路采不到声音；低延迟请保持蓝牙直连、不要投放"),
+                true,
+            );
         }
         if let Some(e) = self.engine() {
             if e.start_devices(keys.clone()) {
@@ -244,14 +259,31 @@ impl DesktopApp {
         let ids: BTreeSet<String> = self.snap.devices.iter().map(|d| d.id.clone()).collect();
         self.selected.retain(|id, _| ids.contains(id));
         for d in &self.snap.devices {
-            self.selected.entry(d.id.clone()).or_insert(d.online);
+            let want = d.online && !self.cfg.ignored_devices.contains(&d.id);
+            self.selected.entry(d.id.clone()).or_insert(want);
         }
 
         // 引擎第一次就绪时，按配置自动投放一次勾选的设备（每轮引擎只做一次）。
         // 这样打开面板（或重启引擎）后，直接用播放器放歌就该有声音。
+        //
+        // 但「系统输出不是虚拟声卡」时不要自动投放：比如用户在用蓝牙直连，
+        // 这时妙播投放只会把音箱从蓝牙抢回云端，反而把正在听的音频打断。
+        // 用户后来把输出切回虚拟声卡时，再补一次自动投放。
+        let vad_now = self.snap.default_output_is_vad;
+        if vad_now && !self.last_output_was_vad {
+            self.auto_started = false;
+        }
+        self.last_output_was_vad = vad_now;
         if self.snap.phase == Phase::Running && !self.auto_started {
             self.auto_started = true;
-            if self.cfg.auto_start {
+            if !self.snap.default_output_is_vad {
+                if self.cfg.auto_start {
+                    tracing::info!(
+                        "[自动投放] 跳过：系统默认输出不是虚拟声卡（当前：{}），先不抢音箱",
+                        self.snap.default_output.as_deref().unwrap_or("无")
+                    );
+                }
+            } else if self.cfg.auto_start {
                 let keys = self.checked_keys();
                 if !keys.is_empty() {
                     if let Some(e) = self.engine.as_ref() {
@@ -285,7 +317,8 @@ impl DesktopApp {
         self.snap
             .devices
             .iter()
-            .filter(|d| d.online && self.selected.get(&d.id).copied().unwrap_or(false))
+            .filter(|d| d.online && !self.cfg.ignored_devices.contains(&d.id))
+            .filter(|d| self.selected.get(&d.id).copied().unwrap_or(false))
             .map(|d| d.id.clone())
             .collect()
     }
@@ -596,7 +629,20 @@ impl DesktopApp {
 
                 ui.label(egui::RichText::new("自检").color(GREY));
                 check_row(ui, snap.vad_present, "虚拟声卡「小米妙播设备」");
-                check_row(ui, snap.default_output_is_vad, "系统默认输出 = 虚拟声卡");
+                let out_bt = snap
+                    .default_output
+                    .as_deref()
+                    .map(|o| o.contains("立体声组合") || o.contains("Bluetooth") || o.contains("蓝牙"))
+                    .unwrap_or(false);
+                if out_bt && !snap.default_output_is_vad {
+                    ui.label(
+                        egui::RichText::new("✔ 系统默认输出 = 蓝牙直连（低延迟模式）")
+                            .color(GREEN)
+                            .small(),
+                    );
+                } else {
+                    check_row(ui, snap.default_output_is_vad, "系统默认输出 = 虚拟声卡");
+                }
                 check_row(ui, snap.capture.using_vad, "引擎正在采集虚拟声卡");
                 check_row(ui, snap.capture.running, "采集线程在跑");
                 check_row(ui, snap.listening, "HTTP 服务在监听");
@@ -617,6 +663,51 @@ impl DesktopApp {
                         .small()
                         .color(if self.font.is_some() { GREY } else { RED }),
                 );
+
+                ui.separator();
+                ui.label(egui::RichText::new("输出模式 / 延迟").color(GREY));
+                let device_out = snap.default_output.clone().unwrap_or_default();
+                let is_bt = device_out.contains("立体声组合")
+                    || device_out.contains("Bluetooth")
+                    || device_out.contains("蓝牙");
+                let (mode_color, mode, advice) = if snap.default_output_is_vad {
+                    (
+                        GREEN,
+                        "妙播链路（虚拟声卡）".to_string(),
+                        "约 1 秒 · 适合音乐/多房间；看视频会明显滞后",
+                    )
+                } else if is_bt {
+                    (
+                        GREEN,
+                        "蓝牙直连（立体声组合）".to_string(),
+                        "约 0.2~0.35 秒 · 适合看视频；游戏仍需有线耳机",
+                    )
+                } else if device_out.is_empty() {
+                    (AMBER, "未知".to_string(), "点「刷新端点」重新枚举")
+                } else {
+                    (
+                        AMBER,
+                        format!("其它输出：{device_out}"),
+                        "声音不经过虚拟声卡，妙播投放没有内容可采",
+                    )
+                };
+                ui.label(egui::RichText::new(mode).color(mode_color).strong());
+                ui.label(egui::RichText::new(advice).color(GREY).small());
+                ui.collapsing("延迟对照（实测 / 官方）", |ui| {
+                    for (k, v) in [
+                        ("妙播云端 play_url", "约 1 秒（音箱固件缓冲主导；PC 侧仅 ~0.25s）"),
+                        ("蓝牙直连 A2DP", "约 0.2~0.35 秒（单房间、免云、无多房间）"),
+                        ("AirPlay 2", "设计 0.25~0.4 秒；本机这套设备目前 AirPlay 出不了声"),
+                        ("游戏 <0.1s", "只有有线耳机能做到（L16A 无 AUX 输入）"),
+                    ] {
+                        ui.label(egui::RichText::new(format!("{k}：{v}")).small());
+                    }
+                });
+                if ui.button("打开 Windows 声音设置").clicked() {
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/c", "start", "ms-settings:sound"])
+                        .spawn();
+                }
 
                 ui.separator();
                 ui.checkbox(&mut self.cfg.show_log, "显示日志面板");
@@ -683,20 +774,23 @@ impl DesktopApp {
         let mut stop_everything = false;
         let mut start_one: Option<String> = None;
         let mut stop_one: Option<String> = None;
+        let mut ignore_one: Option<String> = None;
+        let mut restore_one: Option<String> = None;
+        let ignored_count = self.cfg.ignored_devices.len();
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.heading(format!("设备（{}）", snap.devices.len()));
-            ui.label(
-                egui::RichText::new(format!(
-                    "在线 {} · 投放中 {} · 已连上 {}",
-                    snap.devices.iter().filter(|d| d.online).count(),
-                    snap.active_count(),
-                    snap.connected_count()
-                ))
-                .color(GREY)
-                .small(),
+            let mut summary = format!(
+                "在线 {} · 投放中 {} · 已连上 {}",
+                snap.devices.iter().filter(|d| d.online).count(),
+                snap.active_count(),
+                snap.connected_count()
             );
+            if ignored_count > 0 {
+                summary.push_str(&format!(" · 已排除 {ignored_count}"));
+            }
+            ui.label(egui::RichText::new(summary).color(GREY).small());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("停止全部").clicked() {
                     stop_everything = true;
@@ -709,6 +803,31 @@ impl DesktopApp {
 
         for (color, text) in self.hints(&snap) {
             ui.label(egui::RichText::new(text).color(color).small());
+        }
+
+        // 已排除的设备：不参与投放，可以一键恢复。放在列表上方，避免被滚动区挤到看不见。
+        let ignored: Vec<_> = snap
+            .devices
+            .iter()
+            .filter(|d| self.cfg.ignored_devices.contains(&d.id))
+            .collect();
+        if !ignored.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("已排除 {} 台（永不投放）：", ignored.len()))
+                        .color(GREY)
+                        .small(),
+                );
+                for d in &ignored {
+                    if ui
+                        .small_button(format!("恢复 {}", d.label))
+                        .on_hover_text(format!("did: {}", d.did))
+                        .clicked()
+                    {
+                        restore_one = Some(d.id.clone());
+                    }
+                }
+            });
         }
         ui.separator();
 
@@ -738,7 +857,11 @@ impl DesktopApp {
                             ui.label(egui::RichText::new("操作").color(GREY));
                             ui.end_row();
 
-                            for d in &snap.devices {
+                            for d in snap
+                                .devices
+                                .iter()
+                                .filter(|d| !self.cfg.ignored_devices.contains(&d.id))
+                            {
                                 // 勾选
                                 let mut checked = self.selected.get(&d.id).copied().unwrap_or(false);
                                 if ui.checkbox(&mut checked, "").changed() {
@@ -808,6 +931,13 @@ impl DesktopApp {
                                     } else {
                                         ui.label(egui::RichText::new("—").color(GREY));
                                     }
+                                    if ui
+                                        .small_button("排除")
+                                        .on_hover_text("从投放列表里永久移除（可随时恢复）")
+                                        .clicked()
+                                    {
+                                        ignore_one = Some(d.id.clone());
+                                    }
                                 });
                                 ui.end_row();
                             }
@@ -829,6 +959,50 @@ impl DesktopApp {
             if let Some(e) = self.engine() {
                 e.stop_devices(Some(vec![key]));
             }
+        }
+        if let Some(key) = ignore_one {
+            if self
+                .snap
+                .devices
+                .iter()
+                .any(|d| d.id == key && d.active)
+            {
+                if let Some(e) = self.engine() {
+                    e.stop_devices(Some(vec![key.clone()]));
+                }
+            }
+            if !self.cfg.ignored_devices.contains(&key) {
+                self.cfg.ignored_devices.push(key.clone());
+                self.cfg.ignored_devices.sort();
+                self.cfg.ignored_devices.dedup();
+            }
+            self.selected.remove(&key);
+            self.cfg.selected.retain(|k| k != &key);
+            self.cfg.save();
+            let name = self
+                .snap
+                .devices
+                .iter()
+                .find(|d| d.id == key)
+                .map(|d| d.label.clone())
+                .unwrap_or(key);
+            self.toast(format!("已排除「{name}」，不会再向它推流"), false);
+        }
+        if let Some(key) = restore_one {
+            self.cfg.ignored_devices.retain(|k| k != &key);
+            self.cfg.save();
+            self.selected.insert(key.clone(), true);
+            if !self.cfg.selected.contains(&key) {
+                self.cfg.selected.push(key.clone());
+            }
+            let name = self
+                .snap
+                .devices
+                .iter()
+                .find(|d| d.id == key)
+                .map(|d| d.label.clone())
+                .unwrap_or(key);
+            self.toast(format!("已恢复「{name}」"), false);
         }
     }
 
@@ -852,12 +1026,43 @@ impl DesktopApp {
                 "引擎采集的不是虚拟声卡。请把 Windows 输出设备切换成「扬声器 (小米妙播设备)」，或到设置里手动指定采集端点。".to_string(),
             ));
         }
+        // 蓝牙直连模式：声音本来就不经过虚拟声卡，这是「低延迟看视频」的正确用法，
+        // 不能按「采集端点不对」去报错。
+        if let Some(device_out) = snap.default_output.as_deref() {
+            let is_bt = device_out.contains("立体声组合")
+                || device_out.contains("Bluetooth")
+                || device_out.contains("蓝牙");
+            if is_bt && !snap.default_output_is_vad {
+                if snap.active_count() > 0 {
+                    out.push((
+                        AMBER,
+                        format!(
+                            "系统输出是蓝牙「{device_out}」：声音已经直接走蓝牙（约 0.2~0.35s，看视频够用），此时妙播投放是多余的；建议点「停止全部」，要玩多房间再切回虚拟声卡。"
+                        ),
+                    ));
+                } else {
+                    out.push((
+                        GREEN,
+                        format!(
+                            "系统输出是蓝牙「{device_out}」：这就是低延迟模式（约 0.2~0.35s），看视频/听歌直接用系统播放即可，不需要妙播投放。"
+                        ),
+                    ));
+                }
+            }
+        }
+        let bt_idle = !snap.default_output_is_vad
+            && snap
+                .default_output
+                .as_deref()
+                .map(|o| o.contains("立体声组合") || o.contains("Bluetooth") || o.contains("蓝牙"))
+                .unwrap_or(false)
+            && snap.active_count() == 0;
         if cap.error.is_some() || (snap.phase.is_running() && !cap.running) {
             out.push((
                 RED,
                 "采集线程没在跑：检查输出设备是否被拔掉/切换，然后重启引擎。".to_string(),
             ));
-        } else if snap.phase.is_running() && !cap.audio_recent {
+        } else if snap.phase.is_running() && !cap.audio_recent && !bt_idle {
             out.push((
                 AMBER,
                 format!(
