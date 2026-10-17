@@ -1,0 +1,16 @@
+{
+  "blocks": 259,
+  "frames": 265216,
+  "seconds": 6.014,
+  "peak_dbfs": -11.73,
+  "rms_dbfs": -15.12,
+  "discontinuity_warnings": 0,
+  "endpoint": "扬声器 (小米妙播设备)",
+  "loopback": true,
+  "rate": 44100,
+  "channels": 2,
+  "out": null,
+  "gain": 1.0,
+  "tone_hz": 1000.0,
+  "tone_to": null
+}

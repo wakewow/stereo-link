@@ -1,0 +1,100 @@
+﻿{
+    "_about":  "MiPlay zero-driver PoC rollback evidence",
+    "at":  "2026-10-17T23:21:04.1689259+08:00",
+    "instanceId":  "ROOT\\STEAMSTREAMINGSPEAKERS\\0000",
+    "backup":  "D:\\Backup\\Documents\\deepseek-harness\\default-workspace\\miplay-bridge\\poc\\zero-driver\\backups\\backup-Enum-ROOT_STEAMSTREAMINGSPEAKERS_0000-Steam_Streaming_Speakers-20261017-232041.reg",
+    "backupSha256":  "B39290A8A12A63D9B8915A536C8FFCCC68DC08DDD749CCE1BDEE3E23AADF864A",
+    "dryRun":  false,
+    "checks":  {
+                   "registry_values_match_snapshot":  true,
+                   "reexport_sha256_matches_backup":  true,
+                   "device_name_restored":  true,
+                   "device_status_ok":  true,
+                   "enum_friendly_absent":  true,
+                   "endpoint_names_restored":  true,
+                   "mmdevices_properties_unchanged":  true
+               },
+    "before":  {
+                   "device":  {
+                                  "instanceId":  "ROOT\\STEAMSTREAMINGSPEAKERS\\0000",
+                                  "friendlyName":  "小米妙播设备",
+                                  "status":  "OK",
+                                  "present":  true,
+                                  "deviceClass":  "MEDIA"
+                              },
+                   "endpoints":  [
+                                     {
+                                         "flow":  "Render",
+                                         "guid":  "{4a82bbbc-667f-4a9b-b4ce-520a165e6240}",
+                                         "friendlyName":  "扬声器 (小米妙播设备)",
+                                         "status":  "OK",
+                                         "nameKind":  "扬声器",
+                                         "nameInner":  "小米妙播设备",
+                                         "threeKeys":  {
+                                                           "deviceDesc":  "扬声器",
+                                                           "ifaceName":  "小米妙播设备",
+                                                           "devIfacePath":  "{2}.\\\\?\\root#steamstreamingspeakers#0000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\wave"
+                                                       }
+                                     },
+                                     {
+                                         "flow":  "Capture",
+                                         "guid":  "{06a4c98d-4ce3-4137-9523-079effea94db}",
+                                         "friendlyName":  null,
+                                         "status":  null,
+                                         "nameKind":  "内部 AUX 插座",
+                                         "nameInner":  null,
+                                         "threeKeys":  {
+                                                           "deviceDesc":  "内部 AUX 插座",
+                                                           "ifaceName":  "小米妙播设备",
+                                                           "devIfacePath":  "{2}.\\\\?\\root#steamstreamingspeakers#0000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\wave"
+                                                       }
+                                     }
+                                 ],
+                   "enumFriendlyName":  {
+                                            "value":  "小米妙播设备",
+                                            "exists":  true
+                                        }
+               },
+    "after":  {
+                  "device":  {
+                                 "instanceId":  "ROOT\\STEAMSTREAMINGSPEAKERS\\0000",
+                                 "friendlyName":  "Steam Streaming Speakers",
+                                 "status":  "OK",
+                                 "present":  true,
+                                 "deviceClass":  "MEDIA"
+                             },
+                  "endpoints":  [
+                                    {
+                                        "flow":  "Render",
+                                        "guid":  "{4a82bbbc-667f-4a9b-b4ce-520a165e6240}",
+                                        "friendlyName":  "扬声器 (Steam Streaming Speakers)",
+                                        "status":  "OK",
+                                        "nameKind":  "扬声器",
+                                        "nameInner":  "Steam Streaming Speakers",
+                                        "threeKeys":  {
+                                                          "deviceDesc":  "扬声器",
+                                                          "ifaceName":  "Steam Streaming Speakers",
+                                                          "devIfacePath":  "{2}.\\\\?\\root#steamstreamingspeakers#0000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\wave"
+                                                      }
+                                    },
+                                    {
+                                        "flow":  "Capture",
+                                        "guid":  "{06a4c98d-4ce3-4137-9523-079effea94db}",
+                                        "friendlyName":  null,
+                                        "status":  null,
+                                        "nameKind":  "内部 AUX 插座",
+                                        "nameInner":  null,
+                                        "threeKeys":  {
+                                                          "deviceDesc":  "内部 AUX 插座",
+                                                          "ifaceName":  "Steam Streaming Speakers",
+                                                          "devIfacePath":  "{2}.\\\\?\\root#steamstreamingspeakers#0000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\wave"
+                                                      }
+                                    }
+                                ],
+                  "enumFriendlyName":  {
+                                           "value":  null,
+                                           "exists":  false
+                                       }
+              },
+    "result":  "RESIDUE_FREE"
+}

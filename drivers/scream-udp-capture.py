@@ -103,6 +103,14 @@ def zero_cross_hz(samples, channels: int, sample_rate: int) -> float:
 def open_receiver(group: str, port: int, iface: str, timeout: float):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # Set *before* bind: Windows only honours SO_RCVBUF applied before the bind.  The Scream
+    # stream is 1157-byte datagrams at ~87/s (48 kHz/16-bit/2ch), and the synthetic self-test
+    # fires a whole burst before draining; the default 64 KiB buffer overflowed at >~55
+    # datagrams (measured sent=84 received=57 on 2026-10-17), which looked like packet loss.
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+    except OSError:
+        pass
     try:
         sock.bind(("", port))
     except OSError as exc:

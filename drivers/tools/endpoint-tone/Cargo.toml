@@ -1,0 +1,14 @@
+[package]
+name = "miplay-endpoint-tone"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Minimal play-only tone generator for verifying a Windows render endpoint (used by research/vad/driver-smoke.md)"
+
+# Standalone on purpose: this helper is a diagnostic tool that lives next to the driver
+# work, so it must not become a member of the main workspace (an empty [workspace] table
+# keeps cargo from adopting the repository root as its workspace).
+[workspace]
+
+[dependencies]
+miplay-audio = { path = "../../../crates/miplay-audio" }

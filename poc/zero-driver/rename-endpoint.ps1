@@ -146,7 +146,9 @@ function Invoke-Native([string]$exe, [string[]]$argv) {
     $ErrorActionPreference = 'Continue'
     try { $o = & $exe @argv 2>&1 } finally { $ErrorActionPreference = $prev }
     $code = $LASTEXITCODE
-    $textOut = (($o | ForEach-Object { "$_" }) -join "`n").Trim()
+    $textOut = (($o | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { "$($_.Exception.Message)" } else { "$_" }
+            } | Where-Object { $_ -ne '' } | Select-Object -Unique) -join "`n").Trim()
     return [pscustomobject]@{ exit = $code; out = $textOut }
 }
 
@@ -568,7 +570,10 @@ if ($PSCmdlet.ParameterSetName -eq 'Rollback') {
     # '扬声器 (Steam Streaming Speakers)'. So retry until the endpoint names match the
     # pre-rename names (max 3 extra cycles) instead of trusting a single refresh.
     if ($null -ne $meta -and $null -ne $meta.before) {
-        $wantNames0 = @(@($meta.before.endpoints) | ForEach-Object { [string]$_.friendlyName })
+        # Compare only endpoints that are actually PRESENT: the pre-rename snapshot also
+        # contains the not-in-the-sound-list capture endpoint (empty friendly name), which
+        # would otherwise never match and make this loop cycle needlessly.
+        $wantNames0 = @(@($meta.before.endpoints) | Where-Object { $_.status } | ForEach-Object { [string]$_.friendlyName })
         for ($try = 1; $try -le 3; $try++) {
             $nowNames0 = @(Get-AudioEndpointInfo $inst | Where-Object { $_.status } | ForEach-Object { [string]$_.friendlyName })
             $cmp0 = Compare-StringArrays $wantNames0 $nowNames0

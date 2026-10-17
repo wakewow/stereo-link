@@ -165,6 +165,37 @@ impl PacketChunker {
     }
 }
 
+/// [`apply_gain_s16le`] 允许的最大增益（8× ≈ +18 dB）。
+pub const MAX_GAIN: f32 = 8.0;
+
+/// 对 `s16le` 交错 PCM 就地施加线性增益，**饱和**到 `i16` 范围（不回绕）。
+///
+/// 采集侧（WASAPI 回环）拿到的系统声音常常偏小，需要在上游补增益。放在这里是因为它必须和
+/// 对 PCM 的其它处理（[`s16le_to_i32`]）用同一套格式假设，而且可以离线单测：
+/// 回绕会变成刺耳的爆音，所以越界必须夹到 `i16` 边界。
+///
+/// # Errors
+/// `gain` 非有限值或不在 `0.0..=[`MAX_GAIN`]` 时返回 [`crate::Error::Config`]；
+/// 调用方一次校验、逐块调用即可（热路径上只有两次比较）。
+pub fn apply_gain_s16le(pcm: &mut [u8], gain: f32) -> crate::Result<()> {
+    if !gain.is_finite() || !(0.0..=MAX_GAIN).contains(&gain) {
+        return Err(crate::Error::Config(format!(
+            "gain={gain} 必须是 0.0..={MAX_GAIN} 的有限值"
+        )));
+    }
+    if (gain - 1.0).abs() <= f32::EPSILON {
+        return Ok(());
+    }
+    for sample in pcm.chunks_exact_mut(2) {
+        let value = f32::from(i16::from_le_bytes([sample[0], sample[1]])) * gain;
+        let clamped = value
+            .round()
+            .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16;
+        sample.copy_from_slice(&clamped.to_le_bytes());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,194 +5,202 @@
 LAN IP `192.168.1.4`，采集 venv
 `D:\Backup\Documents\deepseek-harness\default-workspace\mixplay-pc-audio\capture\.venv\Scripts\python.exe`
 （`soundcard` + `numpy`，**没有** `miservice`）。
+被改名的设备：`ROOT\STEAMSTREAMINGSPEAKERS\0000`（Valve Steam Streaming Speakers，未被占用的虚拟端点）。
+音箱控制后端：**`miplay-bridge serve --port 8901`**（本项目自己的 Rust 服务，不用 MiXPlay 桌面端）。
 
-> 状态标记约定：**【已实测】**= 本机跑过并留下证据文件；**【待执行】**= 等 lead 的 go（task-9 冲突）；
-> **【未验证】**= 本机条件不具备，未跑过。
+> 状态标记约定：**【已实测】**= 本机跑过并留下证据文件；**【未验证】**= 本机条件不具备，未跑过。
 
 ---
 
-## 0. 结论速览
+## 0. 结论速览（全部为 2026-10-17 23:18–23:21 的真实运行）
 
 | 环节 | 状态 | 客观证据 |
 |---|---|---|
-| 端点改名机制（设备层 `FriendlyName` + disable/enable） | **【已实测】**（task-8，四态表） | `research/vad/rename-probe.md`：改名前 `扬声器 (Steam Streaming Speakers)` → 写值后端点名不变 → 重启设备后 `扬声器 (小米妙播设备)` → 回滚后逐字节复原 |
-| `rename-endpoint.ps1`（本目录，参数化 + `-Rollback`） | **【已实测】**（只读三验证） | §2：`-DryRun` / `-BackupOnly` / `-Rollback -DryRun` 全 PASS |
-| 本目录里的**真实改名 + 回滚** | **【待执行】** | 等 lead 的 go（task-9 正在用音频端点跑测试） |
-| 按名字子串选端点 + WASAPI loopback 采集 | **【已实测】** | §3.1：peak −20.68 dBFS / RMS −24.04 dBFS，丢帧警告 0 |
-| 裸 PCM → WAV HTTP 无限流 | **【已实测】** | §3.2：写入 4.000 s，客户端读到 3.071 s，WAV 头校验通过 |
-| 采集→HTTP 合并链路 | **【已实测】** | §3.3：写入 2.972 s，逐块电平稳定，0 丢帧警告 |
-| 控制通道探活（MiXPlay HTTP） | **【已实测】** | §4.1：`--check` 退出码 2，`ConnectionRefusedError(10061)` |
-| **音箱真出声（端到端）** | **【待执行】** | 需 ① MiXPlay 桌面端在跑 + ② 等 lead 的 go 做改名 |
-| `--backend mina`（`miservice.MinaService.play_by_url`） | **【未验证】** | 本 venv 无 `miservice`，需要带凭据的环境 |
+| 端点在 Windows 声音列表里改名 | **【已实测】✅** | run 3：`扬声器 (Steam Streaming Speakers)` → **`扬声器 (小米妙播设备)`**，4 个观测点一致 |
+| 改名后能用新名字选到端点采集 | **【已实测】✅** | run 3/4：新进程 soundcard 枚举到 `扬声器 (小米妙播设备)`；采集 peak **−11.73 dBFS** / RMS −15.09 dBFS，**丢帧警告 0** |
+| 端到端把声音送到音箱 | **【已实测】✅** | run 3：HTTP 服务被 **192.168.1.171（音箱）** 拉走 **634880 B（620 KB ≈ 3.60 s）**；下发返回 `ok:true`；`stop` 返回 `ok:true` |
+| 回滚 + 无残留 | **【已实测】✅** | run 3/4：`RESIDUE-FREE`；设备名/端点名复原、`FriendlyName` 值恢复"不存在"、重新 `reg export` 与备份 **SHA256 逐字节相同** |
+| 可复现性 | **【已实测】✅** | run 4（`-SkipSpeaker`，23:20:38）与 run 3 完全一致的改名+回滚结果，无一条 WARN |
+| `--backend mina`（`miservice.play_by_url`） | **【未验证】** | 本 venv 无 `miservice`，需带凭据的环境；本 PoC 走的是 `--backend miplay` |
+| MiXPlay 桌面端通道 | **【已实测·不可达】** | `--check` 连 `127.0.0.1:8820` 报 `ConnectionRefusedError(10061)`；已被 `--backend miplay` 取代 |
+| 人耳确认"听到了" | **【待 lead 组织】** | 音箱侧可观测证据齐全（下方 §2），人耳确认由 lead 找用户做 |
+
+**一句话**：零驱动能让 **`扬声器 (小米妙播设备)`** 真的出现在 Windows 声音输出列表里，并且选它出声
+能把声音送到 `192.168.1.171` 的音箱；但名字永远带 `扬声器` 前缀，且一台机器只有一个这样的端点（§5）。
 
 ---
 
-## 1. 改名机制：客观事实（来自 task-8 的四态实测，本目录脚本沿用同一手法）
+## 1. 改名：四态实测（本目录脚本真机执行，run 3）
 
-审计的四个观测点（注册表直读 / SetupAPI / `Get-PnpDevice` 设备+端点 / 新进程 soundcard 枚举）
-在每一态上互相印证：
-
-| 态 | 设备层 `FriendlyName` | `Get-PnpDevice` 设备名 | Windows 声音列表里的端点名 | 注册表 `{b3f8fa53-…},6` |
+| 态 | 设备层 `FriendlyName` | `Get-PnpDevice` 设备名 | 声音列表里的端点名 | 证据文件 |
 |---|---|---|---|---|
-| 改名前 | 值**不存在** | `Steam Streaming Speakers` | `扬声器 (Steam Streaming Speakers)` | `Steam Streaming Speakers` |
-| 写值后（未重启设备） | `小米妙播设备` | `小米妙播设备` | `扬声器 (Steam Streaming Speakers)`（AEB 缓存未刷） | 未变 |
-| disable/enable 后 | `小米妙播设备` | `小米妙播设备` | **`扬声器 (小米妙播设备)`** | `小米妙播设备` |
-| 回滚 + 重启后 | 值**不存在** | `Steam Streaming Speakers` | `扬声器 (Steam Streaming Speakers)` | `Steam Streaming Speakers` |
+| ① 改名前 | 值**不存在** | `Steam Streaming Speakers` | `扬声器 (Steam Streaming Speakers)` | `backups/e2e-20261017-231859.json`（phases.pre） |
+| ② 写值后（未重启设备） | `小米妙播设备` | `小米妙播设备` | `扬声器 (Steam Streaming Speakers)`（AEB 缓存未刷） | `backups/rename-20261017-231908.json` 内的 `Write-Step 'write FriendlyName'` 阶段 |
+| ③ disable/enable 后 | `小米妙播设备` | `小米妙播设备` | **`扬声器 (小米妙播设备)`** | 同上（`refresh AudioEndpointBuilder` 之后） |
+| ④ 回滚 + 重启后 | 值**不存在** | `Steam Streaming Speakers` | `扬声器 (Steam Streaming Speakers)` | `backups/rollback-20261017-231957.json`（`RESIDUE-FREE`） |
 
-要点：
-* 生效的关键是 **disable/enable**（刷 AudioEndpointBuilder 的接口 FriendlyName），
-  只写注册表不重启设备是看不到变化的。
-* 端点名的构成是 `驱动 pin 名 + " (" + 接口 FriendlyName + ")"`。
-  **`扬声器` 这个前缀来自驱动的 `{a45c254e-…},2`，零驱动无法覆盖**——这是本路线的天花板。
-* 反面：`MMDevices\Audio\Render\<guid>\Properties` 是死路（`reg add` 报
-  `ERROR: Access is denied.`，COM `IPropertyStore::SetValue` 报 `0x80070005 E_ACCESSDENIED`），
-  本 PoC **完全不碰**它。
+四个独立观测点（注册表直读 / SetupAPI / `Get-PnpDevice` 设备+端点 / **新进程** soundcard 枚举）在每态互相印证：
+
+```
+ 0  [loopback]  CG345UK (NVIDIA High Definition Audio)
+ 1  [loopback]  X41 (NVIDIA High Definition Audio)
+ 2  [loopback]  扬声器 (小米妙播设备)          <-- 改的就是它（run 3/4 都在位）
+ 3  [loopback]  扬声器 (Steam Streaming Microphone)
+ ...
+共 11 个 capture 端点
+```
+
+* 端点在改名期间会**消失再出现**：`after disable: status=Error` → `after enable: status=OK`
+  （run 3 实测）。这正是 §5 第 3 条的实测依据。
+* 改名后该设备**多出一个原本隐藏的 capture 端点** `内部 AUX 插座 (小米妙播设备)`
+  （GUID `{06a4c98d-4ce3-4137-9523-079effea94db}`，`not-present`，不进声音列表）——
+  端点名的构成是 `驱动 pin 名 + " (" + 接口 FriendlyName + ")"` 的直接证据。
+* `扬声器` 前缀来自驱动 pin 名（`{a45c254e-…},2`），**零驱动改不掉**（task-8 已证）。
 
 ---
 
-## 2. `rename-endpoint.ps1` 只读验证（本目录，真实改名前）
+## 2. 端到端出声（run 3，canonical）
 
+一键脚本：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\e2e-zero-driver.ps1 -Go -Seconds 8
 ```
+
+| 阶段 | 结果 |
+|---|---|
+| A 改名前快照 | dev=`Steam Streaming Speakers`(OK)，EP=`扬声器 (Steam Streaming Speakers)`，备份 `e2e-pre-20261017-231859.reg` 1706 B |
+| B 改名 | `reg add` 成功并读回 `小米妙播设备`；disable/enable；EP→`扬声器 (小米妙播设备)`；备份 `backup-…-20261017-231902.reg` 1706 B + `.meta.json` |
+| C 改名后快照 | 4 个观测点：设备名 / 端点名 / `FriendlyName` / **新进程** soundcard 列表，全部一致 ✅ |
+| D 采集新端点 | `peak_dbfs=-11.73`、`rms_dbfs=-15.09`、`seconds=8.011`、`blocks=345`、**`discontinuity_warnings=0`**，`loopback=true` |
+| E 推给音箱 | 下发 `{'api':'player_play_url','device':'Xiaomi Sound','did':'934947888','ok':True}`；**音箱 192.168.1.171 拉走 634880 B（620 KB ≈ 3.60 s）**；服务端共写 995328 B = 5.642 s；`stop ok:true` |
+| F 回滚 | `RESIDUE-FREE`（§3） |
+
+细节与诚实说明：
+
+* **音箱只拉走 3.60 s，服务端写了 5.64 s**：音箱拉了 620 KB 后主动断开，随后又重连两次各拉 **0 字节**。
+  这是"音箱自己决定拉到哪"的直接证据（§5 第 6 条）。
+* 测试音：1 kHz 正弦，振幅 **0.70 FS**（按 lead 要求 ≥0.7 FS），音箱侧**未改硬件音量**（保持 55）。
+* 采集用的是 `--source capture`（真采被改名端点的 loopback），不是直接推测试音。
+* **人耳确认：待 lead 组织**。本轮 run 2（23:15:11，同样成功，音箱拉走 712704 B）与 run 3
+  各让音箱播了约 3.6 s 的 1 kHz 单音；如果用户当时在场，听到的就是这个。
+* 参考：run 2 的推送字节数 712704 B（696 KB ≈ 4.04 s），与 run 3 同量级 → 两次独立成功。
+
+---
+
+## 3. 回滚 + 无残留验证（**硬性验收项**）
+
+回滚命令（`e2e-zero-driver.ps1` 的 F 阶段就是自动跑这条）：
+
+```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\rename-endpoint.ps1 `
-    -DeviceInstanceId 'ROOT\STEAMSTREAMINGSPEAKERS\0000' -NewName '小米妙播设备' -DryRun
+    -Rollback '.\backups\backup-Enum-ROOT_STEAMSTREAMINGSPEAKERS_0000-Steam_Streaming_Speakers-20261017-231902.reg'
 ```
 
-| 用例 | 结果 | 证据 |
+脚本输出（run 3，节选）：
+
+```
+== restore registry
+   deleted FriendlyName (was '小米妙播设备')
+   reg import: The operation completed successfully.
+== restart device (disable/enable)
+     after disable: status=Error
+     after enable : status=OK
+== verify: no residue
+   [PASS] registry values identical to pre-rename snapshot (9 values)
+   [PASS] fresh reg export is byte-identical to the backup (SHA256 B39290A8A12A63D9B8915A536C8FFCCC68DC08DDD749CCE1BDEE3E23AADF864A)
+   [PASS] Enum\...\FriendlyName is absent again
+   [PASS] device status OK
+   [PASS] device friendly name restored: 'Steam Streaming Speakers'
+   [PASS] endpoint name(s) restored: 扬声器 (Steam Streaming Speakers) |
+   [PASS] MMDevices Properties (deviceDesc / ifaceName / devIfacePath) unchanged
+== ROLLBACK RESULT
+   RESIDUE-FREE: rolled back and verified.
+```
+
+### 3.1 手工复验四条命令（可直接贴进任何复核流程）
+
+```powershell
+$py   = 'D:\Backup\Documents\deepseek-harness\default-workspace\mixplay-pc-audio\capture\.venv\Scripts\python.exe'
+$inst = 'ROOT\STEAMSTREAMINGSPEAKERS\0000'
+
+# 1) Enum 键里不许有 FriendlyName 残留（改名前它就是"不存在"）
+reg query "HKLM\SYSTEM\CurrentControlSet\Enum\$inst" /v FriendlyName
+# 期望: ERROR: The system was unable to find the specified registry key or value.   <-- 已实测（23:11/23:19 两次）
+
+# 2) 设备名回到原名 + 状态 OK
+Get-PnpDevice -InstanceId $inst | Select-Object Status, FriendlyName
+# 期望: OK  Steam Streaming Speakers                                              <-- 已实测
+
+# 3) 端点名回到原名（PnP 侧 + 新进程 soundcard 侧，两个独立观测点）
+Get-PnpDevice -Class AudioEndpoint | Where-Object { $_.InstanceId -like '*4A82BBBC*' } |
+  Select-Object Status, FriendlyName
+# 期望: OK  扬声器 (Steam Streaming Speakers)                                      <-- 已实测
+& $py .\capture_from_endpoint.py --list | Select-String '妙播|Steam Streaming Speakers'
+# 期望: 只剩 "扬声器 (Steam Streaming Speakers)"，没有"小米妙播设备"           <-- 已实测
+
+# 4) 重新 export 与备份逐字节比对（脚本自动做；SHA256 值见上方 run 3 输出）
+```
+
+`rollback-*.json` 里还固化了 5 项检查（`checks.registry_values_match_snapshot` /
+`reexport_sha256_matches_backup` / `enum_friendly_absent` / `device_name_restored` /
+`endpoint_names_restored` / `mmdevices_properties_unchanged`），全部 `true`。
+
+**当前机器状态（23:21 复核）**：设备名 `Steam Streaming Speakers`、端点名 `扬声器 (Steam Streaming Speakers)`、
+`FriendlyName` 不存在、`Get-PnpDevice` Status=OK —— 无残留。
+
+---
+
+## 4. 踩坑与两个真实 bug（诚实记录，含我早先的错误推断）
+
+1. **`$ErrorActionPreference='Stop'` + 原生命令 stderr = 回滚静默中断（真因，已修）**。
+   Windows PowerShell 5.1 会**把原生命令写往 stderr 的任何输出当成终止性 `NativeCommandError`**，
+   而 `reg.exe import` / `reg.exe delete` 在**成功**时也会往 stderr 打印
+   `The operation completed successfully.`。结果：run 1/run 2 的回滚在执行完"删值"后立刻中断，
+   **disable/enable 根本没跑**，端点名于是停在上一次的 `扬声器 (小米妙播设备)`，
+   而我当时**误判为"AEB 需要两次刷新"**。run 3/run 4 的修复版（`Invoke-Native` 把所有
+   `reg.exe`/`pnputil.exe` 调用包进 `$ErrorActionPreference='Continue'`，只按退出码判断）
+   一次刷新即复原，retry 循环一次都没触发 → **根因是脚本 bug，不是 AEB 缓存慢**。
+   修好后 `-Rollback` 稳定给出 `RESIDUE-FREE`。
+2. **`.ps1` 里的中文与 BOM（真因，已修）**。用编辑器/工具保存后脚本会丢掉 UTF-8 BOM，
+   PowerShell 5.1 于是按 GBK 解码，`小米妙播设备` 变成 **`灏忕背濡欐挱璁惧`**（run 2 实测，
+   还把乱码真的写进了注册表和端点名，随后已回滚清理）。
+   修法：写回 UTF-8 **BOM**；每次编辑 `*.ps1` 后都要复核（本目录脚本现已带 BOM）。
+3. **改名的抓手是设备，不是端点**。音频端点的 PnP `InstanceId` 是
+   `SWD\MMDEVAPI\{0.0.0.00000000}.{GUID}`，**不是** `ROOT\...`；要动的是它背后
+   `{233164c8-1b2c-4c7d-bc68-b671687a2567},1` 指向的那个 `ROOT\...` 设备实例。
+4. **capture 端点不能按名字精确匹配**：`soundcard` 的 `all_microphones(include_loopback=True)`
+   才带 `[loopback]`，且改名后名字带括号，必须**子串**匹配。
+5. 后台跑 python 必须加 `-u`（否则日志缓冲到进程结束才吐）；
+   本机 `Start-Process` 有 bug（`NO_PROXY`/`no_proxy` 键冲突），一律直接调用或后台作业。
+6. **`MMDevices\Audio\Render\<guid>\Properties` 是死路**（`ERROR: Access is denied.` /
+   `0x80070005 E_ACCESSDENIED`），本 PoC 完全不碰它 —— 这也是备份 `.reg` 里
+   **不含 `Properties` 子键**的原因（`reg export` 枚举不动它）。
+
+---
+
+## 5. 这条路线作为产品路径的不可靠点（每条都给实测判定）
+
+| # | 不可靠点 | 判定 |
 |---|---|---|
-| 干跑（`-DryRun`） | ✅ 只读：不写文件/注册表、不重启设备，逐条打印将要执行的写操作；exit 0 | 终端输出 |
-| 只备份（`-BackupOnly`） | ✅ `.reg` **1706 B** + `.meta.json` **4295 B** | `backups/backup-Enum-ROOT_STEAMSTREAMINGSPEAKERS_0000-Steam_Streaming_Speakers-20261017-230025.reg` / `.meta.json` |
-| 回滚干跑（`-Rollback <reg> -DryRun`） | ✅ 打印恢复项与逐项校验项，未写入 | 终端输出 |
-
-备份内容（`reg export` 语义，实测）：含实例键下的 `DeviceDesc`、`Service`、`ClassGUID`、
-`Capabilities`、`ConfigFlags`、`ContainerID`、`HardwareID`、`CompatibleIDs`、
-`Driver`、`LocationInformation`、`Manufacturer`、`Class`、`Icon`、`MatchingDeviceId`、
-`ContainerID` 等全部值，**以及 `Device Parameters` 子键**（`reg export` 默认递归）；
-**不含** `Properties` 子键——因为 ACL 不允许枚举它（这也是 §1 那条死路的直接证据）。
-
----
-
-## 3. 采集 / HTTP 链路（现有端点代跑，真实数字）
-
-### 3.1 采集端点 + loopback
-
-```
-& $py .\capture_from_endpoint.py --endpoint-name 'Steam Streaming Speakers' \
-      --seconds 3 --play-tone 1000 --evidence .\backups\selftest-capture-steam.json
-```
-
-| 指标 | 数值 |
-|---|---|
-| 端点 | `扬声器 (Steam Streaming Speakers)`（`loopback=True`） |
-| 格式 | 44100 Hz / 2ch / s16le |
-| 采集时长 | 3.019 s（130 blocks） |
-| 峰值 | **−20.68 dBFS** |
-| RMS | **−24.04 dBFS** |
-| 丢帧警告 | **0** |
-
-判据（来自 `research/vad/loopback-matrix.md`）：数字自环 ≥ −60 dBFS；
-真实麦克风收到的**声学串音**在 −86.97 ~ −106.72 dBFS。差 50+ dB，
-所以 −20.68 dBFS 是**确定性数字通路**，不是麦克风拾音。
-
-### 3.2 WAV HTTP 服务（`--source tone`，不碰音箱）
-
-```
-& $py .\push_to_speaker.py --source tone --seconds 4 --local-selftest --port 8932
-      --evidence .\backups\selftest-push-tone.json
-```
-
-| 指标 | 数值 |
-|---|---|
-| 服务端写入 | 705600 B = **4.000 s**（目标 4.0 s） |
-| 客户端读到 | 541760 B = **3.071 s** |
-| WAV 头 | `52494646 24ffff7f 57415645 666d7420 …` = `RIFF` + size `0x7FFFFF24` + `WAVE` + `fmt ` ✅ |
-| `data` chunk size | `0x7FFFFF00` ≈ 2 GiB（**故意**：无限流的写法，照 `pc_stereo_hub.py`） |
-| 证据文件 | `backups/selftest-push-tone.json` |
-
-客户端少读约 1 秒是**设计**：`main()` 先 `sleep(1.0)` 垫数据，避免音箱拉到空流。
-
-### 3.3 采集 → HTTP 合并链路
-
-```
-& $py .\push_to_speaker.py --source capture --endpoint-name 'Steam Streaming Speakers' \
-      --play-tone 1000 --seconds 4 --local-selftest --port 8935
-      --evidence .\backups\selftest-push-capture.json
-```
-
-| 指标 | 数值 |
-|---|---|
-| 写入 | 524288 B = **2.972 s** |
-| 客户端读到 | 434176 B = 2.461 s |
-| 每段采集峰值 | −20.68 / −20.68 / −20.68 dBFS（三段 1 s，**逐段一致**） |
-| 丢帧警告 | **0** |
-| 无效端点时的行为 | ✅ 明确报错 `[选择失败] 没有名字包含 '小米妙播设备' 的 capture 端点。` 并写进证据 JSON 的 `capture_error`，不静默假成功 |
-
-### 3.4 复现踩坑（都已在脚本里处理，记录以免复踩）
-
-* `soundcard` 的 `all_microphones(include_loopback=True)` 才有 `[loopback]` 端点；
-  **capture 端点不能直接按 friendly name 精确匹配**——改名后要按**子串**选。
-* 音频端点的 PnP `InstanceId` 是 `SWD\MMDEVAPI\{0.0.0.00000000}.{GUID}`，
-  **不是** `ROOT\...`。改名的抓手是它背后那个设备（`{233164c8-…},1` 属性的值指向的
-  `ROOT\...` 实例）。
-* 后台跑 python 必须加 `-u`（否则日志缓冲到进程结束才吐）。
-* 本机 `Start-Process` 有 bug（`NO_PROXY`/`no_proxy` 键冲突），一律用直接调用或后台作业。
+| 1 | **名字永远带 `扬声器` 前缀**：pin 名来自驱动 `{a45c254e-…},2`，零驱动无法覆盖 | **已实测证实**：最终形态只能是 `扬声器 (小米妙播设备)`，做不到产品要的 `妙播 - 卧室立体声组合` |
+| 2 | **写的是 PnP 管理的设备缓存键** `HKLM\SYSTEM\CurrentControlSet\Enum\...`：设备重装/驱动更新/`pnputil` 重枚举/系统还原都可能冲掉 | **未验证**（理论推断）：本轮 4 次改名/回滚都稳定，但没人真的重装过驱动；产品里等于"改完可能某天自己变回去" |
+| 3 | **生效必须 disable/enable**：该端点在全系统**消失再出现** | **已实测证实**：`status Error → OK`；若在"用户正在听歌"时做，会打断该设备上正在播的声音，正在用它的进程会拿到设备丢失错误 |
+| 4 | **一台机器只能有一个「小米妙播设备」**：改的是已有设备，一个虚拟声卡实例 = 1 render + 1 capture 端点 | **已实测证实**（结构上限）：要 N 个输出设备就得有 N 个独立虚拟声卡实例，那正是需要驱动的部分 |
+| 5 | **需要提权 + 未文档化 hack**；微软官方立场 "Clients can read these properties, but should not set them."（`research/vad/vad-options.md` §8.1） | **已实测证实**：必须 Administrator（High IL）；`MMDevices\...\Properties` 连管理员都拒写，只有 Enum 键这条路能走 |
+| 6 | **多一跳网络，起播/缓冲不受控，HTTP 服务无鉴权** | **已实测证实**：音箱只拉走 3.60 s / 服务端写了 5.64 s，并两次以 **0 字节** 重连；`/audio.wav` 局域网内谁都能拉 |
+| 7 | **控制通道依赖本机常驻服务**（`miplay-bridge serve :8901`，且账号 token 过期就整体失效） | **已实测观察**：本轮靠 lead 预先起的服务才跑通；服务一停，音箱就收不到 `play_url` |
+| 8 | **名字是纯字符串，脚本编码/终端编码错了就会把乱码写进系统**（run 2 实例） | **已实测证实**：修 BOM 后必须重新改名+回滚才能清掉乱码名 |
 
 ---
 
-## 4. 控制通道
+## 6. 未验证 / 后续
 
-### 4.1 探活【已实测】
-
-```
-& $py .\push_to_speaker.py --check
-[探活] MiXPlay http://127.0.0.1:8820 ...
-        不可达: URLError(ConnectionRefusedError(10061, '由于目标计算机积极拒绝，无法连接。'))
-        -> 先启动 MiXPlay 桌面端（默认 http://127.0.0.1:8820）
-exit=2
-```
-
-**客观事实：本机当前 MiXPlay 桌面端没有运行**，所以 §0 表里"音箱真出声"必然还没跑。
-脚本已实现的通道是 `POST http://127.0.0.1:8820/api/v1/control/play`
-`{"action":"play_url","target":"<did>","url":"http://<lan>:<port>/audio.wav"}`
-（MiXPlay 内部走小米云 `player_play_url`，等价于 "play_by_url"）。
-
-### 4.2 目标与安全边界【已实现】
-
-* 默认目标 `did=934947888`（Xiaomi Sound，`192.168.1.171`）。
-* **保留目标 `did=501718792`（`192.168.1.21`）**：脚本默认**拒绝**，要覆盖必须显式 `--force`
-  （那是 task-10 AirPlay 测试的目标）。
-* `--seconds` 默认 8 s，超过 10 s 自动截到 10 s（除非 `--force`）。
-* 音量默认不动；`--volume` 显式传才设。
-
----
-
-## 5. 这条路线作为产品路径的不可靠点（**≥3 条，均为具体机制**）
-
-1. **名字带着 `扬声器` 前缀，零驱动去不掉**——前缀来自驱动 pin 名（`{a45c254e-…},2`），
-   最终只能得到 `扬声器 (小米妙播设备)`，做不到产品要的 `妙播 - 卧室立体声组合`。
-2. **写入位置是 PnP 管理的设备缓存键**（`HKLM\SYSTEM\CurrentControlSet\Enum\...`）：
-   设备重装、驱动更新、`pnputil` 重新枚举、系统还原都可能冲掉 `FriendlyName`，
-   而每次刷回去都要再 disable/enable 一次。
-3. **生效必须 disable/enable**：该端点在系统里**消失再出现**，会打断正在播放的音频，
-   并让正在使用它的进程（包括我们自己的采集线程）拿到设备丢失错误。
-4. **一台机器只能有一个「小米妙播设备」**：手法是改**已有设备**的名字，
-   而一个虚拟声卡实例 = 一个 render 端点 + 一个 capture 端点；
-   要"每个妙播设备一个 Windows 输出设备"必须有 N 个独立虚拟声卡实例——那正是要驱动的部分。
-5. **需要 Machine 级注册表写权限 + 提权**，且这是未文档化 hack：
-   微软对端点属性的官方立场是 "Clients can read these properties, but should not set them."
-   （`research/vad/vad-options.md` §8.1）。
-6. **多一跳网络**：音箱自己来拉 HTTP，起播时机与缓冲不受控；本机 HTTP 服务也无鉴权。
-
-→ 完整讨论与用法见 `README.md` §6。
-
----
-
-## 6. 还要做什么
-
-1. **等 lead 的 go** → 执行 `rename-endpoint.ps1` 真实改名（只改
-   `ROOT\STEAMSTREAMINGSPEAKERS\0000` 这个未被占用的端点）→ 记录改名前/后/回滚后三态
-   → 复跑 §3.3 的采集链路确认端点名变化后一切照旧 → 跑端到端出声 → **回滚并验证无残留**。
-2. **需要 MiXPlay 桌面端在跑**（或换一个有 `miservice` + 凭据的 python 环境）。
-   这是"音箱出声"唯一的当前阻塞。
-3. 端到端出声后补：HTTP 请求日志（客户端 IP / UA / 拉取字节数）、
-   音箱端可观测的 `result=True`、以及**端到端延迟**（下发 → 首次拉流 → 出声明）。
-   人耳确认由 lead 组织。
+1. `--backend mina`（直接用 `miservice`）**未验证**：本 venv 无 `miservice`，需要带账号凭据的环境。
+2. **人耳确认**（"确实听到声音"）由 lead 组织用户做；本文件只给客观证据。
+3. 采集→HTTP 目前是"每 1 秒重开一次 loopback 采集"的朴素实现（PoC 够用），
+   没有跨段无缝拼接；产品化应常驻单一采集会话。
+4. 端到端延迟（下发 → 首次拉流 → 出声）本轮**未测**：音箱拉流日志只能证明"拉了 620 KB"，
+   无法从 PC 侧确证出声时刻。
+5. §5 第 2 条（Enum 键被 PnP 重枚举冲掉）**未验证** —— 要验证需要重装该虚拟声卡驱动，
+   属于会动系统的操作，本轮不做。

@@ -50,7 +50,7 @@ pub use latency::{
     LatencyBudget, DEVICE_LATENCY_MAX_FRAMES, DEVICE_LATENCY_MAX_MS, DEVICE_LATENCY_MIN_FRAMES,
     DEVICE_LATENCY_MIN_MS, PACKET_FRAMES, TARGET_TOTAL_MS,
 };
-pub use pcm::{PacketChunker, PcmFormat};
+pub use pcm::{apply_gain_s16le, PacketChunker, PcmFormat, MAX_GAIN};
 
 use std::net::SocketAddr;
 use std::sync::Arc;

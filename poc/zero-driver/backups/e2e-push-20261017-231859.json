@@ -1,0 +1,45 @@
+{
+  "at": "2026-10-17T23:19:18+0800",
+  "args": {
+    "backend": "miplay",
+    "miplay_api": "http://127.0.0.1:8901",
+    "mixplay": "http://127.0.0.1:8820",
+    "target_did": "934947888",
+    "mina_device_id": null,
+    "force": false,
+    "port": 8931,
+    "source": "capture",
+    "endpoint_name": "小米妙播设备",
+    "play_tone": 1000.0,
+    "level": 0.7,
+    "wav": null,
+    "freq": 1000.0,
+    "gain": 1.0,
+    "seconds": 8.0,
+    "volume": null,
+    "stop": false,
+    "check": false,
+    "local_selftest": false,
+    "no_firewall": false,
+    "evidence": "D:\\Backup\\Documents\\deepseek-harness\\default-workspace\\miplay-bridge\\poc\\zero-driver\\backups\\e2e-push-20261017-231859.json"
+  },
+  "lan_ip": "192.168.1.4",
+  "url": "http://192.168.1.4:8931/audio.wav",
+  "play_url": {
+    "backend": "miplay",
+    "api": "http://127.0.0.1:8901",
+    "payload": {
+      "url": "http://192.168.1.4:8931/audio.wav"
+    },
+    "response": {
+      "api": "player_play_url",
+      "device": "Xiaomi Sound",
+      "did": "934947888",
+      "hardware": "L16B",
+      "ok": true,
+      "url": "http://192.168.1.4:8931/audio.wav"
+    }
+  },
+  "bytes_written": 995328,
+  "pcm_seconds_written": 5.642
+}
