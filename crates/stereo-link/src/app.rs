@@ -54,18 +54,144 @@ fn card_frame() -> egui::Frame {
         .corner_radius(CornerRadius::same(12))
 }
 
-/// 小圆角标签。
-fn pill(ui: &mut egui::Ui, text: &str, bg: Color32) {
-    let font = FontId::proportional(12.0);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text.to_owned(), font, Color32::BLACK);
-    let pad = Vec2::new(9.0, 3.0);
-    let size = galley.size() + pad * 2.0;
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+/// 固定宽度的药丸标签：宽度写死，内容居中，不随文字伸缩。
+fn pill(ui: &mut egui::Ui, text: &str, bg: Color32, width: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 22.0), Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(9), bg);
-    painter.galley(rect.min + pad, galley, Color32::BLACK);
+    let galley =
+        painter.layout_no_wrap(text.to_owned(), FontId::proportional(12.0), Color32::BLACK);
+    let pos = egui::pos2(
+        rect.center().x - galley.size().x * 0.5,
+        rect.center().y - galley.size().y * 0.5,
+    );
+    painter.galley(pos, galley, Color32::BLACK);
+}
+
+/// 小圆圈「?」：hover 才显示完整说明（说明不再常驻占位）。
+fn help(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.circle_stroke(
+            rect.center(),
+            8.0,
+            Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.8)),
+        );
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "?",
+            FontId::proportional(11.0),
+            ACCENT,
+        );
+    }
+    response.on_hover_text(text)
+}
+
+/// 固定宽高的布局槽：里面的内容怎么变，占位宽高都不变。
+fn cell<R>(
+    ui: &mut egui::Ui,
+    width: f32,
+    height: f32,
+    layout: Layout,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.allocate_ui_with_layout(Vec2::new(width, height), layout, |ui| {
+        ui.set_min_size(Vec2::new(width, height));
+        add_contents(ui)
+    })
+    .inner
+}
+
+/// 量出一行文本的排版；超过 `max_w` 就截断并加省略号。
+fn fit_one_line(
+    ui: &egui::Ui,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_w: f32,
+) -> std::sync::Arc<egui::text::Galley> {
+    let painter = ui.painter();
+    let full = painter.layout_no_wrap(text.to_owned(), font.clone(), color);
+    if full.size().x <= max_w || text.is_empty() {
+        return full;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut lo = 0usize;
+    let mut hi = chars.len();
+    let mut best = "…".to_owned();
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        let mut candidate: String = chars[..mid].iter().collect();
+        candidate.push('…');
+        let galley = painter.layout_no_wrap(candidate.clone(), font.clone(), color);
+        if galley.size().x <= max_w {
+            best = candidate;
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    painter.layout_no_wrap(best, font.clone(), color)
+}
+
+/// 固定宽度的单行文本单元格：内容再长也不撑宽这一列（截断，全文放 tooltip）。
+fn text_cell(
+    ui: &mut egui::Ui,
+    width: f32,
+    height: f32,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    right_aligned: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let galley = fit_one_line(ui, text, &font, color, rect.width());
+        let x = if right_aligned {
+            rect.right() - galley.size().x
+        } else {
+            rect.left()
+        };
+        let pos = egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+        // 注意：with_clip_rect 是「替换」裁剪矩形，必须与 UI 自身的裁剪区求交，
+        // 否则当单元格只被部分裁掉时，文本会画到卡片/面板之外（左侧边缘出现残字）。
+        let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+        painter.galley(pos, galley, color);
+    }
+    response
+}
+
+/// 太长时截成「前缀…」，用于 ComboBox 选中文本（避免换行把行高撑高）。
+fn clip_text(text: &str, max_chars: usize) -> String {
+    let mut out: String = text.chars().take(max_chars).collect();
+    if text.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
+}
+
+// ---- 声道路由表：列宽写死，数值列右对齐 ----
+const ROUTE_COL_CH: f32 = 52.0;
+const ROUTE_COL_LEVEL: f32 = 84.0;
+const ROUTE_COL_SENT: f32 = 92.0;
+const ROUTE_COL_BUF: f32 = 72.0;
+const ROUTE_COL_UNDER: f32 = 52.0;
+const ROUTE_COL_PATH: f32 = 44.0;
+const ROUTE_ROW_H: f32 = 28.0;
+/// 诊断卡固定槽位数：条数变化不改变卡片高度。
+const DIAG_SLOTS: usize = 5;
+
+/// 设备列吃掉剩余宽度：同一窗口尺寸下恒定，不随数值变化。
+fn route_device_width(available: f32, spacing: f32) -> f32 {
+    let fixed = ROUTE_COL_CH
+        + ROUTE_COL_LEVEL
+        + ROUTE_COL_SENT
+        + ROUTE_COL_BUF
+        + ROUTE_COL_UNDER
+        + ROUTE_COL_PATH;
+    (available - fixed - spacing * 6.0).max(150.0)
 }
 
 /// 描边小徽标。
@@ -123,10 +249,6 @@ fn level_bar(ui: &mut egui::Ui, width: f32, level: f32, color: Color32) {
 
 fn muted(text: impl Into<String>) -> RichText {
     RichText::new(text).size(12.0).color(MUTED)
-}
-
-fn mini(text: impl Into<String>) -> RichText {
-    RichText::new(text).size(12.0).color(TEXT).monospace()
 }
 
 /// `扬声器 (Xiaomi Sound-1695)` → `Xiaomi Sound-1695`。
@@ -1199,16 +1321,16 @@ impl StereoLinkApp {
                     ui.add_space(14.0);
 
                     if self.engine.is_some() {
-                        pill(ui, "运行中", OK);
+                        pill(ui, "运行中", OK, 76.0);
                     } else {
-                        pill(ui, "已停止", Color32::from_rgb(120, 128, 142));
+                        pill(ui, "已停止", Color32::from_rgb(120, 128, 142), 76.0);
                     }
                     ui.add_space(4.0);
 
                     if self.live_default_is_virtual {
-                        pill(ui, "默认输出 = 虚拟声卡", ACCENT);
+                        pill(ui, "默认输出 = 虚拟声卡", ACCENT, 160.0);
                     } else {
-                        pill(ui, "默认输出未切换", WARN);
+                        pill(ui, "默认输出未切换", WARN, 160.0);
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1226,8 +1348,24 @@ impl StereoLinkApp {
                             self.refresh_default_output(true);
                             self.toast("设备列表已刷新");
                         }
-                        if let Some((text, _)) = &self.notice {
-                            ui.label(RichText::new(text.clone()).size(13.0).color(ACCENT));
+                        // 提示条也占固定宽度：出现/消失都不会挤动顶栏。
+                        let notice = self.notice.as_ref().map(|(text, _)| text.clone());
+                        match &notice {
+                            Some(text) => {
+                                text_cell(
+                                    ui,
+                                    300.0,
+                                    24.0,
+                                    text,
+                                    FontId::proportional(13.0),
+                                    ACCENT,
+                                    true,
+                                )
+                                .on_hover_text(text.clone());
+                            }
+                            None => {
+                                ui.allocate_exact_size(Vec2::new(300.0, 24.0), Sense::hover());
+                            }
                         }
                     });
                 });
@@ -1261,35 +1399,56 @@ impl StereoLinkApp {
     fn virtual_card(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width());
+            ui.set_min_height(210.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("虚拟声卡").size(15.0).strong());
+                help(
+                    ui,
+                    "虚拟声卡是播放器与两条蓝牙链路之间的中转（WASAPI 回环）。\n\
+                     把 Windows 默认输出切到它，播放器的声音才会流进分离链路；\n\
+                     开始路由时会自动切过去，退出面板时自动切回原来的输出。",
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     badge(ui, "WASAPI 回环", ACCENT);
                 });
             });
             ui.add_space(6.0);
 
-            let name = self
-                .virtual_name()
-                .map(|n| short_endpoint(&n))
-                .unwrap_or_else(|| "未找到".to_string());
-            ui.label(RichText::new(name).size(17.0).strong().color(TEXT));
+            let (name, full_name) = match self.virtual_name() {
+                Some(full) => (short_endpoint(&full), full),
+                None => ("未找到".to_string(), "没找到虚拟声卡端点".to_string()),
+            };
+            let width = ui.available_width().max(120.0);
+            text_cell(ui, width, 26.0, &name, FontId::proportional(17.0), TEXT, false)
+                .on_hover_text(full_name);
             ui.add_space(2.0);
 
-            let (current, is_virtual) = (
-                self.live_default_output
-                    .as_deref()
-                    .map(short_endpoint)
-                    .unwrap_or_else(|| "未知".to_string()),
-                self.live_default_is_virtual,
-            );
+            let (current_short, current_full, is_virtual) = match &self.live_default_output {
+                Some(full) => (
+                    short_endpoint(full),
+                    full.clone(),
+                    self.live_default_is_virtual,
+                ),
+                None => ("未知".to_string(), "未知".to_string(), self.live_default_is_virtual),
+            };
             ui.horizontal(|ui| {
-                ui.label(muted("系统默认输出："));
-                if is_virtual {
-                    ui.label(RichText::new(format!("{current} √")).size(12.5).color(OK));
+                text_cell(ui, 96.0, 20.0, "系统默认输出：", FontId::proportional(12.0), MUTED, false);
+                let rest = ui.available_width().max(120.0);
+                let text = if is_virtual {
+                    format!("{current_short} √")
                 } else {
-                    ui.label(RichText::new(current).size(12.5).color(WARN));
-                }
+                    current_short
+                };
+                text_cell(
+                    ui,
+                    rest,
+                    20.0,
+                    &text,
+                    FontId::proportional(12.5),
+                    if is_virtual { OK } else { WARN },
+                    false,
+                )
+                .on_hover_text(current_full);
             });
             ui.add_space(6.0);
 
@@ -1366,27 +1525,30 @@ impl StereoLinkApp {
                     ui.label(muted("等待授权…"));
                 }
             });
-
-            ui.add_space(6.0);
-            ui.label(muted(
-                "把 Windows 输出选成虚拟声卡后，播放器声音才会流进分离链路。",
-            ));
         });
     }
 
     fn diagnostics_card(&mut self, ui: &mut egui::Ui) {
+        let hints = self.hints();
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width());
+            ui.set_min_height(178.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("诊断").size(15.0).strong());
+                help(
+                    ui,
+                    "这里只列会影响出声的问题：\n\
+                     · 虚拟声卡 / 播放设备是否就绪；\n\
+                     · 路由是否在跑、两条链路有没有错误或欠载；\n\
+                     · Windows 默认输出是不是虚拟声卡。",
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
                         .small_button("复制")
                         .on_hover_text("复制全部诊断信息到剪贴板")
                         .clicked()
                     {
-                        let text = self
-                            .hints()
+                        let text = hints
                             .iter()
                             .map(|h| format!("{} {}", h.icon(), h.text))
                             .collect::<Vec<_>>()
@@ -1397,16 +1559,40 @@ impl StereoLinkApp {
                 });
             });
             ui.add_space(4.0);
-            for hint in self.hints() {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(hint.icon())
-                            .size(12.0)
-                            .color(hint.color())
-                            .monospace(),
+            // 固定槽位：诊断条数变化不改变卡片高度。
+            let width = ui.available_width().max(120.0);
+            for i in 0..DIAG_SLOTS {
+                let (rect, response) =
+                    ui.allocate_exact_size(Vec2::new(width, 20.0), Sense::hover());
+                let Some(hint) = hints.get(i) else {
+                    continue;
+                };
+                if !ui.is_rect_visible(rect) {
+                    continue;
+                }
+                {
+                    let painter = ui.painter();
+                    painter.text(
+                        rect.left_center(),
+                        egui::Align2::LEFT_CENTER,
+                        hint.icon(),
+                        FontId::monospace(11.5),
+                        hint.color(),
                     );
-                    ui.label(RichText::new(hint.text).size(12.5).color(TEXT));
-                });
+                    let galley = fit_one_line(
+                        ui,
+                        &hint.text,
+                        &FontId::proportional(12.5),
+                        TEXT,
+                        (rect.width() - 18.0).max(40.0),
+                    );
+                    painter.galley(
+                        egui::pos2(rect.left() + 18.0, rect.center().y - galley.size().y * 0.5),
+                        galley,
+                        TEXT,
+                    );
+                }
+                response.on_hover_text(hint.text.clone());
             }
         });
     }
@@ -1414,43 +1600,66 @@ impl StereoLinkApp {
     fn about_card(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new("怎么用").size(15.0).strong());
-            ui.add_space(4.0);
-            for (i, line) in [
-                "为左、右声道各选一台蓝牙音箱（先在本机蓝牙里连上）。",
-                "点「开始路由」，面板会把默认输出切到虚拟声卡。",
-                "用播放器放歌/看视频，声音就被拆成左右两路。",
-                "退出面板会自动停路由并恢复原来的默认输出。",
-            ]
-            .iter()
-            .enumerate()
-            {
-                ui.label(muted(format!("{}. {line}", i + 1)));
-            }
+            ui.set_min_height(118.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("怎么用").size(15.0).strong());
+                help(
+                    ui,
+                    "1. 为左、右声道各选一台蓝牙音箱（先在本机蓝牙里连上）。\n\
+                     2. 点「开始路由」，面板会把默认输出切到虚拟声卡。\n\
+                     3. 用播放器放歌/看视频，声音就被拆成左右两路。\n\
+                     4. 退出面板会自动停路由并恢复原来的默认输出。\n\n\
+                     软件侧延迟 ≈ 20 ms 采集缓冲 + 抖动缓冲 + 渲染缓冲 / 2；\n\
+                     蓝牙链路本身的延迟另外算（约 100–200 ms）。",
+                );
+            });
             ui.add_space(6.0);
             let latency = self
                 .route_engine_config()
                 .map(|c| c.software_latency_ms())
                 .unwrap_or(0);
-            ui.label(muted(format!(
+            let line = format!(
                 "软件侧延迟约 {latency} ms（抖动缓冲 {} ms + 渲染缓冲 40 ms）",
                 self.cfg.split.queue_ms
-            )));
+            );
+            let width = ui.available_width().max(120.0);
+            let tip = line.clone();
+            text_cell(ui, width, 18.0, &line, FontId::proportional(12.0), MUTED, false)
+                .on_hover_text(tip);
             ui.add_space(4.0);
             if ui.checkbox(&mut self.cfg.show_log, "显示日志面板").changed() {
                 self.cfg.save();
             }
-            if let Some(font) = &self.font {
-                ui.label(muted(format!("字体：{font}")));
-            } else {
-                ui.label(
-                    RichText::new("没找到中文字体：中文可能显示为方块")
-                        .size(12.0)
-                        .color(WARN),
-                );
-            }
-            let present = fonts::candidates_present();
-            ui.label(muted(format!("系统候选字体：{}", present.join(" / "))));
+            let (font_line, font_tip, font_color) = match &self.font {
+                Some(path) => {
+                    let file = std::path::Path::new(path)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.clone());
+                    let present = fonts::candidates_present();
+                    (
+                        format!("字体：{file}"),
+                        format!("{path}\n\n候选字体：\n{}", present.join("\n")),
+                        MUTED,
+                    )
+                }
+                None => (
+                    "没找到中文字体：中文可能显示为方块".to_string(),
+                    "系统字体目录里没有候选字体，可用 STEREOLINK_FONT 指定".to_string(),
+                    WARN,
+                ),
+            };
+            let width = ui.available_width().max(120.0);
+            text_cell(
+                ui,
+                width,
+                18.0,
+                &font_line,
+                FontId::proportional(12.0),
+                font_color,
+                false,
+            )
+            .on_hover_text(font_tip);
         });
     }
 
@@ -1485,7 +1694,9 @@ impl StereoLinkApp {
                 ui.label(RichText::new("声道路由").size(16.0).strong());
                 ui.add_space(6.0);
                 if self.engine.is_some() {
-                    pill(ui, "分离运行中", OK);
+                    pill(ui, "分离运行中", OK, 96.0);
+                } else {
+                    pill(ui, "未运行", Color32::from_rgb(120, 128, 142), 96.0);
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if self.engine.is_some() {
@@ -1517,9 +1728,25 @@ impl StereoLinkApp {
             ui.separator();
             ui.add_space(8.0);
 
+            let spacing = ui.spacing().item_spacing.x;
+            let available = ui.available_width();
+            let device_w = route_device_width(available, spacing);
+            // 固定列表头：字段名常驻在数字上方（用户要求「像表格那样」）。
+            {
+                let header_font = FontId::proportional(12.0);
+                ui.horizontal(|ui| {
+                    text_cell(ui, ROUTE_COL_CH, 18.0, "声道", header_font.clone(), MUTED, false);
+                    text_cell(ui, device_w, 18.0, "设备", header_font.clone(), MUTED, false);
+                    text_cell(ui, ROUTE_COL_LEVEL, 18.0, "电平", header_font.clone(), MUTED, false);
+                    text_cell(ui, ROUTE_COL_SENT, 18.0, "已发流", header_font.clone(), MUTED, true);
+                    text_cell(ui, ROUTE_COL_BUF, 18.0, "缓冲", header_font.clone(), MUTED, true);
+                    text_cell(ui, ROUTE_COL_UNDER, 18.0, "欠载", header_font.clone(), MUTED, true);
+                    text_cell(ui, ROUTE_COL_PATH, 18.0, "路径", header_font, MUTED, false);
+                });
+            }
+            ui.add_space(2.0);
             for channel in [RouteChannel::Left, RouteChannel::Right] {
-                self.route_row(ui, channel);
-                ui.add_space(6.0);
+                self.route_row(ui, channel, device_w);
             }
 
             ui.add_space(6.0);
@@ -1530,6 +1757,10 @@ impl StereoLinkApp {
                 ui.label(muted("增益"));
                 if ui
                     .add(egui::Slider::new(&mut self.cfg.split.gain, 0.0..=2.0).step_by(0.05))
+                    .on_hover_text(
+                        "数字增益：1.0 = 原样不放大；大于 1 会在数字域放大，\
+                         超过设备余量就会削顶（听感上是破音）。",
+                    )
                     .changed()
                 {
                     self.cfg.save();
@@ -1541,6 +1772,11 @@ impl StereoLinkApp {
                         egui::Slider::new(&mut self.cfg.split.queue_ms, 10..=200)
                             .suffix(" ms")
                             .step_by(5.0),
+                    )
+                    .on_hover_text(
+                        "每路独立队列，用来吸收两条蓝牙链路各自的时钟漂移与调度抖动：\
+                         数值越大越抗卡顿，但软件侧延迟会随之增加\
+                         （软件延迟 ≈ 20 ms 采集 + 这个值 + 渲染缓冲/2）。",
                     )
                     .changed()
                 {
@@ -1581,7 +1817,16 @@ impl StereoLinkApp {
             // ---- 声学自校验 ----
             ui.add_space(6.0);
             ui.separator();
-            ui.label(RichText::new("声学自校验：用麦克风量出两台音箱的真实时差").strong());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("声学自校验").size(14.0).strong());
+                help(
+                    ui,
+                    "用麦克风量出两台音箱的真实到达时间差，自动给较慢的一路垫延迟。\n\
+                     · 先选一个麦克风，「体检」确认它真能采到声音；\n\
+                     · 「测量并对齐」：先试同时法（精度约 ±1 ms），失败退回依次法（约 ±4 ms）；\n\
+                     · 没有麦克风也能用「点击串试听」靠人耳手动微调。",
+                );
+            });
 
             let mic_label = self
                 .sync_mics
@@ -1591,28 +1836,31 @@ impl StereoLinkApp {
                 .unwrap_or_default();
             let mut pick_mic: Option<String> = None;
             let mut action: Option<&'static str> = None;
-            ui.horizontal_wrapped(|ui| {
-                egui::ComboBox::from_id_salt("sync_mic")
-                    .width(230.0)
-                    .selected_text(if mic_label.is_empty() {
-                        RichText::new("（未选择麦克风）").color(MUTED)
-                    } else {
-                        RichText::new(short_endpoint(&mic_label)).color(TEXT)
-                    })
-                    .show_ui(ui, |ui| {
-                        for m in &self.sync_mics {
-                            let id = m.id().to_string();
-                            let text = format!(
-                                "{} [{}]{}",
-                                short_endpoint(m.name()),
-                                m.kind.as_str(),
-                                if m.likely_usable { "" } else { " · 可能不可用" }
-                            );
-                            if ui.selectable_label(self.sync_mic == id, text).clicked() {
-                                pick_mic = Some(id);
+            // 固定高度的控件行（不再 horizontal_wrapped，避免换行导致卡片高度跳）。
+            ui.horizontal(|ui| {
+                cell(ui, 240.0, 26.0, Layout::left_to_right(Align::Center), |ui| {
+                    egui::ComboBox::from_id_salt("sync_mic")
+                        .width(236.0)
+                        .selected_text(if mic_label.is_empty() {
+                            RichText::new("（未选择麦克风）").color(MUTED)
+                        } else {
+                            RichText::new(clip_text(&short_endpoint(&mic_label), 26)).color(TEXT)
+                        })
+                        .show_ui(ui, |ui| {
+                            for m in &self.sync_mics {
+                                let id = m.id().to_string();
+                                let text = format!(
+                                    "{} [{}]{}",
+                                    short_endpoint(m.name()),
+                                    m.kind.as_str(),
+                                    if m.likely_usable { "" } else { " · 可能不可用" }
+                                );
+                                if ui.selectable_label(self.sync_mic == id, text).clicked() {
+                                    pick_mic = Some(id);
+                                }
                             }
-                        }
-                    });
+                        });
+                });
                 if ui.button("刷新").clicked() {
                     action = Some("refresh");
                 }
@@ -1656,90 +1904,227 @@ impl StereoLinkApp {
                 Some("clicks") => self.play_alignment(),
                 _ => {}
             }
-            if !self.sync_status.is_empty() {
-                ui.label(RichText::new(&self.sync_status).color(MUTED).size(12.0));
-            }
+            // 状态行固定高度：文字长短变化不改变卡片高度。
+            let status = if self.sync_status.is_empty() {
+                " ".to_string()
+            } else {
+                self.sync_status.clone()
+            };
+            let width = ui.available_width().max(120.0);
+            text_cell(ui, width, 20.0, &status, FontId::proportional(12.0), MUTED, false)
+                .on_hover_text(status);
 
-            if let Some(stats) = &self.stats {
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(muted(format!(
+            // 采集统计行常驻（未运行时显示占位），避免行出现/消失导致卡片高度跳。
+            ui.add_space(4.0);
+            let (capture_line, source_line) = match &self.stats {
+                Some(stats) => (
+                    format!(
                         "采集 {:.1}s · {:.2} MB",
                         stats.captured_frames as f64 / 44_100.0,
                         stats.frame_bytes as f64 / 1_048_576.0
-                    )));
-                    ui.add_space(8.0);
-                    ui.label(muted(format!(
-                        "源：{}",
-                        short_endpoint(&stats.source_device)
-                    )));
-                });
-            }
+                    ),
+                    format!("源：{}", short_endpoint(&stats.source_device)),
+                ),
+                None => ("采集 —".to_string(), "源：—".to_string()),
+            };
+            ui.horizontal(|ui| {
+                text_cell(
+                    ui,
+                    220.0,
+                    20.0,
+                    &capture_line,
+                    FontId::monospace(12.0),
+                    MUTED,
+                    false,
+                );
+                let rest = ui.available_width().max(120.0);
+                text_cell(ui, rest, 20.0, &source_line, FontId::proportional(12.0), MUTED, false)
+                    .on_hover_text(source_line);
+            });
         });
     }
 
-    fn route_row(&mut self, ui: &mut egui::Ui, channel: RouteChannel) {
+    fn route_row(&mut self, ui: &mut egui::Ui, channel: RouteChannel, device_w: f32) {
         let color = channel_color(channel);
         let names = self.render_names();
         let current = self.configured_endpoint(channel).to_string();
         let mut chosen = current.clone();
         let label = channel_label(channel);
+        let route = self.route_of(channel).cloned();
 
         ui.horizontal(|ui| {
-            badge(ui, label, color);
-            ui.add_space(2.0);
-            let width = (ui.available_width() - 260.0).max(160.0);
-            egui::ComboBox::from_id_salt(format!("route_{label}"))
-                .width(width)
-                .selected_text(if current.is_empty() {
-                    RichText::new("（未选择设备）").color(MUTED)
-                } else {
-                    RichText::new(short_endpoint(&current)).color(TEXT)
-                })
-                .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(
-                            current.is_empty(),
-                            RichText::new("（未选择设备）").color(MUTED),
-                        )
-                        .clicked()
-                    {
-                        chosen = String::new();
-                    }
-                    for name in &names {
-                        let selected = *name == current;
-                        if ui
-                            .selectable_label(selected, short_endpoint(name))
-                            .on_hover_text(name)
-                            .clicked()
-                        {
-                            chosen = name.clone();
-                        }
-                    }
-                });
-
-            if let Some(route) = self.route_of(channel) {
-                // 电平条用感知刻度（sqrt），否则 -30 dB 的音乐只有一两像素，看着像没声音。
-                level_bar(ui, 64.0, route.level.sqrt(), color);
-                let stats = ui.label(mini(format!(
-                    "{:>3.0}% · {:.2} MB · {:.0} ms · 欠载 {}",
-                    route.level * 100.0,
-                    route.sent_bytes as f64 / 1_048_576.0,
-                    route.queued_ms,
-                    route.underruns
-                )));
-                // 开流走的是哪条路（自动转换 / 原生混音格式 + 软件转换），排障时很关键。
-                if let Some(path) = route.format_path.as_ref() {
-                    stats.on_hover_text(format!("开流路径：{path}"));
-                }
-                if let Some(err) = route.error.as_ref() {
-                    ui.label(RichText::new("链路错误").color(ERR).size(12.0))
-                        .on_hover_text(err);
-                }
-            } else {
-                level_bar(ui, 64.0, 0.0, color);
-                ui.label(muted("未运行"));
+            // 声道：固定宽度小标签，不随内容伸缩。
+            let (rect, response) =
+                ui.allocate_exact_size(Vec2::new(ROUTE_COL_CH, ROUTE_ROW_H), Sense::hover());
+            if ui.is_rect_visible(rect) {
+                let painter = ui.painter();
+                painter.rect_filled(
+                    rect.shrink2(Vec2::new(0.0, 3.0)),
+                    CornerRadius::same(6),
+                    color.gamma_multiply(0.16),
+                );
+                painter.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    FontId::proportional(12.0),
+                    color,
+                );
             }
+            let mut tip = format!(
+                "目标端点：{}",
+                if current.is_empty() {
+                    "（未选择）"
+                } else {
+                    current.as_str()
+                }
+            );
+            if let Some(route) = &route {
+                tip.push_str(&format!(
+                    "\n开流路径：{}",
+                    route.format_path.as_deref().unwrap_or("尚未开流")
+                ));
+                if let Some(err) = &route.error {
+                    tip.push_str(&format!("\n链路错误：{err}"));
+                }
+            }
+            response.on_hover_text(tip);
+
+            // 设备：固定宽度下拉框 + 截断 + tooltip 全名。
+            cell(
+                ui,
+                device_w,
+                ROUTE_ROW_H,
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    egui::ComboBox::from_id_salt(format!("route_{label}"))
+                        .width((device_w - 8.0).max(120.0))
+                        .selected_text(if current.is_empty() {
+                            RichText::new("（未选择设备）").color(MUTED).size(13.0)
+                        } else {
+                            RichText::new(clip_text(&short_endpoint(&current), 32))
+                                .color(TEXT)
+                                .size(13.0)
+                        })
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    current.is_empty(),
+                                    RichText::new("（未选择设备）").color(MUTED),
+                                )
+                                .clicked()
+                            {
+                                chosen = String::new();
+                            }
+                            for name in &names {
+                                let selected = *name == current;
+                                if ui
+                                    .selectable_label(selected, short_endpoint(name))
+                                    .on_hover_text(name)
+                                    .clicked()
+                                {
+                                    chosen = name.clone();
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(if current.is_empty() {
+                            "点击选择这个声道的输出设备".to_string()
+                        } else {
+                            current.clone()
+                        });
+                },
+            );
+
+            // 电平：固定 rect 电平条 + 右对齐百分比。
+            let linear = route.as_ref().map(|route| route.level).unwrap_or(0.0);
+            cell(
+                ui,
+                ROUTE_COL_LEVEL,
+                ROUTE_ROW_H,
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    level_bar(ui, 40.0, linear.sqrt(), color);
+                    text_cell(
+                        ui,
+                        36.0,
+                        ROUTE_ROW_H,
+                        &format!("{:>3.0}%", linear * 100.0),
+                        FontId::monospace(12.0),
+                        TEXT,
+                        true,
+                    );
+                },
+            );
+
+            // 数值列：列宽写死 + 右对齐 + monospace，数值跳动不会改变列宽。
+            let sent = route
+                .as_ref()
+                .map(|route| format!("{:>7.2} MB", route.sent_bytes as f64 / 1_048_576.0))
+                .unwrap_or_else(|| "      —".to_string());
+            text_cell(
+                ui,
+                ROUTE_COL_SENT,
+                ROUTE_ROW_H,
+                &sent,
+                FontId::monospace(12.0),
+                TEXT,
+                true,
+            );
+
+            let buffered = route
+                .as_ref()
+                .map(|route| format!("{:>5.0} ms", route.queued_ms))
+                .unwrap_or_else(|| "    —".to_string());
+            text_cell(
+                ui,
+                ROUTE_COL_BUF,
+                ROUTE_ROW_H,
+                &buffered,
+                FontId::monospace(12.0),
+                TEXT,
+                true,
+            );
+
+            let underruns = route.as_ref().map(|route| route.underruns).unwrap_or(0);
+            let under_text = route
+                .as_ref()
+                .map(|route| format!("{:>4}", route.underruns))
+                .unwrap_or_else(|| "   —".to_string());
+            text_cell(
+                ui,
+                ROUTE_COL_UNDER,
+                ROUTE_ROW_H,
+                &under_text,
+                FontId::monospace(12.0),
+                if underruns > 0 { WARN } else { TEXT },
+                true,
+            );
+
+            let (path_short, path_tip) = match route
+                .as_ref()
+                .and_then(|route| route.format_path.as_deref())
+            {
+                Some(path) => (
+                    if path.contains("autoconvert") {
+                        "Auto"
+                    } else {
+                        "转换"
+                    },
+                    format!("开流路径：{path}"),
+                ),
+                None => ("—", "开流路径：尚未开流".to_string()),
+            };
+            text_cell(
+                ui,
+                ROUTE_COL_PATH,
+                ROUTE_ROW_H,
+                path_short,
+                FontId::proportional(12.0),
+                MUTED,
+                false,
+            )
+            .on_hover_text(path_tip);
         });
 
         if chosen != current {
@@ -1775,160 +2160,237 @@ impl StereoLinkApp {
                 });
             });
             ui.add_space(2.0);
-            ui.label(muted(
-                "所有已启用的播放设备都在这里，可以任意指定哪一个当左声道、哪一个当右声道。",
-            ));
-            ui.add_space(6.0);
 
             if devices.is_empty() {
-                ui.label(RichText::new("没有枚举到播放设备").color(WARN));
+                let width = ui.available_width().max(120.0);
+                text_cell(
+                    ui,
+                    width,
+                    20.0,
+                    "没有枚举到播放设备",
+                    FontId::proportional(13.0),
+                    WARN,
+                    false,
+                );
                 return;
             }
 
-            egui::Grid::new("device_grid")
-                .num_columns(4)
-                .spacing([14.0, 7.0])
-                .show(ui, |ui| {
-                    ui.label(muted("设备"));
-                    ui.label(muted("格式"));
-                    ui.label(muted("角色"));
-                    ui.label(muted("操作"));
-                    ui.end_row();
+            // 列宽固定：内容变化只影响单元格内部，不再重排整张表。
+            let spacing = ui.spacing().item_spacing.x;
+            let available = ui.available_width();
+            let col_action = 190.0;
+            let col_role = 140.0;
+            let col_device = 230.0;
+            let col_format = (available - col_device - col_role - col_action - spacing * 3.0).max(150.0);
 
-                    for ep in &devices {
-                        let is_virtual = audio_default::is_virtual(ep);
-                        let is_default = live_default.as_deref() == Some(ep.name.as_str());
-                        let is_left = left == ep.name;
-                        let is_right = right == ep.name;
+            {
+                let header_font = FontId::proportional(12.0);
+                ui.horizontal(|ui| {
+                    text_cell(ui, col_device, 18.0, "设备", header_font.clone(), MUTED, false);
+                    text_cell(ui, col_format, 18.0, "格式", header_font.clone(), MUTED, false);
+                    text_cell(ui, col_role, 18.0, "角色", header_font.clone(), MUTED, false);
+                    text_cell(ui, col_action, 18.0, "操作", header_font, MUTED, false);
+                });
+            }
+            ui.add_space(2.0);
 
-                        let mut title = RichText::new(short_endpoint(&ep.name)).color(TEXT);
+            for ep in &devices {
+                let is_virtual = audio_default::is_virtual(ep);
+                let is_default = live_default.as_deref() == Some(ep.name.as_str());
+                let is_left = left == ep.name;
+                let is_right = right == ep.name;
+
+                let current = self.format_cache.get(&ep.id).cloned().flatten();
+                let supported = self.format_supported.get(&ep.id).cloned().flatten();
+                let probing = self.format_probing.contains(&ep.id);
+
+                let mut current_tip = format!(
+                    "当前设备格式：{}",
+                    current
+                        .as_ref()
+                        .map(EndpointFormat::describe)
+                        .unwrap_or_else(|| "读取中".to_string())
+                );
+                let mut fixed: Option<EndpointFormat> = None;
+                if let (Some(f), Some(list)) = (&current, &supported) {
+                    if !list.contains(f) {
+                        fixed = Self::closest_supported(list, f);
+                        current_tip = match &fixed {
+                            Some(t) => format!(
+                                "当前设备格式 {} 不在这个端点的独占支持列表里（共享模式仍可用）。\n最接近的受支持格式：{}",
+                                f.describe(),
+                                t.describe()
+                            ),
+                            None => format!(
+                                "当前设备格式 {} 不在这个端点的独占支持列表里（共享模式仍可用）",
+                                f.describe()
+                            ),
+                        };
+                    }
+                }
+
+                ui.horizontal(|ui| {
+                    // 设备：固定宽 + 截断，全名 / 默认输出 / 当前格式都进 tooltip。
+                    let name_tip = format!(
+                        "{}{}\n{}",
                         if is_default {
-                            title = title.strong();
-                        }
-                        ui.label(title);
-                        let current = self.format_cache.get(&ep.id).cloned().flatten();
-                        let supported = self.format_supported.get(&ep.id).cloned().flatten();
-                        let probing = self.format_probing.contains(&ep.id);
-                        ui.horizontal(|ui| {
-                            match (&supported, probing) {
-                                // 只列这个端点**真正支持**的格式。
-                                (Some(list), _) if !list.is_empty() => {
-                                    let choice = self
-                                        .format_choices
-                                        .entry(ep.id.clone())
-                                        .or_insert(list[0]);
-                                    let before = *choice;
-                                    let in_list = list.contains(choice);
-                                    let selected = if in_list {
-                                        choice.describe()
-                                    } else {
-                                        format!("{}（当前格式不受支持）", choice.describe())
-                                    };
-                                    egui::ComboBox::from_id_salt(format!("fmt_{}", ep.id))
-                                        .width(190.0)
-                                        .selected_text(RichText::new(selected).size(12.0))
-                                        .show_ui(ui, |ui| {
-                                            for f in list {
-                                                ui.selectable_value(
-                                                    choice,
-                                                    *f,
-                                                    RichText::new(f.describe()).size(12.0),
-                                                );
-                                            }
-                                        })
-                                        .response
-                                        .on_hover_text(format!(
-                                            "只列出这个端点真正支持的 {} 种格式（独占模式 IsFormatSupported 实测）\n当前混音格式：{}",
-                                            list.len(),
-                                            endpoint_format(ep)
-                                        ));
-                                    if *choice != before {
-                                        format_change = Some((
-                                            ep.id.clone(),
-                                            short_endpoint(&ep.name),
-                                        ));
-                                    }
-                                }
-                                (Some(_), _) => {
-                                    badge(ui, "无支持格式", ERR);
-                                }
-                                (None, true) => {
-                                    ui.label(muted("探测格式中…"));
-                                }
-                                (None, false) => {
-                                    if ui
-                                        .small_button("探测格式")
-                                        .on_hover_text("用独占模式逐个试探这个端点支持的格式")
-                                        .clicked()
-                                    {
-                                        probe_one = Some(ep.id.clone());
-                                    }
-                                }
-                            }
-                            match &current {
-                                Some(f) => {
-                                    let ok = supported.as_ref().map(|l| l.contains(f));
-                                    match ok {
-                                        Some(false) => {
-                                            let fixed = supported
-                                                .as_ref()
-                                                .and_then(|l| Self::closest_supported(l, f));
-                                            let hint = match &fixed {
-                                                Some(t) => format!(
-                                                    "当前设备格式 {} 不在这个端点的独占支持列表里（共享模式仍可用）。\n最接近的受支持格式：{}",
-                                                    f.describe(),
-                                                    t.describe()
-                                                ),
-                                                None => format!(
-                                                    "当前设备格式 {} 不在独占支持列表里（共享模式仍可用）",
-                                                    f.describe()
-                                                ),
-                                            };
-                                            badge(ui, "不受支持", WARN).on_hover_text(hint);
-                                            if let Some(t) = fixed {
-                                                if ui
-                                                    .small_button("修正")
-                                                    .on_hover_text(format!("改成 {}", t.describe()))
-                                                    .clicked()
-                                                {
-                                                    fix_format =
-                                                        Some((ep.id.clone(), short_endpoint(&ep.name), t));
-                                                }
-                                            }
-                                        }
-                                        _ => {
-                                            ui.label(mini(f.describe()))
-                                                .on_hover_text("当前设备默认格式");
-                                        }
-                                    }
-                                }
-                                None => {
-                                    badge(ui, "读取失败", ERR);
-                                }
-                            }
-                        });
+                            "（Windows 默认输出）\n"
+                        } else {
+                            ""
+                        },
+                        ep.name,
+                        current_tip
+                    );
+                    text_cell(
+                        ui,
+                        col_device,
+                        ROUTE_ROW_H,
+                        &short_endpoint(&ep.name),
+                        FontId::proportional(13.0),
+                        if is_default { OK } else { TEXT },
+                        false,
+                    )
+                    .on_hover_text(name_tip);
 
-                        ui.horizontal(|ui| {
-                            if is_default {
-                                badge(ui, "默认输出", OK);
+                    // 格式：固定宽度单元格里放下拉框 / 探测按钮，单元格尺寸恒定。
+                    cell(
+                        ui,
+                        col_format,
+                        ROUTE_ROW_H,
+                        Layout::left_to_right(Align::Center),
+                        |ui| match (&supported, probing) {
+                            // 只列这个端点**真正支持**的格式。
+                            (Some(list), _) if !list.is_empty() => {
+                                let choice =
+                                    self.format_choices.entry(ep.id.clone()).or_insert(list[0]);
+                                let before = *choice;
+                                let in_list = list.contains(choice);
+                                let selected = if in_list {
+                                    choice.describe()
+                                } else {
+                                    format!("{}（当前格式不受支持）", choice.describe())
+                                };
+                                egui::ComboBox::from_id_salt(format!("fmt_{}", ep.id))
+                                    .width((col_format - 8.0).max(140.0))
+                                    .selected_text(
+                                        RichText::new(clip_text(&selected, 26)).size(12.0),
+                                    )
+                                    .show_ui(ui, |ui| {
+                                        for f in list {
+                                            ui.selectable_value(
+                                                choice,
+                                                *f,
+                                                RichText::new(f.describe()).size(12.0),
+                                            );
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text(format!(
+                                        "只列出这个端点真正支持的 {} 种格式（独占模式 IsFormatSupported 实测）\n当前混音格式：{}",
+                                        list.len(),
+                                        endpoint_format(ep)
+                                    ));
+                                if *choice != before {
+                                    format_change =
+                                        Some((ep.id.clone(), short_endpoint(&ep.name)));
+                                }
                             }
-                            if is_virtual {
-                                badge(ui, "采集源", ACCENT);
+                            (Some(_), _) => {
+                                text_cell(
+                                    ui,
+                                    (col_format - 8.0).max(120.0),
+                                    20.0,
+                                    "无支持格式",
+                                    FontId::proportional(12.0),
+                                    ERR,
+                                    false,
+                                );
                             }
-                            if is_left {
-                                badge(ui, "左", ACCENT);
+                            (None, true) => {
+                                text_cell(
+                                    ui,
+                                    (col_format - 8.0).max(120.0),
+                                    20.0,
+                                    "探测格式中…",
+                                    FontId::proportional(12.0),
+                                    MUTED,
+                                    false,
+                                );
                             }
-                            if is_right {
-                                badge(ui, "右", ACCENT2);
+                            (None, false) => {
+                                if ui
+                                    .add_sized(
+                                        [(col_format - 8.0).max(120.0), 20.0],
+                                        egui::Button::new(RichText::new("探测格式").size(12.0)),
+                                    )
+                                    .on_hover_text("用独占模式逐个试探这个端点支持的格式")
+                                    .clicked()
+                                {
+                                    probe_one = Some(ep.id.clone());
+                                }
                             }
-                            if !is_default && !is_virtual && !is_left && !is_right {
-                                ui.label(muted("—"));
-                            }
-                        });
+                        },
+                    );
 
-                        ui.horizontal(|ui| {
+                    // 角色：合成一行固定宽度文字，超长截断。
+                    let mut roles: Vec<&str> = Vec::new();
+                    if is_default {
+                        roles.push("默认输出");
+                    }
+                    if is_virtual {
+                        roles.push("采集源");
+                    }
+                    if is_left {
+                        roles.push("左声道");
+                    }
+                    if is_right {
+                        roles.push("右声道");
+                    }
+                    let role_text = if roles.is_empty() {
+                        "—".to_string()
+                    } else {
+                        roles.join(" · ")
+                    };
+                    let role_color = if is_left {
+                        ACCENT
+                    } else if is_right {
+                        ACCENT2
+                    } else if is_default {
+                        OK
+                    } else if is_virtual {
+                        ACCENT
+                    } else {
+                        MUTED
+                    };
+                    let role_tip = role_text.clone();
+                    text_cell(
+                        ui,
+                        col_role,
+                        ROUTE_ROW_H,
+                        &role_text,
+                        FontId::proportional(12.0),
+                        role_color,
+                        false,
+                    )
+                    .on_hover_text(role_tip);
+
+                    // 操作：固定宽度单元格，按钮出现/消失不会影响列宽。
+                    cell(
+                        ui,
+                        col_action,
+                        ROUTE_ROW_H,
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
                             if is_virtual {
-                                ui.label(muted("虚拟声卡是采集源"));
+                                text_cell(
+                                    ui,
+                                    (col_action - 8.0).max(120.0),
+                                    20.0,
+                                    "虚拟声卡是采集源",
+                                    FontId::proportional(12.0),
+                                    MUTED,
+                                    false,
+                                );
                             } else {
                                 if ui
                                     .add_enabled(!is_left, egui::Button::new("设为左").small())
@@ -1942,11 +2404,24 @@ impl StereoLinkApp {
                                 {
                                     set_right = Some(ep.name.clone());
                                 }
+                                if let Some(t) = &fixed {
+                                    if ui
+                                        .add(egui::Button::new("修正").small())
+                                        .on_hover_text(format!("改成 {}", t.describe()))
+                                        .clicked()
+                                    {
+                                        fix_format = Some((
+                                            ep.id.clone(),
+                                            short_endpoint(&ep.name),
+                                            t.clone(),
+                                        ));
+                                    }
+                                }
                             }
-                        });
-                        ui.end_row();
-                    }
+                        },
+                    );
                 });
+            }
         });
 
         if refresh {
@@ -1981,7 +2456,15 @@ impl StereoLinkApp {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(RichText::new("日志").size(16.0).strong());
-                ui.label(muted(format!("{count} 行")));
+                text_cell(
+                    ui,
+                    72.0,
+                    18.0,
+                    &format!("{count} 行"),
+                    FontId::proportional(12.0),
+                    MUTED,
+                    false,
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.small_button("清空").clicked() {
                         clear = true;
