@@ -47,6 +47,19 @@ Xiaomi Sound-左（左声道） + Xiaomi Sound（右声道）
 2. Windows → 设置 → 系统 → 声音 → 输出，选 **「扬声器 (小米妙播设备)」**
 3. 正常放歌。也可以只让某个播放器单独把输出切到它，不影响系统其他声音
 
+> **双向已验证（2026-10-18 01:24）**
+> - 安装：`[PASS] endpoint renamed` → 端点显示名 `扬声器 (小米妙播设备)`
+> - 卸载：`RESIDUE-FREE: rolled back and verified`，逐项断言
+>   `device friendly name restored` / `endpoint name(s) restored` /
+>   `MMDevices Properties unchanged`，端点显示名恢复 `扬声器 (Steam Streaming Speakers)`
+>
+> 两个坑（都已写进脚本）：
+> 1. `rename-endpoint.ps1` 的 `-Rollback` 和 `-DeviceInstanceId` 属于**不同 PowerShell
+>    参数集**，同时传会报 `AmbiguousParameterSet`。回滚只能传 `-Rollback`。
+> 2. **重复安装会污染备份**：第二次安装的「改名前」备份里 FriendlyName 已经是
+>    `小米妙播设备`，拿它回滚等于没回滚。所以卸载脚本只挑文件名含
+>    `Steam_Streaming_Speakers` 的原始备份。
+
 ## 4. 改名做了什么（三态实测，见 `research/vad/rename-probe.md`）
 
 活路是写**硬件键**再刷一次端点缓存：

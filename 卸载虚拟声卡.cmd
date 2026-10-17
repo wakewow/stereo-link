@@ -6,24 +6,28 @@ echo ============================================================
 echo  卸载虚拟串流声卡：把设备名改回原样
 echo ============================================================
 echo.
-echo  会从 poc\zero-driver\backups\ 里找最近一次安装的备份 .reg，回滚它。
-echo  如果找不到备份，则退化为「直接删掉 FriendlyName 值」（同样可恢复）。
+echo  优先用「原始状态」的备份（文件名含 Steam_Streaming_Speakers）回滚，
+echo  这样不受重复安装影响。找不到就退化为直接删除 FriendlyName 值。
 echo.
 echo  需要管理员权限。如果没有，请右键“以管理员身份运行”。
 echo ------------------------------------------------------------
 pause
 
 set "LATEST="
-for /f "delims=" %%F in ('dir /b /o-d "poc\zero-driver\backups\*.reg" 2^>nul') do (
+for /f "delims=" %%F in ('dir /b /o-d "poc\zero-driver\backups\backup-Enum-*Steam_Streaming_Speakers*.reg" 2^>nul') do (
   if not defined LATEST set "LATEST=poc\zero-driver\backups\%%F"
 )
 
 if defined LATEST (
-  echo [i] 使用备份: %LATEST%
-  powershell -NoProfile -ExecutionPolicy Bypass -File "poc\zero-driver\rename-endpoint.ps1" -DeviceInstanceId "ROOT\STEAMSTREAMINGSPEAKERS\0000" -Rollback "%LATEST%"
+  echo [i] 使用原始备份: %LATEST%
+  rem 注意: -Rollback 与 -DeviceInstanceId 属于不同参数集，不能同时传
+  powershell -NoProfile -ExecutionPolicy Bypass -File "poc\zero-driver\rename-endpoint.ps1" -Rollback "%LATEST%"
 ) else (
-  echo [!] 没找到备份，直接删除 FriendlyName 值。
-  powershell -NoProfile -ExecutionPolicy Bypass -File "poc\zero-driver\rename-endpoint.ps1" -DeviceInstanceId "ROOT\STEAMSTREAMINGSPEAKERS\0000" -Rollback ""
+  echo [!] 没找到备份，直接删除 FriendlyName 值再刷一次端点缓存。
+  reg delete "HKLM\SYSTEM\CurrentControlSet\Enum\ROOT\STEAMSTREAMINGSPEAKERS\0000" /v FriendlyName /f >nul 2>&1
+  pnputil /disable-device "ROOT\STEAMSTREAMINGSPEAKERS\0000" >nul 2>&1
+  timeout /t 2 /nobreak >nul
+  pnputil /enable-device "ROOT\STEAMSTREAMINGSPEAKERS\0000" >nul 2>&1
 )
 set RC=%ERRORLEVEL%
 echo.
