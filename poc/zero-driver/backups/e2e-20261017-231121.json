@@ -1,0 +1,40 @@
+﻿{
+    "started":  "2026-10-17T23:11:21",
+    "mode":  "GO",
+    "device":  "ROOT\\STEAMSTREAMINGSPEAKERS\\0000",
+    "new_name":  "小米妙播设备",
+    "target_did":  "934947888",
+    "seconds":  8,
+    "phases":  {
+                   "pre":  {
+                               "device_name":  "Steam Streaming Speakers",
+                               "device_status":  "OK",
+                               "endpoint_name":  "扬声器 (Steam Streaming Speakers)",
+                               "hw_friendlyname":  "\u003cabsent\u003e",
+                               "RegExport":  "D:\\Backup\\Documents\\deepseek-harness\\default-workspace\\miplay-bridge\\poc\\zero-driver\\backups\\e2e-pre-20261017-231121.reg"
+                           },
+                   "post":  {
+                                "device_name":  "小米妙播设备",
+                                "device_status":  "OK",
+                                "endpoint_name":  "扬声器 (小米妙播设备)",
+                                "hw_friendlyname":  "小米妙播设备"
+                            },
+                   "list":  {
+                                "label":  "list",
+                                "tail":  {
+
+                                         },
+                                "exit":  0
+                            },
+                   "error":  "usage: capture_from_endpoint.py [-h] [--list] [--endpoint-name ENDPOINT_NAME]",
+                   "rollback":  {
+                                    "exit":  1,
+                                    "restored_from":  "D:\\Backup\\Documents\\deepseek-harness\\default-workspace\\miplay-bridge\\poc\\zero-driver\\backups\\backup-Enum-ROOT_STEAMSTREAMINGSPEAKERS_0000-Steam_Streaming_Speakers-20261017-231124.reg",
+                                    "device_name":  "Steam Streaming Speakers",
+                                    "endpoint_name":  "扬声器 (小米妙播设备)",
+                                    "hw_friendlyname":  "\u003cabsent\u003e",
+                                    "device_status":  "OK"
+                                }
+               },
+    "finished":  "2026-10-17T23:11:35"
+}

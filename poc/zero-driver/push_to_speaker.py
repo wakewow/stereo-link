@@ -8,12 +8,15 @@
         --环形缓冲 + 自建 HTTP-->  http://<本机 LAN>:8931/audio.wav
         --控制指令 play_url-->  小爱音箱自己来拉 --> 出声
 
-控制通道有两种后端：
-  * `--backend mixplay`（默认，**已实测可用**）：POST
+控制通道有三种后端：
+  * `--backend miplay`（**默认，已实测可用**）：POST
+        http://127.0.0.1:8901/api/devices/<did>/play   {"url": "http://<lan>:8931/audio.wav"}
+        http://127.0.0.1:8901/api/devices/<did>/stop   {}
+    这是 `miplay-bridge serve --port 8901` 自己起的 Rust 服务（只读复用
+    `C:/Users/Administrator/conf/.mi.token`），**不需要 MiXPlay 桌面端**。
+  * `--backend mixplay`：MiXPlay 桌面端的开放控制 API（需桌面端在跑）：POST
         http://127.0.0.1:8820/api/v1/control/play
         {"action":"play_url","target":"<did>","url":"http://<lan>:8931/audio.wav"}
-    需要 MiXPlay 桌面端在跑。MiXPlay 内部就是用小米云的 player_play_url 让音箱拉流，
-    等价于「play_by_url」。
   * `--backend mina`（**未验证**）：直接用 miservice 的 `MinaService.play_by_url`。
     本机 capture venv 里**没有** miservice（只有 soundcard/numpy/sounddevice），
     所以这条只在你自己有 miservice + 账号凭据的 python 环境里才可能跑通；
@@ -22,18 +25,19 @@
 安全约束（来自任务要求）：
   * 默认目标 `--target-did 934947888`（Xiaomi Sound，192.168.1.171）。**不要占用
     501718792（192.168.1.21）**，那是另一条测试线的目标；脚本默认拒绝，除非 --force。
-  * 短音 ≤10 秒（默认 8），音量默认不拉满（--volume 20）。
+  * 短音 ≤10 秒（默认 8）；测试音振幅默认 0.7 FS（lead 要求 ≥0.7，太轻用户听不见）。
+  * **不改音箱硬件音量**（当前 55）。
 
 用法：
     # 1) 不看音箱，先自检 HTTP 流（本地拉 4 秒，校验 WAV 头 + 字节数）
     python push_to_speaker.py --local-selftest --seconds 4
 
     # 2) 用测试音推给音箱（不需要采集，链路最短）
-    python push_to_speaker.py --source tone --seconds 5 --volume 20
+    python push_to_speaker.py --source tone --seconds 5
 
     # 3) 端到端：采集「小米妙播设备」回环 -> 音箱；--play-tone 让虚拟端点有内容
     python push_to_speaker.py --source capture --endpoint-name 小米妙播设备 \\
-        --play-tone 1000 --seconds 8 --volume 20
+        --play-tone 1000 --seconds 8
 
     # 4) 只停止音箱 / 只看控制通道是否可达
     python push_to_speaker.py --stop
@@ -284,16 +288,41 @@ def local_ip() -> str:
         s.close()
 
 
-def mixplay_control(base: str, payload: dict, timeout: float = 10.0) -> dict:
-    req = urllib.request.Request(f"{base}/api/v1/control/play",
-                                 data=json.dumps(payload).encode("utf-8"),
-                                 headers={"Content-Type": "application/json"},
-                                 method="POST")
+def _post_json(url: str, payload: dict, timeout: float = 10.0) -> dict:
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        body = resp.read().decode("utf-8")
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return {"_raw": body}
+
+
+def miplay_api_control(api: str, did: str, action: str, **extra) -> dict:
+    """miplay-bridge 自己的 Rust 服务：http://127.0.0.1:8901（已实测可用）。
+
+    POST /api/devices/<did>/play  {"url": "http://..."}   让音箱来拉我们的 WAV 流
+    POST /api/devices/<did>/stop  {}
+    """
+    url = f"{api}/api/devices/{did}/{action}"
+    return _post_json(url, extra)
+
+
+def mixplay_control(base: str, payload: dict, timeout: float = 10.0) -> dict:
+    return _post_json(f"{base}/api/v1/control/play", payload, timeout)
 
 
 def send_play_url(args, url: str) -> dict | None:
+    if args.backend == "miplay":
+        try:
+            res = miplay_api_control(args.miplay_api, args.target_did, "play", url=url)
+            print(f"[下发] miplay-bridge play did={args.target_did} url={url} => {res}")
+            return {"backend": "miplay", "api": args.miplay_api, "payload": {"url": url}, "response": res}
+        except Exception as exc:  # noqa: BLE001
+            print(f"[下发] miplay-bridge 失败: {exc!r}")
+            print(f"       服务在跑吗？（GET {args.miplay_api}/api/health，可用 --check 探活）")
+            return {"backend": "miplay", "api": args.miplay_api, "error": repr(exc)}
     if args.backend == "mixplay":
         payload = {"action": "play_url", "target": args.target_did, "url": url}
         try:
@@ -308,8 +337,8 @@ def send_play_url(args, url: str) -> dict | None:
     try:
         from miservice.minaservice import MinaService        # type: ignore
     except Exception as exc:  # noqa: BLE001
-        print("[下发] 缺少 miservice：本 venv 只装了 soundcard/numpy/sounddevice。")
-        print("       要么用 MiXPlay 后端（--backend mixplay），要么换一个装了 miservice +")
+        print("[下发] 缺少 miservice：采集 venv 只装了 soundcard/numpy/sounddevice。")
+        print("       用 --backend miplay（默认，走 miplay-bridge 服务）或换一个装了 miservice +")
         print(f"       账号凭据的 python 环境。原始错误: {exc!r}")
         return {"backend": "mina", "error": "miservice not installed"}
     device_id = args.mina_device_id or args.target_did
@@ -319,39 +348,63 @@ def send_play_url(args, url: str) -> dict | None:
         print(f"[下发] MiNA play_by_url deviceId={device_id} url={url} => {res}")
         return {"backend": "mina", "device_id": device_id, "response": repr(res)}
     except Exception as exc:  # noqa: BLE001
-        print(f"[下发] MiNA play_by_url 失败（此路径【未验证】，API 形状需按你的 miservice 版本核对）: {exc!r}")
+        print(f"[下发] MiNA play_by_url 失败（此路径【未验证】）: {exc!r}")
         return {"backend": "mina", "device_id": device_id, "error": repr(exc)}
 
 
 def stop_target(args) -> None:
+    if args.backend == "miplay":
+        try:
+            res = miplay_api_control(args.miplay_api, args.target_did, "stop")
+            print(f"[停止] miplay-bridge stop did={args.target_did} => {res}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[停止] 失败: {exc!r}")
+        return
     if args.backend == "mixplay":
         try:
             res = mixplay_control(args.mixplay, {"action": "stop", "target": args.target_did})
             print(f"[停止] MixPlay stop did={args.target_did} => {res}")
         except Exception as exc:  # noqa: BLE001
             print(f"[停止] 失败: {exc!r}")
-    else:
-        try:
-            from miservice.minaservice import MinaService    # type: ignore
-            res = MinaService().stop(args.mina_device_id or args.target_did)
-            print(f"[停止] MiNA stop => {res}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[停止] MiNA 失败: {exc!r}")
+        return
+    try:
+        from miservice.minaservice import MinaService    # type: ignore
+        res = MinaService().stop(args.mina_device_id or args.target_did)
+        print(f"[停止] MiNA stop => {res}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[停止] MiNA 失败: {exc!r}")
 
 
 def set_volume(args, volume: int) -> None:
-    if args.backend != "mixplay":
-        print("[音量] 只有 mixplay 后端支持 set_volume")
+    """设音箱硬件音量。注意：MiXPlay 路径支持；miplay-bridge 服务当前没有该接口，会明确跳过。"""
+    if args.backend == "mixplay":
+        try:
+            res = mixplay_control(args.mixplay, {"action": "set_volume", "target": args.target_did,
+                                                 "volume": volume})
+            print(f"[音量] did={args.target_did} -> {volume}% => {res}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[音量] 失败: {exc!r}")
         return
-    try:
-        res = mixplay_control(args.mixplay, {"action": "set_volume", "target": args.target_did,
-                                             "volume": volume})
-        print(f"[音量] did={args.target_did} -> {volume}% => {res}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[音量] 失败: {exc!r}")
+    print(f"[音量] backend={args.backend} 不支持 set_volume，跳过（不动音箱硬件音量）")
 
 
 def check_control(args) -> int:
+    if args.backend == "miplay":
+        print(f"[探活] miplay-bridge {args.miplay_api} ...")
+        try:
+            with urllib.request.urlopen(f"{args.miplay_api}/api/health", timeout=5) as resp:
+                print(f"        /api/health HTTP {resp.status}: {resp.read().decode('utf-8')[:200]}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"        不可达: {exc!r}")
+            print("        -> 先起 miplay-bridge serve --port 8901")
+            return 2
+        try:
+            with urllib.request.urlopen(f"{args.miplay_api}/api/devices", timeout=5) as resp:
+                devs = json.loads(resp.read().decode("utf-8"))
+            print(f"        /api/devices => {json.dumps(devs, ensure_ascii=False)[:600]}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"        /api/devices 读取失败: {exc!r}")
+        return 0
     print(f"[探活] MiXPlay {args.mixplay} ...")
     try:
         with urllib.request.urlopen(args.mixplay, timeout=5) as resp:
@@ -414,7 +467,11 @@ def local_selftest(ring: RingBuffer, stop: threading.Event, port: int, seconds: 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="把本机 PCM 经自建 WAV 服务推给小爱音箱（零驱动 PoC）")
-    ap.add_argument("--backend", choices=("mixplay", "mina"), default="mixplay")
+    ap.add_argument("--backend", choices=("miplay", "mixplay", "mina"), default="miplay",
+                    help="miplay = miplay-bridge 自己的 Rust 服务（默认，已实测）；"
+                         "mixplay = MiXPlay 桌面端 8820；mina = miservice 直连（未验证）")
+    ap.add_argument("--miplay-api", default="http://127.0.0.1:8901",
+                    help="--backend miplay 时的服务地址")
     ap.add_argument("--mixplay", default="http://127.0.0.1:8820")
     ap.add_argument("--target-did", default=DEFAULT_DID,
                     help=f"目标音箱 did（默认 {DEFAULT_DID} = Xiaomi Sound 192.168.1.171）")
@@ -425,7 +482,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--endpoint-name", default="小米妙播设备", help="capture 源：端点名子串")
     ap.add_argument("--play-tone", type=float, default=1000.0,
                     help="capture 源：同时往该端点播测试音（虚拟端点不会物理出声）；0=不播")
-    ap.add_argument("--level", type=float, default=0.25)
+    ap.add_argument("--level", type=float, default=0.7,
+                    help="测试音振幅（默认 0.7 FS；lead 要求 ≥0.7，太轻用户听不见）")
     ap.add_argument("--wav", default=None, help="--source file 时的 WAV 路径")
     ap.add_argument("--freq", type=float, default=1000.0, help="--source tone 的频率")
     ap.add_argument("--gain", type=float, default=1.0)

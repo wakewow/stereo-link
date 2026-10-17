@@ -1,0 +1,57 @@
+﻿[
+    {
+        "Status":  "OK",
+        "FriendlyName":  "CG345UK (NVIDIA High Definition Audio)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.0.00000000}.{06283053-30A5-4AA3-BCD6-85AC77B01871}"
+    },
+    {
+        "Status":  "OK",
+        "FriendlyName":  "X41 (NVIDIA High Definition Audio)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.0.00000000}.{0E41DD27-3C6C-4109-9E69-473AC4463314}"
+    },
+    {
+        "Status":  "OK",
+        "FriendlyName":  "耳机 (Chu2 DSP)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.0.00000000}.{DE8C89D1-43D8-4AAF-85BD-8D8C5864725A}"
+    },
+    {
+        "Status":  "OK",
+        "FriendlyName":  "麦克风 (Chu2 DSP)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.1.00000000}.{1CEDFAE2-ED08-46A2-BC71-EA7B7C4673CE}"
+    },
+    {
+        "Status":  "OK",
+        "FriendlyName":  "麦克风 (Realtek High Definition Audio)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.1.00000000}.{910782AA-D704-41A2-9286-8E0A27C5DA00}"
+    },
+    {
+        "Status":  "OK",
+        "FriendlyName":  "麦克风 (Steam Streaming Microphone)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.1.00000000}.{F92F3529-3905-4108-81C3-46F5B8F0989B}"
+    },
+    {
+        "Status":  "OK",
+        "FriendlyName":  "麦克风阵列 (UU远程虚拟音频设备)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.1.00000000}.{F56543A0-2766-4E35-8BFF-D4ED54C2B684}"
+    },
+    {
+        "Status":  "OK",
+        "FriendlyName":  "扬声器 (Realtek High Definition Audio)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.0.00000000}.{F4DD190E-A380-425C-9DAE-57B7BD0A00E0}"
+    },
+    {
+        "Status":  "OK",
+        "FriendlyName":  "扬声器 (Steam Streaming Microphone)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.0.00000000}.{4F24A0B8-7AD0-4C62-8DB7-B15FBA978B01}"
+    },
+    {
+        "Status":  "OK",
+        "FriendlyName":  "扬声器 (Steam Streaming Speakers)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.0.00000000}.{4A82BBBC-667F-4A9B-B4CE-520A165E6240}"
+    },
+    {
+        "Status":  "OK",
+        "FriendlyName":  "扬声器 (UU远程虚拟音频设备)",
+        "InstanceId":  "SWD\\MMDEVAPI\\{0.0.0.00000000}.{901DB3C5-6CC6-44C8-8870-8F966F4C0E5B}"
+    }
+]

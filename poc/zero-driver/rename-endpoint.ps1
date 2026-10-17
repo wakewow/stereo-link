@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   MiPlay zero-driver PoC: rename an existing PnP audio device so that its audio
@@ -129,6 +129,25 @@ function Normalize-InstanceId([string]$raw) {
         }
     }
     return $s.Trim('\')
+}
+
+# --------------------------------------------------------------------------- #
+# native tools
+# --------------------------------------------------------------------------- #
+# Windows PowerShell 5.1 turns ANY native stderr output into a *terminating*
+# NativeCommandError while $ErrorActionPreference='Stop'. reg.exe prints
+# "The operation completed successfully." on STDERR for `import` / `delete`, so the
+# rollback used to die right after deleting the value (measured 2026-10-17 23:12 and
+# 23:15: the device name was restored but the disable/enable never ran, leaving the
+# endpoint named '扬声器 (小米妙播设备)'). Native tools therefore run with
+# $ErrorActionPreference='Continue' and are judged by their exit code only.
+function Invoke-Native([string]$exe, [string[]]$argv) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $o = & $exe @argv 2>&1 } finally { $ErrorActionPreference = $prev }
+    $code = $LASTEXITCODE
+    $textOut = (($o | ForEach-Object { "$_" }) -join "`n").Trim()
+    return [pscustomobject]@{ exit = $code; out = $textOut }
 }
 
 function Get-EnumRegPath([string]$inst) { return "$EnumSqlPrefix$inst" }
@@ -319,8 +338,8 @@ function Restart-Device([string]$inst, [int]$timeoutSec) {
     if (Get-Command Disable-PnpDevice -ErrorAction SilentlyContinue) {
         Disable-PnpDevice -InstanceId $inst -Confirm:$false -ErrorAction Stop
     } else {
-        $o = & pnputil.exe /disable-device "$inst" 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "pnputil /disable-device failed (exit $LASTEXITCODE): $o" }
+        $r = Invoke-Native 'pnputil.exe' @('/disable-device', "$inst")
+        if ($r.exit -ne 0) { throw "pnputil /disable-device failed (exit $($r.exit)): $($r.out)" }
     }
     $st = Wait-DeviceStatus $inst @('Error', 'Unknown', 'MISSING', 'Disabled') 15
     Write-Info "  after disable: status=$st"
@@ -328,8 +347,8 @@ function Restart-Device([string]$inst, [int]$timeoutSec) {
     if (Get-Command Enable-PnpDevice -ErrorAction SilentlyContinue) {
         Enable-PnpDevice -InstanceId $inst -Confirm:$false -ErrorAction Stop
     } else {
-        $o = & pnputil.exe /enable-device "$inst" 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "pnputil /enable-device failed (exit $LASTEXITCODE): $o" }
+        $r = Invoke-Native 'pnputil.exe' @('/enable-device', "$inst")
+        if ($r.exit -ne 0) { throw "pnputil /enable-device failed (exit $($r.exit)): $($r.out)" }
     }
     $st2 = Wait-DeviceStatus $inst @('OK') $timeoutSec
     Write-Info "  after enable : status=$st2"
@@ -366,8 +385,8 @@ function Export-KeyBackup([string]$inst, [string]$Label) {
     if ($safeLabel.Length -gt 40) { $safeLabel = $safeLabel.Substring(0, 40) }
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $file = Join-Path $BackupDir ("backup-Enum-{0}-{1}-{2}.reg" -f ($inst -replace '\\', '_'), $safeLabel, $stamp)
-    $out = & reg.exe export (Get-EnumRegPath $inst) "$file" /y 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "reg export failed (exit $LASTEXITCODE): $out" }
+    $r = Invoke-Native 'reg.exe' @('export', (Get-EnumRegPath $inst), "$file", '/y')
+    if ($r.exit -ne 0) { throw "reg export failed (exit $($r.exit)): $($r.out)" }
     if (-not (Test-Path -LiteralPath $file)) { throw "reg export reported success but file is missing: $file" }
     $len = (Get-Item -LiteralPath $file).Length
     if ($len -lt 100) { throw "backup file looks too small ($len bytes): $file" }
@@ -517,23 +536,23 @@ if ($PSCmdlet.ParameterSetName -eq 'Rollback') {
     # "Properties" subkey; reg.exe export skips that subkey, so the import is safe).
     $cur = Get-KeyValueSafe $psPath 'FriendlyName'
     if ($cur.exists) {
-        $out = & reg.exe delete $regPath /v FriendlyName /f 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "reg delete FriendlyName failed (exit $LASTEXITCODE): $out" }
+        $r = Invoke-Native 'reg.exe' @('delete', $regPath, '/v', 'FriendlyName', '/f')
+        if ($r.exit -ne 0) { throw "reg delete FriendlyName failed (exit $($r.exit)): $($r.out)" }
         Write-Info "deleted FriendlyName (was '$($cur.value)')"
     } else {
         Write-Info 'FriendlyName already absent'
     }
-    $out = & reg.exe import "$regFile" 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "reg import returned $LASTEXITCODE ($out) -- continuing, value-level verification below is authoritative"
+    $r = Invoke-Native 'reg.exe' @('import', "$regFile")
+    if ($r.exit -ne 0) {
+        Write-Warn "reg import returned $($r.exit) ($($r.out)) -- continuing, value-level verification below is authoritative"
     } else {
-        Write-Info "reg import: $out"
+        Write-Info "reg import: $($r.out)"
     }
     if ($backupHasFriendly) {
         $restored = Get-KeyValueSafe $psPath 'FriendlyName'
         if (-not $restored.exists -or $restored.value -ne $backupFriendlyValue) {
-            $out = & reg.exe add $regPath /v FriendlyName /t REG_SZ /d "$backupFriendlyValue" /f 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "could not restore the pre-rename FriendlyName '$backupFriendlyValue' (exit $LASTEXITCODE): $out" }
+            $r = Invoke-Native 'reg.exe' @('add', $regPath, '/v', 'FriendlyName', '/t', 'REG_SZ', '/d', "$backupFriendlyValue", '/f')
+            if ($r.exit -ne 0) { throw "could not restore the pre-rename FriendlyName '$backupFriendlyValue' (exit $($r.exit)): $($r.out)" }
             Write-Info "restored pre-rename FriendlyName: '$backupFriendlyValue'"
         } else {
             Write-Info "pre-rename FriendlyName already restored: '$backupFriendlyValue'"
@@ -542,6 +561,23 @@ if ($PSCmdlet.ParameterSetName -eq 'Rollback') {
 
     Write-Step 'restart device (disable/enable)'
     Restart-Device $inst $RestartTimeoutSec | Out-Null
+
+    # AEB does not always drop the cached endpoint interface name on the first cycle:
+    # measured 2026-10-17 23:12 -- after the registry revert, one disable/enable still left
+    # the endpoint named '扬声器 (小米妙播设备)'; a SECOND cycle restored
+    # '扬声器 (Steam Streaming Speakers)'. So retry until the endpoint names match the
+    # pre-rename names (max 3 extra cycles) instead of trusting a single refresh.
+    if ($null -ne $meta -and $null -ne $meta.before) {
+        $wantNames0 = @(@($meta.before.endpoints) | ForEach-Object { [string]$_.friendlyName })
+        for ($try = 1; $try -le 3; $try++) {
+            $nowNames0 = @(Get-AudioEndpointInfo $inst | Where-Object { $_.status } | ForEach-Object { [string]$_.friendlyName })
+            $cmp0 = Compare-StringArrays $wantNames0 $nowNames0
+            if ($cmp0.same) { break }
+            Write-Warn ("endpoint name(s) still stale before refresh #{0}: {1} -> extra disable/enable" -f $try, (@($nowNames0) -join ' | '))
+            Start-Sleep -Seconds 2
+            Restart-Device $inst $RestartTimeoutSec | Out-Null
+        }
+    }
 
     Write-Step 'verify: no residue'
     # 1) registry values == meta snapshot (if available)
@@ -561,8 +597,8 @@ if ($PSCmdlet.ParameterSetName -eq 'Rollback') {
     }
     # 2) fresh export byte-identical to backup
     $tmp = Join-Path $env:TEMP ("zero-driver-reexport-{0}.reg" -f [guid]::NewGuid().ToString('N').Substring(0, 8))
-    $out = & reg.exe export $regPath "$tmp" /y 2>&1
-    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $tmp)) {
+    $r = Invoke-Native 'reg.exe' @('export', $regPath, "$tmp", '/y')
+    if ($r.exit -eq 0 -and (Test-Path -LiteralPath $tmp)) {
         $nowSha = Get-Sha256Hex $tmp
         $same = ($nowSha -eq $backupSha)
         $results['reexport_sha256_matches_backup'] = $same
@@ -573,7 +609,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Rollback') {
         }
         Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     } else {
-        Write-Warn "could not re-export for byte comparison (exit $LASTEXITCODE)"
+        Write-Warn "could not re-export for byte comparison (exit $($r.exit))"
     }
     # 3) device name / status
     $nowState = Get-FullState $inst
@@ -724,11 +760,11 @@ if ($BackupOnly) {
 }
 
 Write-Step 'write FriendlyName'
-$out = & reg.exe add $regPath /v FriendlyName /t REG_SZ /d "$NewName" /f 2>&1
-if ($LASTEXITCODE -ne 0) {
-    throw "reg add failed (exit $LASTEXITCODE): $out`n  -> this script needs an ELEVATED shell and a device key you may write (see research/vad/rename-probe.md)."
+$r = Invoke-Native 'reg.exe' @('add', $regPath, '/v', 'FriendlyName', '/t', 'REG_SZ', '/d', "$NewName", '/f')
+if ($r.exit -ne 0) {
+    throw "reg add failed (exit $($r.exit)): $($r.out)`n  -> this script needs an ELEVATED shell and a device key you may write (see research/vad/rename-probe.md)."
 }
-Write-Info "reg add: $out"
+Write-Info "reg add: $($r.out)"
 $written = Get-KeyValueSafe $psPath 'FriendlyName'
 if (-not $written.exists -or $written.value -ne $NewName) {
     throw "read-back mismatch: expected '$NewName', got '$($written.value)'"

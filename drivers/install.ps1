@@ -94,9 +94,19 @@ Say ("render endpoints before=" + $before.renderEndpoints + "  existing Scream d
 # --------------------------------------------------------------- uninstall path
 if ($Uninstall) {
     Say '=== UNINSTALL'
-    $devs = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like '*Scream*' -or $_.FriendlyName -like '*Scream*' })
+    # A devnode must be identified by its SERVICE, not by its name: our device is
+    # ROOT\MEDIA\0001 whose friendly name is the localized "小米妙播设备", so a
+    # name-based filter alone would miss it. The service probe is wrapped in
+    # try/catch because this script runs under Set-StrictMode -Version Latest and
+    # $null.Data would otherwise abort the loop ("PropertyNotFoundStrict").
+    $devs = New-Object System.Collections.Generic.List[object]
+    foreach ($d in @(Get-PnpDevice -ErrorAction SilentlyContinue)) {
+        $svc = ''
+        try { $svc = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction Stop).Data } catch { $svc = '' }
+        if ($svc -eq 'Scream' -or $d.InstanceId -like '*Scream*' -or ("$($d.FriendlyName)" -like '*Scream*')) { $devs.Add($d) }
+    }
     foreach ($d in $devs) {
-        Run ("remove device " + $d.InstanceId) { pnputil /remove-device $d.InstanceId }
+        Run ("remove device " + $d.InstanceId + " (" + $d.FriendlyName + ")") { pnputil /remove-device $d.InstanceId }
     }
     $pkgs = @(pnputil /enum-drivers 2>&1 | Out-String)
     $oemNames = [regex]::Matches($pkgs, '(?im)^\s*(oem\d+\.inf)') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
@@ -107,6 +117,17 @@ if ($Uninstall) {
             Run ("delete driver package $oem") { pnputil /delete-driver $oem /uninstall /force }
         }
     }
+    # pnputil /delete-driver does not always delete the kernel service key: the
+    # 2026-10-17 rollback left HKLM\SYSTEM\CurrentControlSet\Services\Scream behind,
+    # so remove it explicitly and then assert the machine is back to its baseline.
+    if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Scream') {
+        Run 'delete leftover kernel service Scream' { cmd /c 'sc delete Scream 2>&1' }
+    }
+    Say '--- leftover assertions (all must be False/0)'
+    Say ("  service key present      : " + (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Scream'))
+    Say ("  drivers\Scream.sys       : " + (Test-Path (Join-Path $env:SystemRoot 'System32\drivers\Scream.sys')))
+    Say ("  DriverStore scream.inf_* : " + @(Get-ChildItem (Join-Path $env:SystemRoot 'System32\DriverStore\FileRepository') -Filter 'scream.inf_*' -ErrorAction SilentlyContinue).Count)
+    Say ("  render endpoints         : " + @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render' -ErrorAction SilentlyContinue).Count)
     if (-not $KeepCertificateOnUninstall) {
         foreach ($store in @('Root', 'TrustedPublisher')) {
             $hit = Get-ChildItem "Cert:\LocalMachine\$store" -ErrorAction SilentlyContinue | Where-Object Thumbprint -eq $thumb

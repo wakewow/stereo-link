@@ -1,0 +1,68 @@
+﻿{
+    "_about":  "MiPlay zero-driver PoC rename backup. Keep together with the .reg backup.",
+    "script":  "rename-endpoint.ps1",
+    "at":  "2026-10-17T23:11:24.4092001+08:00",
+    "renamedAt":  "2026-10-17T23:11:24.4111995+08:00",
+    "instanceId":  "ROOT\\STEAMSTREAMINGSPEAKERS\\0000",
+    "regPath":  "HKLM\\SYSTEM\\CurrentControlSet\\Enum\\ROOT\\STEAMSTREAMINGSPEAKERS\\0000",
+    "newName":  "小米妙播设备",
+    "hadFriendlyName":  false,
+    "oldFriendlyName":  null,
+    "backupSha256":  "B39290A8A12A63D9B8915A536C8FFCCC68DC08DDD749CCE1BDEE3E23AADF864A",
+    "before":  {
+                   "device":  {
+                                  "instanceId":  "ROOT\\STEAMSTREAMINGSPEAKERS\\0000",
+                                  "friendlyName":  "Steam Streaming Speakers",
+                                  "status":  "OK",
+                                  "present":  true,
+                                  "deviceClass":  "MEDIA"
+                              },
+                   "endpoints":  [
+                                     {
+                                         "flow":  "Render",
+                                         "guid":  "{4a82bbbc-667f-4a9b-b4ce-520a165e6240}",
+                                         "friendlyName":  "扬声器 (Steam Streaming Speakers)",
+                                         "status":  "OK",
+                                         "nameKind":  "扬声器",
+                                         "nameInner":  "Steam Streaming Speakers",
+                                         "threeKeys":  {
+                                                           "deviceDesc":  "扬声器",
+                                                           "ifaceName":  "Steam Streaming Speakers",
+                                                           "devIfacePath":  "{2}.\\\\?\\root#steamstreamingspeakers#0000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\wave"
+                                                       }
+                                     },
+                                     {
+                                         "flow":  "Capture",
+                                         "guid":  "{06a4c98d-4ce3-4137-9523-079effea94db}",
+                                         "friendlyName":  null,
+                                         "status":  null,
+                                         "nameKind":  "内部 AUX 插座",
+                                         "nameInner":  null,
+                                         "threeKeys":  {
+                                                           "deviceDesc":  "内部 AUX 插座",
+                                                           "ifaceName":  "Steam Streaming Speakers",
+                                                           "devIfacePath":  "{2}.\\\\?\\root#steamstreamingspeakers#0000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\wave"
+                                                       }
+                                     }
+                                 ],
+                   "enumFriendlyName":  {
+                                            "value":  null,
+                                            "exists":  false
+                                        }
+               },
+    "beforeSnapshot":  [
+                           "Capabilities|REG_DWORD|0",
+                           "ClassGUID|REG_SZ|{4d36e96c-e325-11ce-bfc1-08002be10318}",
+                           "ConfigFlags|REG_DWORD|0",
+                           "ContainerID|REG_SZ|{00000000-0000-0000-FFFF-FFFFFFFFFFFF}",
+                           "DeviceDesc|REG_SZ|@oem41.inf,%steamstreamingspeakers.devicedesc%;Steam Streaming Speakers",
+                           "Driver|REG_SZ|{4d36e96c-e325-11ce-bfc1-08002be10318}\\0010",
+                           "HardwareID|REG_MULTI_SZ|ROOT\\SteamStreamingSpeakers",
+                           "Mfg|REG_SZ|@oem41.inf,%manufacturer%;Valve Corporation Audio DDK",
+                           "Service|REG_SZ|SteamStreamingSpeakers"
+                       ],
+    "expectedEndpoints":  [
+                              "扬声器 (小米妙播设备)",
+                              "内部 AUX 插座 (小米妙播设备)"
+                          ]
+}

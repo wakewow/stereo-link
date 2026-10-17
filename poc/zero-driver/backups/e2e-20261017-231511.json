@@ -1,0 +1,47 @@
+﻿{
+    "started":  "2026-10-17T23:15:11",
+    "mode":  "GO",
+    "device":  "ROOT\\STEAMSTREAMINGSPEAKERS\\0000",
+    "new_name":  "灏忕背濡欐挱璁惧",
+    "target_did":  "934947888",
+    "seconds":  8,
+    "phases":  {
+                   "pre":  {
+                               "device_name":  "Steam Streaming Speakers",
+                               "device_status":  "OK",
+                               "endpoint_name":  "扬声器 (Steam Streaming Speakers)",
+                               "hw_friendlyname":  "\u003cabsent\u003e",
+                               "RegExport":  "D:\\Backup\\Documents\\deepseek-harness\\default-workspace\\miplay-bridge\\poc\\zero-driver\\backups\\e2e-pre-20261017-231511.reg"
+                           },
+                   "post":  {
+                                "device_name":  "灏忕背濡欐挱璁惧",
+                                "device_status":  "OK",
+                                "endpoint_name":  "扬声器 (灏忕背濡欐挱璁惧)",
+                                "hw_friendlyname":  "灏忕背濡欐挱璁惧"
+                            },
+                   "list":  {
+                                "label":  "list",
+                                "text":  " 0  [loopback]  CG345UK (NVIDIA High Definition Audio)\n 1  [loopback]  X41 (NVIDIA High Definition Audio)\n 2  [loopback]  扬声器 (灏忕背濡欐挱璁惧)\n 3  [loopback]  扬声器 (Steam Streaming Microphone)\n 4  [loopback]  扬声器 (UU远程虚拟音频设备)\n 5  [loopback]  耳机 (Chu2 DSP)\n 6  [loopback]  扬声器 (Realtek High Definition Audio)\n 7     mic     麦克风 (Chu2 DSP)\n 8     mic     麦克风 (Realtek High Definition Audio)\n 9     mic     麦克风阵列 (UU远程虚拟音频设备)\n10     mic     麦克风 (Steam Streaming Microphone)\n共 11 个 capture 端点",
+                                "exit":  0
+                            },
+                   "capture":  {
+                                   "label":  "capture",
+                                   "text":  "[端点] 选中: 扬声器 (灏忕背濡欐挱璁惧)  (loopback=True)\n[测试音] 1000Hz, 0.70 幅度 -\u003e 扬声器 (灏忕背濡欐挱璁惧)\n[采集] 44100Hz/2ch/s16le, 目标 8.0s, 增益 1.0\n[结果] {\"blocks\": 345, \"frames\": 353280, \"seconds\": 8.011, \"peak_dbfs\": -11.73, \"rms_dbfs\": -15.09, \"discontinuity_warnings\": 0, \"endpoint\": \"扬声器 (灏忕背濡欐挱璁惧)\", \"loopback\": true, \"rate\": 44100, \"channels\": 2, \"out\": null, \"gain\": 1.0, \"tone_hz\": 1000.0, \"tone_to\": null}\n[结果] 已写入 D:\\Backup\\Documents\\deepseek-harness\\default-workspace\\miplay-bridge\\poc\\zero-driver\\backups\\e2e-capture-20261017-231511.json",
+                                   "exit":  0
+                               },
+                   "speaker":  {
+                                   "label":  "push",
+                                   "text":  "本机 LAN: 192.168.1.4   服务端口: 8931\n目标音箱: did=934947888  后端=miplay\n音箱将拉取: http://192.168.1.4:8931/audio.wav\n[服务] WAV 服务已监听 0.0.0.0:8931\n[端点] 选中: 扬声器 (灏忕背濡欐挱璁惧)  (loopback=True)\n[测试音] 1000Hz, 0.70 幅度 -\u003e 扬声器 (灏忕背濡欐挱璁惧)\n[采集] 44100Hz/2ch/s16le, 目标 1.0s, 增益 1.0\n[结果] {\"blocks\": 44, \"frames\": 45056, \"seconds\": 1.022, \"peak_dbfs\": -11.73, \"rms_dbfs\": -15.13, \"discontinuity_warnings\": 0, \"endpoint\": \"扬声器 (灏忕背濡欐挱璁惧)\", \"loopback\": true, \"rate\": 44100, \"channels\": 2, \"out\": null, \"gain\": 1.0, \"tone_hz\": 1000.0, \"tone_to\": \"灏忕背濡欐挱璁惧\"}\n[端点] 选中: 扬声器 (灏忕背濡欐挱璁惧)  (loopback=True)\n[测试音] 1000Hz, 0.70 幅度 -\u003e 扬声器 (灏忕背濡欐挱璁惧)\n[防火墙] TCP 8931 入站: added\n[采集] 44100Hz/2ch/s16le, 目标 1.0s, 增益 1.0\n[下发] miplay-bridge play did=934947888 url=http://192.168.1.4:8931/audio.wav =\u003e {\u0027api\u0027: \u0027player_play_url\u0027, \u0027device\u0027: \u0027Xiaomi Sound\u0027, \u0027did\u0027: \u0027934947888\u0027, \u0027hardware\u0027: \u0027L16B\u0027, \u0027ok\u0027: True, \u0027url\u0027: \u0027http://192.168.1.4:8931/audio.wav\u0027}\n[HTTP] /audio.wav 客户端接入: 192.168.1.171\n[结果] {\"blocks\": 44, \"frames\": 45056, \"seconds\": 1.022, \"peak_dbfs\": -11.73, \"rms_dbfs\": -15.09, \"discontinuity_warnings\": 0, \"endpoint\": \"扬声器 (灏忕背濡欐挱璁惧)\", \"loopback\": true, \"rate\": 44100, \"channels\": 2, \"out\": null, \"gain\": 1.0, \"tone_hz\": 1000.0, \"tone_to\": \"灏忕背濡欐挱璁惧\"}\n[端点] 选中: 扬声器 (灏忕背濡欐挱璁惧)  (loopback=True)\n[测试音] 1000Hz, 0.70 幅度 -\u003e 扬声器 (灏忕背濡欐挱璁惧)\n[采集] 44100Hz/2ch/s16le, 目标 1.0s, 增益 1.0\n[结果] {\"blocks\": 44, \"frames\": 45056, \"seconds\": 1.022, \"peak_dbfs\": -11.73, \"rms_dbfs\": -15.14, \"discontinuity_warnings\": 0, \"endpoint\": \"扬声器 (灏忕背濡欐挱璁惧)\", \"loopback\": true, \"rate\": 44100, \"channels\": 2, \"out\": null, \"gain\": 1.0, \"tone_hz\": 1000.0, \"tone_to\": \"灏忕背濡欐挱璁惧\"}\n[端点] 选中: 扬声器 (灏忕背濡欐挱璁惧)  (loopback=True)\n[测试音] 1000Hz, 0.70 幅度 -\u003e 扬声器 (灏忕背濡欐挱璁惧)\n[采集] 44100Hz/2ch/s16le, 目标 1.0s, 增益 1.0\n[结果] {\"blocks\": 44, \"frames\": 45056, \"seconds\": 1.022, \"peak_dbfs\": -11.73, \"rms_dbfs\": -15.04, \"discontinuity_warnings\": 0, \"endpoint\": \"扬声器 (灏忕背濡欐挱璁惧)\", \"loopback\": true, \"rate\": 44100, \"channels\": 2, \"out\": null, \"gain\": 1.0, \"tone_hz\": 1000.0, \"tone_to\": \"灏忕背濡欐挱璁惧\"}\n[端点] 选中: 扬声器 (灏忕背濡欐挱璁惧)  (loopback=True)\n[测试音] 1000Hz, 0.70 幅度 -\u003e 扬声器 (灏忕背濡欐挱璁惧)\n[采集] 44100Hz/2ch/s16le, 目标 1.0s, 增益 1.0\n[结果] {\"blocks\": 44, \"frames\": 45056, \"seconds\": 1.022, \"peak_dbfs\": -11.73, \"rms_dbfs\": -15.1, \"discontinuity_warnings\": 0, \"endpoint\": \"扬声器 (灏忕背濡欐挱璁惧)\", \"loopback\": true, \"rate\": 44100, \"channels\": 2, \"out\": null, \"gain\": 1.0, \"tone_hz\": 1000.0, \"tone_to\": \"灏忕背濡欐挱璁惧\"}\n[端点] 选中: 扬声器 (灏忕背濡欐挱璁惧)  (loopback=True)\n[测试音] 1000Hz, 0.70 幅度 -\u003e 扬声器 (灏忕背濡欐挱璁惧)\n[采集] 44100Hz/2ch/s16le, 目标 0.5188608169555664s, 增益 1.0\n[结果] {\"blocks\": 22, \"frames\": 22528, \"seconds\": 0.511, \"peak_dbfs\": -11.73, \"rms_dbfs\": -14.99, \"discontinuity_warnings\": 0, \"endpoint\": \"扬声器 (灏忕背濡欐挱璁惧)\", \"loopback\": true, \"rate\": 44100, \"channels\": 2, \"out\": null, \"gain\": 1.0, \"tone_hz\": 1000.0, \"tone_to\": \"灏忕背濡欐挱璁惧\"}\n[HTTP] /audio.wav 结束: 192.168.1.171 共 712704 字节 (696.0 KB)\n[HTTP] /audio.wav 客户端接入: 192.168.1.171\n[HTTP] /audio.wav 结束: 192.168.1.171 共 0 字节 (0.0 KB)\n[HTTP] /audio.wav 客户端接入: 192.168.1.171\n[HTTP] /audio.wav 结束: 192.168.1.171 共 0 字节 (0.0 KB)\n[停止] miplay-bridge stop did=934947888 =\u003e {\u0027device\u0027: \u0027Xiaomi Sound\u0027, \u0027ok\u0027: True}\n[汇总] {\"at\": \"2026-10-17T23:15:30+0800\", \"lan_ip\": \"192.168.1.4\", \"url\": \"http://192.168.1.4:8931/audio.wav\", \"play_url\": {\"backend\": \"miplay\", \"api\": \"http://127.0.0.1:8901\", \"payload\": {\"url\": \"http://192.168.1.4:8931/audio.wav\"}, \"response\": {\"api\": \"player_play_url\", \"device\": \"Xiaomi Sound\", \"did\": \"934947888\", \"hardware\": \"L16B\", \"ok\": true, \"url\": \"http://192.168.1.4:8931/audio.wav\"}}, \"bytes_written\": 991232, \"pcm_seconds_written\": 5.619}\n[汇总] 证据已写入 D:\\Backup\\Documents\\deepseek-harness\\default-workspace\\miplay-bridge\\poc\\zero-driver\\backups\\e2e-push-20261017-231511.json",
+                                   "exit":  0
+                               },
+                   "rollback":  {
+                                    "exit":  1,
+                                    "restored_from":  "D:\\Backup\\Documents\\deepseek-harness\\default-workspace\\miplay-bridge\\poc\\zero-driver\\backups\\backup-Enum-ROOT_STEAMSTREAMINGSPEAKERS_0000-Steam_Streaming_Speakers-20261017-231514.reg",
+                                    "device_name":  "Steam Streaming Speakers",
+                                    "endpoint_name":  "扬声器 (灏忕背濡欐挱璁惧)",
+                                    "hw_friendlyname":  "\u003cabsent\u003e",
+                                    "device_status":  "OK"
+                                }
+               },
+    "finished":  "2026-10-17T23:15:48"
+}
