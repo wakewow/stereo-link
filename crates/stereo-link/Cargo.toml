@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "StereoLink 立体声链桌面面板：虚拟声卡 + 多设备左右声道合成"
+description = "StereoLink 立体声链：把本机任意音频设备组合成左右声道分别输出"
 
 [[bin]]
 name = "stereo-link"

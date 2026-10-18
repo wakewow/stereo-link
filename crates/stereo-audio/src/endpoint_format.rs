@@ -52,23 +52,21 @@ pub const COMMON_FORMATS: &[(u32, u16, u16, bool)] = &[
 
 /// Windows PCM GUID：{00000001-0000-0010-8000-00aa00389b71}
 const PCM_GUID: [u8; 16] = [
-    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b,
-    0x71,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
 ];
 
 /// IEEE float GUID：{00000003-0000-0010-8000-00aa00389b71}
 const FLOAT_GUID: [u8; 16] = [
-    0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b,
-    0x71,
+    0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
 ];
 
 fn channel_mask(channels: u16) -> u32 {
     match channels {
-        1 => 0x4,          // FRONT_CENTER
-        2 => 0x3,          // FL | FR
-        4 => 0x33,         // FL FR BL BR
-        6 => 0x3f,         // 5.1
-        8 => 0x63f,        // 7.1
+        1 => 0x4,   // FRONT_CENTER
+        2 => 0x3,   // FL | FR
+        4 => 0x33,  // FL FR BL BR
+        6 => 0x3f,  // 5.1
+        8 => 0x63f, // 7.1
         _ => 0,
     }
 }
@@ -87,7 +85,10 @@ pub fn parse_waveformat(bytes: &[u8]) -> Result<EndpointFormat> {
     let cb_size = u16::from_le_bytes([bytes[16], bytes[17]]) as usize;
     if tag == 0xFFFE {
         if bytes.len() < 18 + cb_size || cb_size < 22 {
-            bail!("WAVEFORMATEXTENSIBLE 不完整：len={}, cbSize={cb_size}", bytes.len());
+            bail!(
+                "WAVEFORMATEXTENSIBLE 不完整：len={}, cbSize={cb_size}",
+                bytes.len()
+            );
         }
         let valid_bits = u16::from_le_bytes([bytes[18], bytes[19]]);
         let mask = u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
@@ -124,7 +125,11 @@ pub fn build_waveformat_ext(
     valid_bits: u16,
     is_float: bool,
 ) -> Vec<u8> {
-    let container_bits: u16 = if is_float { 32 } else { valid_bits.next_power_of_two() };
+    let container_bits: u16 = if is_float {
+        32
+    } else {
+        valid_bits.next_power_of_two()
+    };
     let block_align = channels * container_bits / 8;
     let avg = samplerate * block_align as u32;
     let mut out = Vec::with_capacity(40);
@@ -160,8 +165,7 @@ mod win {
     };
 
     /// `CLSID_CPolicyConfigClient`：未公开接口，Windows 自己改设备格式/默认输出就用它。
-    const CLSID_CPOLICYCONFIGCLIENT: GUID =
-        GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
+    const CLSID_CPOLICYCONFIGCLIENT: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
 
     /// `IPolicyConfig`（IID 固定，方法顺序与 Windows SDK `policyconfig.h` 一致，
     /// 顺序错了会直接崩，不要调整）。只声明前 4 个方法就够用；后面还有
@@ -213,7 +217,10 @@ mod win {
         } else if hr == RPC_E_CHANGED_MODE || hr.is_ok() {
             Ok(ComScope { uninit: false })
         } else {
-            bail!("CoInitializeEx(COINIT_MULTITHREADED) 失败：0x{:08x}", hr.0 as u32)
+            bail!(
+                "CoInitializeEx(COINIT_MULTITHREADED) 失败：0x{:08x}",
+                hr.0 as u32
+            )
         }
     }
 
@@ -248,13 +255,12 @@ mod win {
         Ok(data)
     }
 
-
     /// 读取某个端点的当前默认格式。
     pub fn get_format(endpoint_id: &str) -> Result<EndpointFormat> {
         let _guard = com_scope()?;
         let device = device_by_id(endpoint_id)?;
-        let store: IPropertyStore = unsafe { device.OpenPropertyStore(STGM(0)) }
-            .context("打开端点属性存储失败")?;
+        let store: IPropertyStore =
+            unsafe { device.OpenPropertyStore(STGM(0)) }.context("打开端点属性存储失败")?;
         let bytes = read_blob(&store)?;
         parse_waveformat(&bytes)
     }
@@ -262,10 +268,9 @@ mod win {
     /// 读取某个端点当前生效的混音格式（`IPolicyConfig::GetMixFormat`）。
     pub fn get_mix_format(endpoint_id: &str) -> Result<EndpointFormat> {
         let _guard = com_scope()?;
-        let policy: IPolicyConfig = unsafe {
-            CoCreateInstance(&CLSID_CPOLICYCONFIGCLIENT, None, CLSCTX_ALL)
-        }
-        .context("创建 IPolicyConfig 失败")?;
+        let policy: IPolicyConfig =
+            unsafe { CoCreateInstance(&CLSID_CPOLICYCONFIGCLIENT, None, CLSCTX_ALL) }
+                .context("创建 IPolicyConfig 失败")?;
         let id = HSTRING::from(endpoint_id);
         let mut ptr: *mut WAVEFORMATEX = std::ptr::null_mut();
         unsafe { policy.get_mix_format(PCWSTR(id.as_ptr()), &mut ptr) }
@@ -333,8 +338,7 @@ mod win {
         let policy: IPolicyConfig =
             unsafe { CoCreateInstance(&CLSID_CPOLICYCONFIGCLIENT, None, CLSCTX_ALL) }
                 .context("创建 IPolicyConfig 失败")?;
-        let mix =
-            build_waveformat_ext(samplerate, channels, 32, true);
+        let mix = build_waveformat_ext(samplerate, channels, 32, true);
         let id = HSTRING::from(endpoint_id);
         unsafe {
             policy.set_device_format(

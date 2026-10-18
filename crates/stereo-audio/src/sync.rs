@@ -20,7 +20,7 @@
 //! * 采样率固定 [`SYNC_RATE`]（44100 Hz / 2 声道 / s16le 交错），与 crate 对外契约
 //!   一致。
 //! * 不引入任何新依赖：互相关、抛物线插值、伪随机噪声全部自己实现。
-//! * [`play_pcm_s16`](crate::playback::play_pcm_s16) 会先往 WASAPI 缓冲里预填一整块
+//! * [`play_pcm_s16`] 会先往 WASAPI 缓冲里预填一整块
 //!   静音再 `Start()`，所以真实出声时刻比调用时刻晚约 1 秒；录制窗口必须把这段
 //!   「前置静音」算进去（见 [`SyncConfig::pre_roll_ms`]）。这段延迟对左右两路是**相同
 //!   的固定值**，因此在 `delta_ms` 里自动抵消。
@@ -28,7 +28,7 @@
 //! # 本机现状（实测，2026-10-18）
 //!
 //! 本机的 **Chu2 DSP**（USB 复合设备 `VID_31B2&PID_0113` 的 MI_00，走微软通用
-//! `USBAudio.sys`；采集端点 `{1cedfae2-ed08-46a2-bc71-ea7b7c4673ce}`）**麦克风是好的**：
+//! `USBAudio.sys`；采集端点 `{11111111-2222-3333-4444-555555555555}`）**麦克风是好的**：
 //!
 //! * **独占模式**（48000 Hz / 1 ch / 16-bit，设备原生格式）：往房间里的蓝牙音箱播
 //!   1 kHz 单音，录到的频谱在 **1000.0 Hz** 处是一根尖峰（峰/中位 ≈ **7500**），
@@ -384,8 +384,16 @@ pub fn sweep_signal_banded(ms: u32, amplitude: f32, rate: u32, f0: f64, f1: f64)
     let amp = (amplitude.clamp(0.0, 1.0) as f64) * i16::MAX as f64;
     let nyq = rate as f64 * 0.45;
     let (mut lo, mut hi) = (
-        if f0.is_finite() { f0.clamp(20.0, nyq) } else { 20.0 },
-        if f1.is_finite() { f1.clamp(20.0, nyq) } else { nyq },
+        if f0.is_finite() {
+            f0.clamp(20.0, nyq)
+        } else {
+            20.0
+        },
+        if f1.is_finite() {
+            f1.clamp(20.0, nyq)
+        } else {
+            nyq
+        },
     );
     if lo > hi {
         std::mem::swap(&mut lo, &mut hi);
@@ -516,7 +524,7 @@ pub fn apply_delay_at(pcm: &[u8], delay_ms: i32, rate: u32, channels: u16) -> Re
         )));
     }
     let frame_bytes = channels as usize * 2;
-    if frame_bytes == 0 || pcm.len() % frame_bytes != 0 {
+    if frame_bytes == 0 || !pcm.len().is_multiple_of(frame_bytes) {
         return Err(AudioError::invalid(format!(
             "PCM 长度 {} 不是帧长 {frame_bytes} 的整数倍",
             pcm.len()
@@ -575,8 +583,8 @@ pub fn pcm_stats(bytes: &[u8]) -> PcmStats {
     let mut sum = 0.0f64;
     let mut peak = 0.0f64;
     let mut n = 0usize;
-    for ch in bytes.chunks_exact(2) {
-        let v = i16::from_le_bytes([ch[0], ch[1]]) as f64 / 32_768.0;
+    for ch in bytes.as_chunks::<2>().0 {
+        let v = i16::from_le_bytes(*ch) as f64 / 32_768.0;
         sum += v * v;
         peak = peak.max(v.abs());
         n += 1;
@@ -598,7 +606,7 @@ pub fn downmix_to_mono(bytes: &[u8]) -> Vec<f32> {
     let mut right = Vec::with_capacity(frames);
     let mut e_left = 0.0f64;
     let mut e_right = 0.0f64;
-    for f in bytes.chunks_exact(4) {
+    for f in bytes.as_chunks::<4>().0 {
         let a = s16_to_f32(i16::from_le_bytes([f[0], f[1]]));
         let b = s16_to_f32(i16::from_le_bytes([f[2], f[3]]));
         e_left += (a as f64) * (a as f64);
@@ -833,7 +841,14 @@ impl MicCandidate {
 pub fn classify_mic_name(name: &str) -> MicKind {
     let n = name.to_ascii_lowercase();
     let has = |keys: &[&str]| keys.iter().any(|k| n.contains(k));
-    if has(&["立体声混音", "stereo mix", "what u hear", "loopback", "回环", "监视器"]) {
+    if has(&[
+        "立体声混音",
+        "stereo mix",
+        "what u hear",
+        "loopback",
+        "回环",
+        "监视器",
+    ]) {
         MicKind::Loopback
     } else if has(&[
         "steam",
@@ -1055,7 +1070,7 @@ pub fn alignment_clicks(ms: u32, amplitude: f32) -> Vec<i16> {
     let mut start = 0usize;
     let mut k = 0usize;
     while start + click <= n {
-        let a = if k % 4 == 0 { amp } else { amp * 0.45 };
+        let a = if k.is_multiple_of(4) { amp } else { amp * 0.45 };
         for i in 0..click {
             let t = i as f64 / click as f64;
             let env = 0.5 - 0.5 * (std::f64::consts::TAU * t).cos();
@@ -1191,8 +1206,10 @@ fn s16_mono(bytes: &[u8], channels: u16) -> Vec<f32> {
     let ch = channels.max(1) as usize;
     if ch == 1 {
         return bytes
-            .chunks_exact(2)
-            .map(|c| s16_to_f32(i16::from_le_bytes([c[0], c[1]])))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| s16_to_f32(i16::from_le_bytes(*c)))
             .collect();
     }
     let frames = bytes.len() / (2 * ch);
@@ -1379,16 +1396,14 @@ pub fn capture_mono(mic_endpoint: &str, ms: u32) -> Result<CapturedAudio> {
     match capture_mono_exclusive(mic_endpoint, ms) {
         Ok(a) => Ok(a),
         Err(ex) => capture_mono_shared(mic_endpoint, ms).map_err(|sh| {
-            AudioError::invalid(format!(
-                "独占模式失败（{ex}）；共享模式也失败（{sh}）"
-            ))
+            AudioError::invalid(format!("独占模式失败（{ex}）；共享模式也失败（{sh}）"))
         }),
     }
 }
 
 /// 列出本机所有**活动**的采集端点，并给出类别与「值不值得先试」的提示。
 ///
-/// 注意 [`list_endpoints`](crate::capture::list_endpoints) 只枚举活动端点
+/// 注意 [`list_endpoints`] 只枚举活动端点
 /// （`DEVICE_STATE_ACTIVE`），所以列表里的端点 `DeviceState` 都是 1；真麦克风如果没插
 /// （state=4/8）**根本不会出现在这个列表里**——这正是「本机没有可用麦克风」最直接的
 /// 表现。列表按「可能可用 → 默认端点 → 名字」排序。
@@ -1674,13 +1689,11 @@ pub fn calibrate_pair(
 ) -> Result<SyncResult> {
     match calibrate_pair_simultaneous(mic, left_endpoint, right_endpoint, cfg) {
         Ok(r) => Ok(r),
-        Err(sim) => calibrate_pair_sequential(mic, left_endpoint, right_endpoint, cfg).map_err(
-            |seq| {
-                AudioError::invalid(format!(
-                    "同时法失败（{sim}）；依次法也失败（{seq}）"
-                ))
-            },
-        ),
+        Err(sim) => {
+            calibrate_pair_sequential(mic, left_endpoint, right_endpoint, cfg).map_err(|seq| {
+                AudioError::invalid(format!("同时法失败（{sim}）；依次法也失败（{seq}）"))
+            })
+        }
     }
 }
 
@@ -1744,9 +1757,9 @@ pub const COMB_NOTCH_RATIO: f64 = 0.7;
 
 /// 判断「哪一个峰算直达声」时，`|峰|` 至少要达到最大 `|峰|` 的这个比例。
 ///
-/// 实测本机（Chu2 DSP 线麦放在桌上、两只小米音箱在房间里）互相关曲线**不是单峰**：
+/// 实测（一只线麦放桌上、两只蓝牙音箱在房间里）互相关曲线**不是单峰**：
 /// 每个端点都有一个 +0.43 的峰和其后 ~7 ms 处一个 −0.57 的反相强反射峰。取「最大 `|峰|`」
-/// 会量到反射而不是直达声，符号还会随两次幅度涨落随机翻转（实测 5320 三次 +0.58/+0.58/−0.57）。
+/// 会量到反射而不是直达声，符号还会随两次幅度涨落随机翻转（实测某只箱三次 +0.58/+0.58/−0.57）。
 /// 所以极性判断必须用**最早的显著峰**（直达声先到）。
 pub const POLARITY_DIRECT_FRACTION: f32 = 0.3;
 
@@ -1770,8 +1783,8 @@ pub struct PolarityResult {
     pub correlation: f32,
     /// **直达声**的带符号相关：`peaks` 里最早的、`|值| ≥ POLARITY_DIRECT_FRACTION × 最大|峰|` 的那个。
     ///
-    /// 直达声总是先到（因果系统），所以它的符号才是这只箱真正的极性。实测两只小米音箱
-    /// 的 `direct` **都是正的** → 两只箱同相，没有反相抵消。
+    /// 直达声总是先到（因果系统），所以它的符号才是这只箱真正的极性。实测两只箱
+    /// 的 `direct` **都是正的** → 两箱同相，没有反相抵消。
     pub direct: f32,
     /// 直达声峰所在的滞后（ms），与 [`Self::delay_ms`] 同一坐标系。
     pub direct_ms: f64,
@@ -2008,13 +2021,7 @@ fn window_magnitude(
 
 /// 极性诊断探测信号：[`POLARITY_BAND`] 带内的升频扫频。
 pub fn polarity_probe(probe_ms: u32, amplitude: f32, rate: u32) -> Vec<i16> {
-    sweep_signal_banded(
-        probe_ms,
-        amplitude,
-        rate,
-        POLARITY_BAND.0,
-        POLARITY_BAND.1,
-    )
+    sweep_signal_banded(probe_ms, amplitude, rate, POLARITY_BAND.0, POLARITY_BAND.1)
 }
 
 /// 一次「播放 + 录音 + 带符号互相关」的公共流程（单端点）。
@@ -2118,15 +2125,19 @@ struct BothCapture {
 /// 预检一个 render 端点是否存在，避免「跑满一整轮采集才发现右箱没开机」。
 ///
 /// 两路同时播的测量每次要 30 s 以上，而且失败时只会静默录到**一只箱**、给出看起来
-/// 合理的错误结论（本机就踩过：`Xiaomi Sound-5320` 掉线时量到的是 1695 自己的桌面反射）。
+/// 合理的错误结论（有人就踩过：右箱掉线时量到的是左箱自己的桌面反射）。
 /// 所以在起播放线程之前先把两个端点都解析一遍，缺哪个立刻报哪个。
 #[cfg(windows)]
 fn ensure_render_endpoint(name: &str, role: &str) -> Result<()> {
     let _guard = ComGuard::new()?;
     let en = com::enumerator()?;
-    com::resolve(&en, &selector_for(name), DataFlow::Render).map(|_| ()).map_err(|e| {
-        AudioError::DeviceNotFound(format!("{role}端点「{name}」不可用（{e}）——设备是否已开机/重连？"))
-    })
+    com::resolve(&en, &selector_for(name), DataFlow::Render)
+        .map(|_| ())
+        .map_err(|e| {
+            AudioError::DeviceNotFound(format!(
+                "{role}端点「{name}」不可用（{e}）——设备是否已开机/重连？"
+            ))
+        })
 }
 
 /// 预检两路 render 端点。
@@ -2247,7 +2258,7 @@ fn polarity_capture_both(
 /// 麦克风采不到声音时返回 `Err`——GUI 应当先用 [`mic_health`] 拦一道。
 #[cfg(windows)]
 pub fn measure_polarity(mic: &str, endpoint: &str, cfg: &SyncConfig) -> Result<PolarityResult> {
-    let probe_ms = cfg.probe_ms.max(POLARITY_PROBE_MS).min(2_000);
+    let probe_ms = cfg.probe_ms.clamp(POLARITY_PROBE_MS, 2_000);
     Ok(polarity_capture_one(mic, endpoint, cfg, probe_ms)?.0)
 }
 
@@ -2262,7 +2273,7 @@ pub fn measure_pair_polarity(
     right: &str,
     cfg: &SyncConfig,
 ) -> Result<(PolarityResult, PolarityResult)> {
-    let probe_ms = cfg.probe_ms.max(POLARITY_PROBE_MS).min(2_000);
+    let probe_ms = cfg.probe_ms.clamp(POLARITY_PROBE_MS, 2_000);
     let l = polarity_capture_one(mic, left, cfg, probe_ms)?.0;
     let r = polarity_capture_one(mic, right, cfg, probe_ms)?.0;
     Ok((l, r))
@@ -2311,7 +2322,9 @@ impl CombVerdict {
     pub fn describe(self) -> &'static str {
         match self {
             CombVerdict::Aligned => "两路同相且到达一致：没有发现极性抵消或梳状滤波",
-            CombVerdict::Inverted => "有一只箱极性相反：居中的人声会被抵消（把这只箱的线序/相位翻转即可）",
+            CombVerdict::Inverted => {
+                "有一只箱极性相反：居中的人声会被抵消（把这只箱的线序/相位翻转即可）"
+            }
             CombVerdict::CombFiltered => "两路到达时间差明显：存在梳状滤波，居中内容被等间距挖空",
             CombVerdict::InvertedAndComb => "既有一只箱反相、又有明显到达时间差：两个问题都要修",
         }
@@ -2372,10 +2385,7 @@ impl CombResult {
             "两路同时播：峰值 {:.5} rms {:.6} | 合成峰值比 {:.3} | 能量比 {:.3}\n",
             self.both_peak_abs, self.both_rms, self.peak_ratio, self.energy_ratio
         ));
-        s.push_str(&format!(
-            "两路到达时间差：{:.3} ms\n",
-            self.offset_ms
-        ));
+        s.push_str(&format!("两路到达时间差：{:.3} ms\n", self.offset_ms));
         s.push_str(&format!(
             "梳状曲线：{} 点，谷底 {:.3} @ {:.0} Hz（{:.1} dB），峰顶 {:.3}，均值 {:.3}\n",
             self.curve.len(),
@@ -2407,6 +2417,7 @@ impl CombResult {
 /// 由三段录音（左单独 / 右单独 / 两路同时）算逐频点梳状曲线。
 ///
 /// 纯函数，不碰设备，所以可以离线单测。`lag_*` 是各自录音里探测信号的到达位置（采样点）。
+#[allow(clippy::too_many_arguments)]
 fn comb_curve_from(
     cap_l: &[f32],
     rate_l: u32,
@@ -2463,12 +2474,7 @@ fn comb_curve_from(
 /// 探测信号长度用 `cfg.probe_ms` 夹到 600~2000 ms：太短的扫频速率太高，分析窗内干涉相位
 /// 会转过去，梳状曲线就糊了。
 #[cfg(windows)]
-pub fn measure_comb(
-    mic: &str,
-    left: &str,
-    right: &str,
-    cfg: &SyncConfig,
-) -> Result<CombResult> {
+pub fn measure_comb(mic: &str, left: &str, right: &str, cfg: &SyncConfig) -> Result<CombResult> {
     let probe_ms = cfg.probe_ms.clamp(600, 2_000);
     let (pl, cap_l) = polarity_capture_one(mic, left, cfg, probe_ms)?;
     let (pr, cap_r) = polarity_capture_one(mic, right, cfg, probe_ms)?;
@@ -2812,6 +2818,7 @@ fn play_pair_capture(
 /// 注意：这只在**两路确实在时间上重叠**时才有意义。若两路的绝对延迟差远大于扫描范围
 /// （先用 [`measure_comb`] 的 `both_peaks` 确认），整个扫描会是一条平线。
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 pub fn scan_alignment(
     mic: &str,
     left_endpoint: &str,
@@ -2861,8 +2868,16 @@ pub fn scan_alignment(
         } else {
             (0, (-d).round() as i32)
         };
-        let cap = play_pair_capture(mic, left_endpoint, right_endpoint, &mono, ld, rd, capture_ms)?
-            .captured;
+        let cap = play_pair_capture(
+            mic,
+            left_endpoint,
+            right_endpoint,
+            &mono,
+            ld,
+            rd,
+            capture_ms,
+        )?
+        .captured;
         let rate = cap.rate.max(1);
         let (tone, at) = best_tone_window(&cap.samples, rate, tone_hz, win);
         points.push(AlignPoint {
@@ -3102,7 +3117,11 @@ mod tests {
     /// 给信号加上指定 SNR 的高斯-ish（均匀）噪声。
     fn add_noise(signal: &[f32], snr_db: f64, seed: u64) -> Vec<f32> {
         let n = signal.len().max(1) as f64;
-        let power: f64 = signal.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>() / n;
+        let power: f64 = signal
+            .iter()
+            .map(|x| (*x as f64) * (*x as f64))
+            .sum::<f64>()
+            / n;
         let noise_power = power / 10f64.powf(snr_db / 10.0);
         let scale = noise_power.sqrt() as f32;
         let mut rng = Lcg::new(seed);
@@ -3158,7 +3177,9 @@ mod tests {
         );
 
         // 幅度为 0 时应当全零（measure_one 会据此报错）
-        assert!(probe_signal(SyncProbe::Sweep, 20, 0.0).iter().all(|v| *v == 0));
+        assert!(probe_signal(SyncProbe::Sweep, 20, 0.0)
+            .iter()
+            .all(|v| *v == 0));
 
         // 非法 ms 会被夹住而不是 panic
         assert!(!probe_signal(SyncProbe::Sweep, 0, 1.0).is_empty());
@@ -3170,7 +3191,10 @@ mod tests {
             assert_eq!(SyncProbe::from_str_opt(kind.as_str()), Some(kind));
         }
         assert_eq!(SyncProbe::from_str_opt("SWEEP"), Some(SyncProbe::Sweep));
-        assert_eq!(SyncProbe::from_str_opt("clicktrain"), Some(SyncProbe::ClickTrain));
+        assert_eq!(
+            SyncProbe::from_str_opt("clicktrain"),
+            Some(SyncProbe::ClickTrain)
+        );
         assert_eq!(SyncProbe::from_str_opt("nope"), None);
     }
 
@@ -3251,7 +3275,10 @@ mod tests {
         assert_eq!(up.len(), (SYNC_RATE as usize * 50) / 1000);
         // 超出奈奎斯特/低于 20 Hz 会被夹住而不是产生 NaN
         let weird = sweep_signal_banded(20, 0.8, SYNC_RATE, -5_000.0, 1e9);
-        assert!(weird.iter().all(|v| *v != i16::MIN), "夹取后不该出现饱和异常值");
+        assert!(
+            weird.iter().all(|v| *v != i16::MIN),
+            "夹取后不该出现饱和异常值"
+        );
         assert_eq!(weird.len(), (SYNC_RATE as usize * 20) / 1000);
     }
 
@@ -3310,7 +3337,7 @@ mod tests {
         // observed 比 reference 短
         assert_eq!(cross_correlate(&s, &[0.0f32; 4]), (0, 0.0));
         // 全零输入不该出 NaN
-        let c = cross_correlate_detailed(&vec![0.0f32; 8], &vec![0.0f32; 32]);
+        let c = cross_correlate_detailed(&[0.0f32; 8], &[0.0f32; 32]);
         assert!(c.peak.is_finite() && c.lag_sub.is_finite());
     }
 
@@ -3385,14 +3412,23 @@ mod tests {
     #[test]
     fn mic_verdict_thresholds() {
         assert_eq!(classify_mic_level(-20.0, 1000), MicVerdict::Signal);
-        assert_eq!(classify_mic_level(MIC_SIGNAL_DBFS + 0.1, 1000), MicVerdict::Signal);
-        assert_eq!(classify_mic_level(MIC_SIGNAL_DBFS, 1000), MicVerdict::NoiseFloor);
+        assert_eq!(
+            classify_mic_level(MIC_SIGNAL_DBFS + 0.1, 1000),
+            MicVerdict::Signal
+        );
+        assert_eq!(
+            classify_mic_level(MIC_SIGNAL_DBFS, 1000),
+            MicVerdict::NoiseFloor
+        );
         // 本机 Realtek 实测 -63.1 dBFS
         assert_eq!(classify_mic_level(-63.1, 1000), MicVerdict::NoiseFloor);
         assert_eq!(classify_mic_level(MIC_NOISE_DBFS, 1000), MicVerdict::Silent);
         // 本机 Chu2 DSP 实测 -90.3 dBFS
         assert_eq!(classify_mic_level(-90.3, 1000), MicVerdict::Silent);
-        assert_eq!(classify_mic_level(f64::NEG_INFINITY, 1000), MicVerdict::Silent);
+        assert_eq!(
+            classify_mic_level(f64::NEG_INFINITY, 1000),
+            MicVerdict::Silent
+        );
         // 一个点都没拿到
         assert_eq!(classify_mic_level(-20.0, 0), MicVerdict::Unavailable);
         // 有本底噪声也能用于自动标定：设备确实在采数据，探测信号够响就能出峰。
@@ -3444,22 +3480,37 @@ mod tests {
     #[test]
     fn mic_name_classification() {
         assert_eq!(classify_mic_name("麦克风 (Chu2 DSP)"), MicKind::Physical);
-        assert_eq!(classify_mic_name("麦克风阵列 (Realtek High Definition Audio)"), MicKind::Physical);
+        assert_eq!(
+            classify_mic_name("麦克风阵列 (Realtek High Definition Audio)"),
+            MicKind::Physical
+        );
         assert_eq!(classify_mic_name("立体声混音 (Realtek)"), MicKind::Loopback);
         assert_eq!(classify_mic_name("Stereo Mix (Realtek)"), MicKind::Loopback);
-        assert_eq!(classify_mic_name("麦克风 (Steam Streaming Microphone)"), MicKind::Virtual);
-        assert_eq!(classify_mic_name("麦克风阵列 (UU远程虚拟音频设备)"), MicKind::Virtual);
+        assert_eq!(
+            classify_mic_name("麦克风 (Steam Streaming Microphone)"),
+            MicKind::Virtual
+        );
+        assert_eq!(
+            classify_mic_name("麦克风阵列 (UU远程虚拟音频设备)"),
+            MicKind::Virtual
+        );
         assert_eq!(classify_mic_name("Line In (Something)"), MicKind::Unknown);
         // 回环判定优先于「麦克风」字样
-        assert_eq!(classify_mic_name("麦克风 (立体声混音回环)"), MicKind::Loopback);
+        assert_eq!(
+            classify_mic_name("麦克风 (立体声混音回环)"),
+            MicKind::Loopback
+        );
     }
 
     #[test]
     fn selector_for_handles_guid_and_substring() {
-        assert_eq!(selector_for("麦克风"), DeviceSelector::name_contains("麦克风"));
         assert_eq!(
-            selector_for(" {1cedfae2-ed08-46a2-bc71-ea7b7c4673ce} "),
-            DeviceSelector::Id("{1cedfae2-ed08-46a2-bc71-ea7b7c4673ce}".to_string())
+            selector_for("麦克风"),
+            DeviceSelector::name_contains("麦克风")
+        );
+        assert_eq!(
+            selector_for(" {11111111-2222-3333-4444-555555555555} "),
+            DeviceSelector::Id("{11111111-2222-3333-4444-555555555555}".to_string())
         );
     }
 
@@ -3500,13 +3551,20 @@ mod tests {
         assert!(zeros > clicks.len() * 9 / 10, "静默比例太低：{zeros}");
         // 每 4 下加重一次：至少有一个明显更轻的点击
         let period = SYNC_RATE as usize * ALIGN_CLICK_PERIOD_MS as usize / 1000;
-        let first_peak = clicks[..period].iter().map(|v| v.unsigned_abs()).max().unwrap();
+        let first_peak = clicks[..period]
+            .iter()
+            .map(|v| v.unsigned_abs())
+            .max()
+            .unwrap();
         let second_peak = clicks[period..period * 2]
             .iter()
             .map(|v| v.unsigned_abs())
             .max()
             .unwrap();
-        assert!(first_peak > second_peak, "重拍应比弱拍响：{first_peak} vs {second_peak}");
+        assert!(
+            first_peak > second_peak,
+            "重拍应比弱拍响：{first_peak} vs {second_peak}"
+        );
     }
 
     #[test]
@@ -3531,10 +3589,13 @@ mod tests {
     #[test]
     fn sync_config_window_and_defaults() {
         let cfg = SyncConfig::default();
-        assert_eq!(cfg.window_ms(), cfg.pre_roll_ms + cfg.probe_ms + cfg.tail_ms);
+        assert_eq!(
+            cfg.window_ms(),
+            cfg.pre_roll_ms + cfg.probe_ms + cfg.tail_ms
+        );
         assert_eq!(cfg.probe, SyncProbe::Sweep);
 
-        let cfg = SyncConfig::new("麦克风", "Xiaomi Sound")
+        let cfg = SyncConfig::new("麦克风", "音箱 A")
             .with_probe_ms(80)
             .with_amplitude(0.5)
             .with_probe(SyncProbe::Mls)
@@ -3542,7 +3603,7 @@ mod tests {
             .with_tail_ms(200);
         assert_eq!(cfg.window_ms(), 1_500 + 80 + 200);
         assert_eq!(cfg.probe, SyncProbe::Mls);
-        assert!(cfg.describe().contains("Xiaomi Sound"));
+        assert!(cfg.describe().contains("音箱 A"));
     }
 
     // ---- 极性 / 梳状 ----

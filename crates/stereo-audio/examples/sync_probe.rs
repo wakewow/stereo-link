@@ -2,8 +2,8 @@
 //!
 //! ```text
 //! cargo run -p stereo-audio --example sync_probe -- --list
-//! cargo run -p stereo-audio --example sync_probe -- --mic 麦克风 --check --speaker "Xiaomi Sound"
-//! cargo run -p stereo-audio --example sync_probe -- --speaker "Xiaomi Sound" --loopback
+//! cargo run -p stereo-audio --example sync_probe -- --mic 麦克风 --check --speaker "音箱 A"
+//! cargo run -p stereo-audio --example sync_probe -- --speaker "音箱 A" --loopback
 //! cargo run -p stereo-audio --example sync_probe -- --mic Chu2 --volume
 //! cargo run -p stereo-audio --example sync_probe -- --mic Chu2 --volume --set 100 --unmute
 //! cargo run -p stereo-audio --example sync_probe -- --mic Chu2 --meter --seconds 15
@@ -38,11 +38,11 @@ use stereo_audio::{
 use windows::core::{IUnknown, HSTRING};
 use windows::Win32::Media::Audio::{
     IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_S_BUFFER_EMPTY,
-    WAVE_FORMAT_PCM, WAVEFORMATEX,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_S_BUFFER_EMPTY, WAVEFORMATEX,
+    WAVE_FORMAT_PCM,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, COINIT_MULTITHREADED, CLSCTX_ALL,
+    CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 
 // `IAudioEndpointVolume` / `IAudioMeterInformation` 在 windows crate 里被
@@ -72,7 +72,8 @@ unsafe trait IAudioEndpointVolumeLocal: windows::core::IUnknown {
         pguideventcontext: *const windows::core::GUID,
     ) -> windows::core::Result<()>;
     unsafe fn get_master_volume_level(&self, pfleveldb: *mut f32) -> windows::core::Result<()>;
-    unsafe fn get_master_volume_level_scalar(&self, pflevel: *mut f32) -> windows::core::Result<()>;
+    unsafe fn get_master_volume_level_scalar(&self, pflevel: *mut f32)
+        -> windows::core::Result<()>;
     unsafe fn set_channel_volume_level(
         &self,
         nchannel: u32,
@@ -129,8 +130,10 @@ unsafe trait IAudioEndpointVolumeLocal: windows::core::IUnknown {
 #[windows::core::interface("c02216f6-8c67-4b5b-9d00-d008e73e0064")]
 unsafe trait IAudioMeterInformationLocal: windows::core::IUnknown {
     unsafe fn get_peak_value(&self, pfpeak: *mut f32) -> windows::core::Result<()>;
-    unsafe fn get_metering_channel_count(&self, pnchannelcount: *mut u32)
-    -> windows::core::Result<()>;
+    unsafe fn get_metering_channel_count(
+        &self,
+        pnchannelcount: *mut u32,
+    ) -> windows::core::Result<()>;
     unsafe fn get_channels_peak_values(
         &self,
         u32channelcount: u32,
@@ -182,7 +185,7 @@ impl Stats {
         let mut peak_l = 0.0f64;
         let mut peak_r = 0.0f64;
         let mut n = 0usize;
-        for frame in bytes.chunks_exact(4) {
+        for frame in bytes.as_chunks::<4>().0 {
             let l = i16::from_le_bytes([frame[0], frame[1]]) as f64 / 32_768.0;
             let r = i16::from_le_bytes([frame[2], frame[3]]) as f64 / 32_768.0;
             sum_l += l * l;
@@ -241,8 +244,8 @@ impl LsbProfile {
         let mut distinct: Vec<i16> = Vec::new();
         let mut tiny = 0usize;
         let mut n = 0usize;
-        for s in bytes.chunks_exact(2) {
-            let v = i16::from_le_bytes([s[0], s[1]]);
+        for s in bytes.as_chunks::<2>().0 {
+            let v = i16::from_le_bytes(*s);
             min = min.min(v);
             max = max.max(v);
             if v.abs() <= 2 {
@@ -326,12 +329,7 @@ fn activate_meter(dev: &IMMDevice) -> Result<IAudioMeterInformationLocal, AnyErr
 
 // ---------------------------------------------------------------- --volume
 
-fn volume_mode(
-    mic: &str,
-    flow: DataFlow,
-    set: Option<f32>,
-    unmute: bool,
-) -> Result<(), AnyErr> {
+fn volume_mode(mic: &str, flow: DataFlow, set: Option<f32>, unmute: bool) -> Result<(), AnyErr> {
     com_init()?;
     let dev = device_by_name(mic, flow)?;
     let vol = activate_volume(&dev)?;
@@ -351,7 +349,11 @@ fn volume_mode(
         println!(
             "  GetMute       : {}  ({})",
             mute_raw != 0,
-            if mute_ok { "读取成功" } else { "读取失败" }
+            if mute_ok {
+                "读取成功"
+            } else {
+                "读取失败"
+            }
         );
         println!("  音量 (标量)   : {scalar:.4}  ({:.1} %)", scalar * 100.0);
         println!("  音量 (dB)     : {dbv:.2}");
@@ -480,13 +482,7 @@ fn meter_mode(mic: &str, seconds: f64, rate: u32) -> Result<(), AnyErr> {
 // ---------------------------------------------------------------- --exclusive
 
 /// 写一个最小 WAV 文件（PCM 整数，小端）。
-fn write_wav(
-    path: &str,
-    pcm: &[u8],
-    rate: u32,
-    channels: u16,
-    bits: u16,
-) -> Result<(), AnyErr> {
+fn write_wav(path: &str, pcm: &[u8], rate: u32, channels: u16, bits: u16) -> Result<(), AnyErr> {
     let block = channels as u32 * (bits as u32 / 8);
     let data_len = pcm.len() as u32;
     let mut out = Vec::with_capacity(44 + pcm.len());
@@ -512,6 +508,7 @@ fn write_wav(
 ///
 /// 传入 `play` 时会在后台线程同时往该 render 端点播 1 kHz 正弦，用来做「正对照」：
 /// 只有播音时录音电平明显抬升，才能证明这条采集链路真的连着物理麦克风。
+#[allow(clippy::too_many_arguments)]
 fn exclusive_mode(
     mic: &str,
     rate: u32,
@@ -677,7 +674,10 @@ fn exclusive_mode(
                 break;
             }
             let rms = (acc / cnt as f64).sqrt();
-            print!("    [{:>4.1}s] rms={rms:>8.1} peak={pk:>6}", seg as f64 / 10.0);
+            print!(
+                "    [{:>4.1}s] rms={rms:>8.1} peak={pk:>6}",
+                seg as f64 / 10.0
+            );
             if seg % 5 == 4 {
                 println!();
             }
@@ -896,7 +896,10 @@ fn calibrate_mode(
     cfg: &SyncConfig,
     sequential: bool,
 ) -> Result<(), AnyErr> {
-    println!("== 自动标定（{}）==", if sequential { "依次法" } else { "同时法" });
+    println!(
+        "== 自动标定（{}）==",
+        if sequential { "依次法" } else { "同时法" }
+    );
     println!("  麦克风：{mic}");
     println!("  左路：{left}");
     println!("  右路：{right}");
@@ -961,10 +964,7 @@ fn polarity_mode(
     let h = mic_health(mic, 1_000)?;
     println!("  {}", h.describe());
     if !h.verdict.is_usable() {
-        println!(
-            "  麦克风不可用（{}），无法做声学诊断。",
-            h.verdict.as_str()
-        );
+        println!("  麦克风不可用（{}），无法做声学诊断。", h.verdict.as_str());
         return Ok(());
     }
 
@@ -1037,9 +1037,7 @@ fn polarity_mode(
             println!("  建议：把其中一只箱的极性翻转（交换扬声器线序，或在软件里对该路取反）。")
         }
         stereo_audio::sync::CombVerdict::CombFiltered => {
-            println!(
-                "  建议：用 --calibrate 测出延迟差，再用 --clicks 手动微调到两下重合成一下。"
-            )
+            println!("  建议：用 --calibrate 测出延迟差，再用 --clicks 手动微调到两下重合成一下。")
         }
         stereo_audio::sync::CombVerdict::InvertedAndComb => {
             println!("  建议：先翻转极性，再用 --clicks 对齐时间。")
@@ -1052,6 +1050,7 @@ fn polarity_mode(
 ///
 /// 直接回答「当前配置里的延迟值对不对」：合成幅度最大的那个延迟才是真正的对齐点，
 /// `--current` 给出配置里的值，会算出它比最佳点低多少 dB。
+#[allow(clippy::too_many_arguments)]
 fn align_scan_mode(
     mic: &str,
     left: &str,
@@ -1068,9 +1067,7 @@ fn align_scan_mode(
     println!("  左路：{left}");
     println!("  右路：{right}");
     println!("  {}", cfg.describe());
-    println!(
-        "  探测单音：{tone_hz} Hz | 范围 {from_ms} → {to_ms} ms | 步进 {step_ms} ms"
-    );
+    println!("  探测单音：{tone_hz} Hz | 范围 {from_ms} → {to_ms} ms | 步进 {step_ms} ms");
 
     // 单音扫描的合成幅度是 |1 + e^{j2πfΔ}|，以 1/f 为周期摆动；如果步进恰好是音调周期的
     // 整数倍（例如 1 kHz 配 2 ms 步进 = 整整 2 个周期），每个采样点落在同一相位上，

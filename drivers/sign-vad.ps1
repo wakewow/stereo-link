@@ -5,15 +5,22 @@
 # so Chinese text in a .ps1 would be mangled.  Keep every string here ASCII.
 #
 # Usage:
+#   $env:STEREOLINK_DEV_PFX_PASSWORD = '<dev-only password>'
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\sign-vad.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\sign-vad.ps1 -NewCert
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\sign-vad.ps1 -PfxPassword '<dev-only password>'
+#
+# The PFX password is never stored in this script or in the repository.  Provide it
+# with -PfxPassword or the STEREOLINK_DEV_PFX_PASSWORD environment variable.  The
+# PKCS#12 file (.pfx) and its private key must stay out of version control (they are
+# git-ignored); only the public .cer is committed for reproducible local builds.
 [CmdletBinding()]
 param(
     [string]$PkgDir   = '',
     [string]$CertDir  = '',
     [string]$Subject  = 'CN=StereoLink Virtual Audio Driver (dev)',
     [string]$Os       = '10_GE_X64',
-    [string]$PfxPassword = 'stereolink-dev-only',
+    [string]$PfxPassword = '',
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
     [switch]$NewCert,
     [switch]$SkipTimestamp
@@ -25,6 +32,12 @@ Set-StrictMode -Version Latest
 $Root = $PSScriptRoot
 if (-not $PkgDir)  { $PkgDir  = Join-Path $Root 'pkg-stereolink' }
 if (-not $CertDir) { $CertDir = Join-Path $Root 'certs' }
+
+# PFX password: never hard-coded; use -PfxPassword or the env var.
+if (-not $PfxPassword) { $PfxPassword = $env:STEREOLINK_DEV_PFX_PASSWORD }
+if (-not $PfxPassword) {
+    throw 'Missing PFX password: pass -PfxPassword or set $env:STEREOLINK_DEV_PFX_PASSWORD.'
+}
 
 $Kit      = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10'
 $BinX64   = Join-Path $Kit 'bin\10.0.26100.0\x64'

@@ -1,0 +1,74 @@
+name: 问题反馈
+description: 报告一个 bug 或异常行为（没声音、杂音、延迟、面板问题等）
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请尽量把「环境」填全 —— 这个项目对蓝牙适配器、音箱型号、采集源类型非常敏感，
+        缺了这些信息基本没法复现。**注意不要贴端点 id、设备序列号、蓝牙地址等本机专有信息。**
+  - type: input
+    id: os
+    attributes:
+      label: Windows 版本
+      description: 例如「Windows 11 24H2 build 26100.9711 x64」
+    validations:
+      required: true
+  - type: input
+    id: bluetooth
+    attributes:
+      label: 蓝牙适配器与驱动
+      description: 设备管理器 → 蓝牙 里的型号；例如「Intel(R) Wireless Bluetooth(R)，驱动 23.140.0.5」
+    validations:
+      required: false
+  - type: input
+    id: speakers
+    attributes:
+      label: 音箱/耳机型号与连接方式
+      description: 例如「2 × 小米 Sound，各自蓝牙独立连接」或「1 个蓝牙 + 1 个 USB 耳机」
+    validations:
+      required: true
+  - type: dropdown
+    id: capture
+    attributes:
+      label: 采集源
+      description: 面板「采集源」卡里选的是哪一类
+      options:
+        - 第三方虚拟声卡（UU远程 / Steam / VB-CABLE 等）
+        - 自研虚拟声卡「立体声链虚拟声卡」
+        - 没接音箱的物理输出（板载 / HDMI / DP）
+        - 其它 / 不确定
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: StereoLink 版本
+      description: 面板右下角或 exe 属性里的版本号（当前为 0.2.0）
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象与复现步骤
+      description: 做了什么 → 期望什么 → 实际发生什么
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: |
+        用 `$env:STEREOLINK_LOG_CONSOLE="1"` 启动面板，把控制台输出（或面板底部日志）贴在这里。
+        也可以贴诊断区的自检结果。
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: 截图
+      description: 直接拖进来即可（建议只截面板窗口本身）
+    validations:
+      required: false

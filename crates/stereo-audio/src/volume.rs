@@ -124,7 +124,9 @@ mod win {
     /// 「设备没有接受该值」并报错（避免 GUI 显示成功但实际没变）。
     pub fn set_endpoint_volume(selector: &str, scalar: f32) -> Result<EndpointVolume> {
         if !scalar.is_finite() {
-            return Err(AudioError::invalid(format!("音量必须是有限数值，收到 {scalar}")));
+            return Err(AudioError::invalid(format!(
+                "音量必须是有限数值，收到 {scalar}"
+            )));
         }
         let target = scalar.clamp(0.0, 1.0);
         let _com = ComGuard::new()?;

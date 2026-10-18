@@ -15,8 +15,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use stereo_audio::{
-    build_sine_s16, play_pcm_s16, selector_for, AudioCapture, CaptureConfig, CaptureMode, PcmFormat,
-    RouteChannel, RouteConfig, RouteEngineConfig, RouteEngineHandle,
+    build_sine_s16, play_pcm_s16, selector_for, AudioCapture, CaptureConfig, CaptureMode,
+    PcmFormat, RouteChannel, RouteConfig, RouteEngineConfig, RouteEngineHandle,
 };
 
 const RATE: u32 = 44_100;
@@ -45,8 +45,8 @@ fn click_train() -> Vec<u8> {
 
 fn peak_s16(bytes: &[u8]) -> f32 {
     let mut peak = 0.0_f32;
-    for pair in bytes.chunks_exact(2) {
-        let v = i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32_768.0;
+    for pair in bytes.as_chunks::<2>().0 {
+        let v = i16::from_le_bytes(*pair) as f32 / 32_768.0;
         if v.abs() > peak {
             peak = v.abs();
         }
@@ -125,10 +125,7 @@ fn run_once(source: &str, dest: &str, delay_ms: u32) -> anyhow::Result<Option<f6
     let max_peak = peaks.iter().map(|(_, p)| *p).fold(0.0_f32, f32::max);
     // 端点音量会压低回环电平，所以用「相对自己峰值的一半」判起始沿，而不是绝对阈值。
     let threshold = (max_peak * 0.5).max(0.001);
-    let onset = peaks
-        .iter()
-        .find(|(_, p)| *p > threshold)
-        .map(|(t, _)| *t);
+    let onset = peaks.iter().find(|(_, p)| *p > threshold).map(|(t, _)| *t);
     println!("  回环峰值：源 {source_peak:.4} · 目标 {max_peak:.4}（判沿阈值 {threshold:.4}）");
     source_capture.stop();
     capture.stop();
@@ -170,8 +167,7 @@ fn run_once(source: &str, dest: &str, delay_ms: u32) -> anyhow::Result<Option<f6
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let source = arg(&args, "--source").unwrap_or_else(|| "立体声链虚拟声卡".to_owned());
-    let dest = arg(&args, "--dest")
-        .unwrap_or_else(|| "Steam Streaming Microphone".to_owned());
+    let dest = arg(&args, "--dest").unwrap_or_else(|| "Steam Streaming Microphone".to_owned());
     let delays: Vec<u32> = match arg(&args, "--delay") {
         Some(v) => vec![v.parse()?],
         None => vec![0, 120, 250],

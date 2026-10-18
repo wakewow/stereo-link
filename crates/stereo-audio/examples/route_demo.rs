@@ -3,7 +3,7 @@
 //!
 //! 用法（先把要用的输出设备都连到本机）：
 //! ```powershell
-//! cargo run -p stereo-audio --example route_demo -- --left "Xiaomi Sound-1695" --right "Xiaomi Sound-5320" [--both "USB 耳机"] [--source "立体声链虚拟声卡"]
+//! cargo run -p stereo-audio --example route_demo -- --left "音箱 A" --right "音箱 B" [--both "USB 耳机"] [--source "立体声链虚拟声卡"]
 //! ```
 //!
 //! 内置测试音每段 3 秒（**直接往采集源端点播放**，这样回环采集才采得到）：
@@ -49,7 +49,7 @@ fn usage() -> &'static str {
   -h, --help        打印本帮助
 
 说明:
-  端点名按友好名子串匹配（大小写不敏感），例如 \"Xiaomi Sound-1695\"。
+  端点名按友好名子串匹配（大小写不敏感），例如 \"音箱 A\"。
   同一端点不能出现在两条启用路由里（会抢设备，validate() 会拒绝）。"
 }
 
@@ -210,9 +210,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let deadline = match options.tone_target.clone() {
         Some(target) => {
             let pcm = build_test_tone();
-            println!(
-                "测试音时间表：0–3s 左 440Hz | 3–6s 右 880Hz | 6–9s 左 440Hz + 右 880Hz"
-            );
+            println!("测试音时间表：0–3s 左 440Hz | 3–6s 右 880Hz | 6–9s 左 440Hz + 右 880Hz");
             println!(
                 "正在把测试音播到采集源端点 \"{target}\"（自动播放；听不到就检查 --source 是不是它的 render 端点）…"
             );
@@ -258,15 +256,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    match player {
-        Some(handle) => match handle.join() {
+    if let Some(handle) = player {
+        match handle.join() {
             Ok(Ok(info)) => println!("测试音播放完成: {}", info.describe()),
             Ok(Err(e)) => println!(
                 "测试音播放失败：{e}\n（可改用 --manual 手动往采集源播放声音，再看每秒打印的各路数据。）"
             ),
             Err(_) => println!("测试音播放线程 panic"),
-        },
-        None => {}
+        }
     }
 
     println!("最后快照: {}", engine.stats().describe());

@@ -8,10 +8,10 @@ members = [
 [workspace.package]
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-repository = "https://example.invalid/stereo-link"
-description = "StereoLink 立体声链：用虚拟声卡把本机任意音频设备组合成左右声道立体声"
+repository = "https://github.com/wakewow/stereo-link"
+description = "StereoLink 立体声链：把本机任意音频设备组合成左右声道，分别送给两台（或多台）音箱"
 
 [workspace.dependencies]
 anyhow = "1"

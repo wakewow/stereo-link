@@ -85,15 +85,15 @@ text(485, 284, "= Windows 默认输出", 15, ACCENT, anchor="mm")
 card(670, 180, 280, 132)
 text(810, 222, "路由引擎", 24, TEXT, bold=True, anchor="mm")
 text(810, 258, "WASAPI 回环采集", 15, MUTED, anchor="mm")
-text(810, 284, "44.1 kHz / 2 ch / 16 bit", 15, MUTED, anchor="mm")
+text(810, 284, "跟随原生格式 · 零重采样", 15, MUTED, anchor="mm")
 
 card(1060, 116, 340, 112, ACCENT)
 text(1230, 152, "设备 A · 左声道", 24, TEXT, bold=True, anchor="mm")
-text(1230, 188, "蓝牙音箱 1（Xiaomi Sound-1695）", 15, MUTED, anchor="mm")
+text(1230, 188, "蓝牙音箱 A（示例设备）", 15, MUTED, anchor="mm")
 
 card(1060, 272, 340, 112, ACCENT2)
 text(1230, 308, "设备 B · 右声道", 24, TEXT, bold=True, anchor="mm")
-text(1230, 344, "蓝牙音箱 2（Xiaomi Sound-5320）", 15, MUTED, anchor="mm")
+text(1230, 344, "蓝牙音箱 B（示例设备）", 15, MUTED, anchor="mm")
 
 arrow(300, 246, 350, 246, MUTED, "系统声音")
 arrow(620, 246, 670, 246, MUTED, "回环采集")
@@ -111,7 +111,7 @@ text(560, 490, "取决于音箱固件；软件侧已压到下限", 16, MUTED)
 text(1000, 458, "两路互相独立", 19, OK, bold=True)
 text(1000, 490, "一台掉线不影响另一台；可各自微调延迟对齐", 16, MUTED)
 
-out = Path(r"E:\AI\MiPlay\docs\images\architecture.png")
+out = Path(__file__).resolve().parents[1] / "docs" / "images" / "architecture.png"
 out.parent.mkdir(parents=True, exist_ok=True)
 img.save(out)
 print(f"SAVED {out} ({out.stat().st_size} bytes)")

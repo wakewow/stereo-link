@@ -7,7 +7,7 @@
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File switch-audio-default.ps1 -Id '{0.0.0.00000000}.{guid}'
 #   powershell -NoProfile -ExecutionPolicy Bypass -File switch-audio-default.ps1 -List
-#   powershell -NoProfile -ExecutionPolicy Bypass -File switch-audio-default.ps1 -NameLike 'Xiaomi Sound'
+#   powershell -NoProfile -ExecutionPolicy Bypass -File switch-audio-default.ps1 -NameLike 'USB Headphones'
 param(
     [string]$Id = '',
     [string]$NameLike = '',

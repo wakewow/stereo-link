@@ -124,7 +124,11 @@ impl FormatInfo {
             self.bits,
             kind,
             self.raw_format_tag,
-            if self.is_extensible { ", extensible" } else { "" },
+            if self.is_extensible {
+                ", extensible"
+            } else {
+                ""
+            },
             self.sample_format
                 .map(|s| format!(", {:?}", s))
                 .unwrap_or_default()

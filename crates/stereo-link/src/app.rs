@@ -124,7 +124,7 @@ fn fit_one_line(
     let mut hi = chars.len();
     let mut best = "…".to_owned();
     while lo < hi {
-        let mid = (lo + hi + 1) / 2;
+        let mid = (lo + hi).div_ceil(2);
         let mut candidate: String = chars[..mid].iter().collect();
         candidate.push('…');
         let galley = painter.layout_no_wrap(candidate.clone(), font.clone(), color);
@@ -272,7 +272,7 @@ fn muted(text: impl Into<String>) -> RichText {
     RichText::new(text).size(12.0).color(MUTED)
 }
 
-/// `扬声器 (Xiaomi Sound-1695)` → `Xiaomi Sound-1695`。
+/// `扬声器 (Living Room Speaker)` → `Living Room Speaker`。
 fn short_endpoint(name: &str) -> String {
     let trimmed = name.trim();
     if let (Some(open), Some(close)) = (trimmed.find('('), trimmed.rfind(')')) {
@@ -355,7 +355,8 @@ fn capture_kind(name: &str) -> CaptureKind {
     if audio_default::is_virtual_name(name) {
         return CaptureKind::Virtual;
     }
-    const BLUETOOTH_HINTS: &[&str] = &["Xiaomi Sound", "立体声组合", "Bluetooth", "蓝牙", "EDIFIER"];
+    // 通用蓝牙判据：只认系统/协议层关键词，不写死任何厂商名。
+    const BLUETOOTH_HINTS: &[&str] = &["Bluetooth", "蓝牙", "立体声组合", "Hands-Free", "A2DP"];
     if BLUETOOTH_HINTS.iter().any(|hint| name.contains(hint)) {
         return CaptureKind::Bluetooth;
     }
@@ -941,7 +942,11 @@ impl StereoLinkApp {
             config
                 .routes
                 .iter()
-                .map(|r| format!("{}={}", channel_label(r.channel), short_endpoint(&r.endpoint)))
+                .map(|r| format!(
+                    "{}={}",
+                    channel_label(r.channel),
+                    short_endpoint(&r.endpoint)
+                ))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -1177,7 +1182,8 @@ impl StereoLinkApp {
             }
         }
         // 自动选中后给一句明确的状态（只在还没体检过时写，避免覆盖体检/测量结果）。
-        if !self.sync_mic.is_empty() && (self.sync_status.is_empty() || self.sync_status == "还没选麦克风。")
+        if !self.sync_mic.is_empty()
+            && (self.sync_status.is_empty() || self.sync_status == "还没选麦克风。")
         {
             let name = self
                 .sync_mics
@@ -1257,12 +1263,11 @@ impl StereoLinkApp {
         };
         let received = rx.try_recv();
         match received {
-            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.sync_rx = None;
                 self.sync_busy = false;
                 self.sync_status = "标定线程异常退出。".to_string();
-                return;
             }
             Ok(Ok(result)) => {
                 self.sync_rx = None;
@@ -1303,10 +1308,7 @@ impl StereoLinkApp {
         }
         let left = self.cfg.split.left_endpoint.clone();
         let right = self.cfg.split.right_endpoint.clone();
-        let (l, r) = (
-            self.cfg.split.left_delay_ms,
-            self.cfg.split.right_delay_ms,
-        );
+        let (l, r) = (self.cfg.split.left_delay_ms, self.cfg.split.right_delay_ms);
         if left.is_empty() || right.is_empty() {
             self.toast("先选好左右两台音箱");
             return;
@@ -1378,8 +1380,10 @@ impl StereoLinkApp {
             Ok(v) => v,
             Err(e) => {
                 if self.volume_error.is_none() {
-                    self.volume_error =
-                        Some(format!("读不到采集源音量（{}）：{e}", short_endpoint(&source)));
+                    self.volume_error = Some(format!(
+                        "读不到采集源音量（{}）：{e}",
+                        short_endpoint(&source)
+                    ));
                     tracing::warn!("[音量] 读采集源音量失败：{e}");
                 }
                 return;
@@ -1464,9 +1468,7 @@ impl StereoLinkApp {
         }
         // Windows 的音量曲线不是简单的 20·log10（本机 0.14 对应 -29.7 dB 而不是 -17.1 dB），
         // 优先用 IAudioEndpointVolume 报的 dB，跟系统音量界面/探针保持一致。
-        let db = v
-            .db
-            .unwrap_or_else(|| 20.0 * v.scalar.max(1e-4).log10());
+        let db = v.db.unwrap_or_else(|| 20.0 * v.scalar.max(1e-4).log10());
         Some((v.scalar, db))
     }
 
@@ -1522,7 +1524,11 @@ impl StereoLinkApp {
             Some(ep) => {
                 let kind = capture_kind(&ep.name);
                 hints.push(Hint {
-                    tone: if kind.is_virtual() { Tone::Ok } else { Tone::Warn },
+                    tone: if kind.is_virtual() {
+                        Tone::Ok
+                    } else {
+                        Tone::Warn
+                    },
                     text: format!(
                         "采集源就绪：{}（{}）",
                         short_endpoint(&ep.name),
@@ -1534,6 +1540,17 @@ impl StereoLinkApp {
                 tone: Tone::Err,
                 text: "没有可用的采集源：在「采集源」卡里选一个播放端点".to_string(),
             }),
+        }
+
+        // 首次启动（没有配置文件）时左右声道是空串：明确告诉用户怎么选。
+        if self.cfg.split.left_endpoint.trim().is_empty()
+            || self.cfg.split.right_endpoint.trim().is_empty()
+        {
+            hints.push(Hint {
+                tone: Tone::Warn,
+                text: "还没选左右输出设备：在下方「本机播放设备」表里给两台设备分别点「设为左 / 设为右」"
+                    .to_string(),
+            });
         }
 
         if let Some(err) = &self.endpoints_error {
@@ -1598,7 +1615,8 @@ impl StereoLinkApp {
                 retrying = true;
                 hints.push(Hint {
                     tone: Tone::Warn,
-                    text: "还没有任何一路打开，正在后台自动重试（设备恢复后会自动开始）".to_string(),
+                    text: "还没有任何一路打开，正在后台自动重试（设备恢复后会自动开始）"
+                        .to_string(),
                 });
             }
             if hints.iter().all(|h| h.tone != Tone::Err) && !retrying {
@@ -2031,10 +2049,21 @@ impl StereoLinkApp {
             );
             let width = ui.available_width().max(120.0);
             let tip = line.clone();
-            text_cell(ui, width, 18.0, &line, FontId::proportional(12.0), MUTED, false)
-                .on_hover_text(tip);
+            text_cell(
+                ui,
+                width,
+                18.0,
+                &line,
+                FontId::proportional(12.0),
+                MUTED,
+                false,
+            )
+            .on_hover_text(tip);
             ui.add_space(4.0);
-            if ui.checkbox(&mut self.cfg.show_log, "显示日志面板").changed() {
+            if ui
+                .checkbox(&mut self.cfg.show_log, "显示日志面板")
+                .changed()
+            {
                 self.cfg.save();
             }
             let (font_line, font_tip, font_color) = match &self.font {
@@ -2149,13 +2178,61 @@ impl StereoLinkApp {
             {
                 let header_font = FontId::proportional(12.0);
                 ui.horizontal(|ui| {
-                    text_cell(ui, ROUTE_COL_CH, 18.0, "声道", header_font.clone(), MUTED, false);
-                    text_cell(ui, device_w, 18.0, "设备", header_font.clone(), MUTED, false);
-                    text_cell(ui, ROUTE_COL_LEVEL, 18.0, "电平", header_font.clone(), MUTED, false);
-                    text_cell(ui, ROUTE_COL_SENT, 18.0, "已发流", header_font.clone(), MUTED, true);
-                    text_cell(ui, ROUTE_COL_BUF, 18.0, "缓冲", header_font.clone(), MUTED, true);
-                    text_cell(ui, ROUTE_COL_UNDER, 18.0, "欠载", header_font.clone(), MUTED, true)
-                        .on_hover_text(UNDERRUN_HELP);
+                    text_cell(
+                        ui,
+                        ROUTE_COL_CH,
+                        18.0,
+                        "声道",
+                        header_font.clone(),
+                        MUTED,
+                        false,
+                    );
+                    text_cell(
+                        ui,
+                        device_w,
+                        18.0,
+                        "设备",
+                        header_font.clone(),
+                        MUTED,
+                        false,
+                    );
+                    text_cell(
+                        ui,
+                        ROUTE_COL_LEVEL,
+                        18.0,
+                        "电平",
+                        header_font.clone(),
+                        MUTED,
+                        false,
+                    );
+                    text_cell(
+                        ui,
+                        ROUTE_COL_SENT,
+                        18.0,
+                        "已发流",
+                        header_font.clone(),
+                        MUTED,
+                        true,
+                    );
+                    text_cell(
+                        ui,
+                        ROUTE_COL_BUF,
+                        18.0,
+                        "缓冲",
+                        header_font.clone(),
+                        MUTED,
+                        true,
+                    );
+                    text_cell(
+                        ui,
+                        ROUTE_COL_UNDER,
+                        18.0,
+                        "欠载",
+                        header_font.clone(),
+                        MUTED,
+                        true,
+                    )
+                    .on_hover_text(UNDERRUN_HELP);
                     text_cell(ui, ROUTE_COL_PATH, 18.0, "路径", header_font, MUTED, false);
                 });
             }
@@ -2240,8 +2317,7 @@ impl StereoLinkApp {
                     ("不联动".to_string(), MUTED)
                 };
                 ui.add(
-                    egui::Label::new(RichText::new(text).size(12.0).color(color))
-                        .selectable(false),
+                    egui::Label::new(RichText::new(text).size(12.0).color(color)).selectable(false),
                 );
                 if let Some(err) = self.volume_error.clone() {
                     ui.add(
@@ -2358,29 +2434,40 @@ impl StereoLinkApp {
             let mut action: Option<&'static str> = None;
             // 固定高度的控件行（不再 horizontal_wrapped，避免换行导致卡片高度跳）。
             ui.horizontal(|ui| {
-                cell(ui, 240.0, 26.0, Layout::left_to_right(Align::Center), |ui| {
-                    egui::ComboBox::from_id_salt("sync_mic")
-                        .width(236.0)
-                        .selected_text(if mic_label.is_empty() {
-                            RichText::new("（未选择麦克风）").color(MUTED)
-                        } else {
-                            RichText::new(clip_text(&short_endpoint(&mic_label), 26)).color(TEXT)
-                        })
-                        .show_ui(ui, |ui| {
-                            for m in &self.sync_mics {
-                                let id = m.id().to_string();
-                                let text = format!(
-                                    "{} [{}]{}",
-                                    short_endpoint(m.name()),
-                                    m.kind.as_str(),
-                                    if m.likely_usable { "" } else { " · 可能不可用" }
-                                );
-                                if ui.selectable_label(self.sync_mic == id, text).clicked() {
-                                    pick_mic = Some(id);
+                cell(
+                    ui,
+                    240.0,
+                    26.0,
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        egui::ComboBox::from_id_salt("sync_mic")
+                            .width(236.0)
+                            .selected_text(if mic_label.is_empty() {
+                                RichText::new("（未选择麦克风）").color(MUTED)
+                            } else {
+                                RichText::new(clip_text(&short_endpoint(&mic_label), 26))
+                                    .color(TEXT)
+                            })
+                            .show_ui(ui, |ui| {
+                                for m in &self.sync_mics {
+                                    let id = m.id().to_string();
+                                    let text = format!(
+                                        "{} [{}]{}",
+                                        short_endpoint(m.name()),
+                                        m.kind.as_str(),
+                                        if m.likely_usable {
+                                            ""
+                                        } else {
+                                            " · 可能不可用"
+                                        }
+                                    );
+                                    if ui.selectable_label(self.sync_mic == id, text).clicked() {
+                                        pick_mic = Some(id);
+                                    }
                                 }
-                            }
-                        });
-                });
+                            });
+                    },
+                );
                 if ui.button("刷新").clicked() {
                     action = Some("refresh");
                 }
@@ -2431,8 +2518,16 @@ impl StereoLinkApp {
                 self.sync_status.clone()
             };
             let width = ui.available_width().max(120.0);
-            text_cell(ui, width, 20.0, &status, FontId::proportional(12.0), MUTED, false)
-                .on_hover_text(status);
+            text_cell(
+                ui,
+                width,
+                20.0,
+                &status,
+                FontId::proportional(12.0),
+                MUTED,
+                false,
+            )
+            .on_hover_text(status);
 
             // 采集统计行常驻（未运行时显示占位），避免行出现/消失导致卡片高度跳。
             ui.add_space(4.0);
@@ -2458,8 +2553,16 @@ impl StereoLinkApp {
                     false,
                 );
                 let rest = ui.available_width().max(120.0);
-                text_cell(ui, rest, 20.0, &source_line, FontId::proportional(12.0), MUTED, false)
-                    .on_hover_text(source_line);
+                text_cell(
+                    ui,
+                    rest,
+                    20.0,
+                    &source_line,
+                    FontId::proportional(12.0),
+                    MUTED,
+                    false,
+                )
+                .on_hover_text(source_line);
             });
         });
     }
@@ -2964,7 +3067,7 @@ impl StereoLinkApp {
                                         fix_format = Some((
                                             ep.id.clone(),
                                             short_endpoint(&ep.name),
-                                            t.clone(),
+                                            *t,
                                         ));
                                     }
                                 }
@@ -3094,10 +3197,10 @@ mod tests {
     #[test]
     fn short_endpoint_strips_speaker_prefix() {
         assert_eq!(
-            short_endpoint("扬声器 (Xiaomi Sound-1695)"),
-            "Xiaomi Sound-1695"
+            short_endpoint("扬声器 (Living Room Speaker)"),
+            "Living Room Speaker"
         );
-        assert_eq!(short_endpoint("Xiaomi Sound-5320"), "Xiaomi Sound-5320");
+        assert_eq!(short_endpoint("Living Room Speaker"), "Living Room Speaker");
         assert_eq!(short_endpoint(" 耳机 (Chu2 DSP) "), "Chu2 DSP");
     }
 
@@ -3116,9 +3219,13 @@ mod tests {
         assert!(ignores_system_volume("扬声器 (Steam Streaming Microphone)"));
         // 自研虚拟声卡与物理输出：后置音量，系统音量本来就已经作用在采集幅度里 → 不镜像。
         assert!(!ignores_system_volume("扬声器 (立体声链虚拟声卡)"));
-        assert!(!ignores_system_volume("扬声器 (Realtek High Definition Audio)"));
-        assert!(!ignores_system_volume("CG345UK (NVIDIA High Definition Audio)"));
-        assert!(!ignores_system_volume("扬声器 (Xiaomi Sound-1695)"));
+        assert!(!ignores_system_volume(
+            "扬声器 (Realtek High Definition Audio)"
+        ));
+        assert!(!ignores_system_volume(
+            "CG345UK (NVIDIA High Definition Audio)"
+        ));
+        assert!(!ignores_system_volume("扬声器 (Living Room Speaker)"));
     }
 
     fn test_endpoint(id: &str, name: &str) -> EndpointInfo {
@@ -3149,6 +3256,9 @@ mod tests {
         );
         let renders = vec![nvidia_a.clone(), nvidia_b.clone(), virtual_card.clone()];
         assert_eq!(capture_selector_for(&nvidia_a, &renders), nvidia_a.id);
-        assert_eq!(capture_selector_for(&virtual_card, &renders), virtual_card.name);
+        assert_eq!(
+            capture_selector_for(&virtual_card, &renders),
+            virtual_card.name
+        );
     }
 }

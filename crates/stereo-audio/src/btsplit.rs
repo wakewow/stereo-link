@@ -1,6 +1,6 @@
 //! 蓝牙左右声道分离（仅 Windows）：把虚拟声卡的回环采下来，左声道送一台音箱、右声道送另一台。
 //!
-//! 用途：两台小米 Sound 各自通过蓝牙连到本机后，Windows 只能把同一条立体声混音送给
+//! 用途：两台蓝牙音箱各自通过蓝牙连到本机后，Windows 只能把同一条立体声混音送给
 //! 「一个」输出端点，没法左右分开。这里做的是：
 //!
 //! ```text
@@ -16,6 +16,9 @@
 //! 漂移（超过上限丢最老的采样，见 `queue_ms`）。
 //!
 //! 这是**用户态**实现，不碰内核驱动；虚拟声卡沿用已有的 Steam Streaming Speakers 改名端点。
+//!
+//! 需要按端点原生混音格式出流、每路可独立重试/反相时，用更通用的
+//! [`crate::route::RouteEngineHandle`]（本模块为保留旧 API 而存在）。
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -44,9 +47,9 @@ const RENDER_PREFILL_MS: u32 = 10;
 #[derive(Debug, Clone, PartialEq)]
 #[allow(missing_docs)] // 字段名即语义
 pub struct BtSplitConfig {
-    /// 左声道目标端点（友好名子串，如 `Xiaomi Sound-1695`）。
+    /// 左声道目标端点（友好名子串，如 `音箱 A`）。
     pub left_endpoint: String,
-    /// 右声道目标端点（友好名子串，如 `Xiaomi Sound-5320`）。
+    /// 右声道目标端点（友好名子串，如 `音箱 B`）。
     pub right_endpoint: String,
     /// 采集源端点（回环）。虚拟声卡友好名子串，默认 `立体声链虚拟声卡`。
     pub source_endpoint: String,
@@ -110,8 +113,10 @@ impl BtSplitConfig {
                 self.queue_ms
             )));
         }
-        for (name, ms) in [("left_delay_ms", self.left_delay_ms), ("right_delay_ms", self.right_delay_ms)]
-        {
+        for (name, ms) in [
+            ("left_delay_ms", self.left_delay_ms),
+            ("right_delay_ms", self.right_delay_ms),
+        ] {
             if ms > 1_000 {
                 return Err(AudioError::invalid(format!("{name}={ms} 超过 1000")));
             }
@@ -287,8 +292,7 @@ impl BtSplitHandle {
     /// 返回前会等两条 render 流都打开（最多 3 秒），任一端点打不开就返回错误。
     pub fn start(config: BtSplitConfig) -> Result<Self> {
         config.validate()?;
-        let queue_cap_samples =
-            (SPLIT_SAMPLE_RATE as u64 * config.queue_ms as u64 / 1000) as usize;
+        let queue_cap_samples = (SPLIT_SAMPLE_RATE as u64 * config.queue_ms as u64 / 1000) as usize;
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             threads_alive: AtomicU32::new(2),
@@ -378,12 +382,7 @@ impl BtSplitHandle {
             .lock()
             .map(|s| s.clone())
             .unwrap_or_default();
-        let source_error = self
-            .shared
-            .source_error
-            .lock()
-            .ok()
-            .and_then(|s| s.clone());
+        let source_error = self.shared.source_error.lock().ok().and_then(|s| s.clone());
         let frames = self.shared.captured_frames.load(Ordering::Relaxed);
         BtSplitStats {
             running: self.alive(),
@@ -464,12 +463,14 @@ fn sink_loop(
     .map_err(|e| AudioError::wasapi(e.code().0, "Initialize(bt-split render)"))?;
 
     let buffer_frames = unsafe { client.GetBufferSize() }
-        .map_err(|e| AudioError::wasapi(e.code().0, "GetBufferSize(bt-split)"))? as usize;
+        .map_err(|e| AudioError::wasapi(e.code().0, "GetBufferSize(bt-split)"))?
+        as usize;
     let render: IAudioRenderClient = unsafe { client.GetService() }
         .map_err(|e| AudioError::wasapi(e.code().0, "GetService(IAudioRenderClient)"))?;
 
     // 预填一点静音，避免 Start 后第一轮就欠载。
-    let prefill = (RENDER_PREFILL_MS as usize * SPLIT_SAMPLE_RATE as usize / 1000).min(buffer_frames);
+    let prefill =
+        (RENDER_PREFILL_MS as usize * SPLIT_SAMPLE_RATE as usize / 1000).min(buffer_frames);
     if prefill > 0 {
         write_silence(&render, prefill)?;
     }
@@ -479,7 +480,8 @@ fn sink_loop(
     let result = (|| -> Result<()> {
         while !shared.stop.load(Ordering::Relaxed) {
             let padding = unsafe { client.GetCurrentPadding() }
-                .map_err(|e| AudioError::wasapi(e.code().0, "GetCurrentPadding(bt-split)"))? as usize;
+                .map_err(|e| AudioError::wasapi(e.code().0, "GetCurrentPadding(bt-split)"))?
+                as usize;
             let available = buffer_frames.saturating_sub(padding);
             if available == 0 {
                 thread::sleep(Duration::from_millis(1));
@@ -546,7 +548,9 @@ fn write_silence(render: &IAudioRenderClient, frames: usize) -> Result<()> {
     let ptr = unsafe { render.GetBuffer(frames as u32) }
         .map_err(|e| AudioError::wasapi(e.code().0, "GetBuffer(silence)"))?;
     if ptr.is_null() {
-        return Err(AudioError::invalid("IAudioRenderClient::GetBuffer 返回空指针"));
+        return Err(AudioError::invalid(
+            "IAudioRenderClient::GetBuffer 返回空指针",
+        ));
     }
     unsafe { std::ptr::write_bytes(ptr, 0, frames * 4) };
     unsafe { render.ReleaseBuffer(frames as u32, 0) }
@@ -562,7 +566,9 @@ fn write_stereo(render: &IAudioRenderClient, samples: &[i16]) -> Result<()> {
     let ptr = unsafe { render.GetBuffer(frames as u32) }
         .map_err(|e| AudioError::wasapi(e.code().0, "GetBuffer(stereo)"))?;
     if ptr.is_null() {
-        return Err(AudioError::invalid("IAudioRenderClient::GetBuffer 返回空指针"));
+        return Err(AudioError::invalid(
+            "IAudioRenderClient::GetBuffer 返回空指针",
+        ));
     }
     unsafe {
         std::ptr::copy_nonoverlapping(samples.as_ptr() as *const u8, ptr, samples.len() * 2);
@@ -583,13 +589,14 @@ fn run_capture(shared: Arc<Shared>, cfg: BtSplitConfig) {
 }
 
 fn capture_loop(shared: &Arc<Shared>, cfg: &BtSplitConfig) -> Result<()> {
-    let mut capture_config = CaptureConfig::default();
-    capture_config.device = DeviceSelector::name_contains(cfg.source_endpoint.clone());
-    capture_config.mode = CaptureMode::Loopback;
-    capture_config.samplerate = SPLIT_SAMPLE_RATE;
-    capture_config.channels = 2;
-    capture_config.buffer_ms = 20;
-    capture_config.ring_seconds = 1.0;
+    let capture_config = CaptureConfig {
+        device: DeviceSelector::name_contains(cfg.source_endpoint.clone()),
+        mode: CaptureMode::Loopback,
+        samplerate: SPLIT_SAMPLE_RATE,
+        channels: 2,
+        buffer_ms: 20,
+        ring_seconds: 1.0,
+    };
 
     let mut capture = AudioCapture::new(capture_config)?;
     capture.start()?;
@@ -622,7 +629,7 @@ fn capture_loop(shared: &Arc<Shared>, cfg: &BtSplitConfig) -> Result<()> {
         let mut left: Vec<i16> = Vec::with_capacity(frames);
         let mut right: Vec<i16> = Vec::with_capacity(frames);
         let (mut peak_l, mut peak_r) = (0.0f32, 0.0f32);
-        for frame in buf[..n].chunks_exact(4) {
+        for frame in buf[..n].as_chunks::<4>().0 {
             let l = apply_gain(i16::from_le_bytes([frame[0], frame[1]]), gain);
             let r = apply_gain(i16::from_le_bytes([frame[2], frame[3]]), gain);
             peak_l = peak_l.max((l as f32 / 32768.0).abs());
@@ -639,12 +646,14 @@ fn capture_loop(shared: &Arc<Shared>, cfg: &BtSplitConfig) -> Result<()> {
         // 更新电平条：本块峰值与旧值取大（旧值每块衰减 20%，视觉上约 100 ms 的保持）。
         let prev_l = f32::from_bits(shared.level_l.load(Ordering::Relaxed));
         let prev_r = f32::from_bits(shared.level_r.load(Ordering::Relaxed));
-        shared
-            .level_l
-            .store(peak_l.max(prev_l * 0.8).min(1.0).to_bits(), Ordering::Relaxed);
-        shared
-            .level_r
-            .store(peak_r.max(prev_r * 0.8).min(1.0).to_bits(), Ordering::Relaxed);
+        shared.level_l.store(
+            peak_l.max(prev_l * 0.8).min(1.0).to_bits(),
+            Ordering::Relaxed,
+        );
+        shared.level_r.store(
+            peak_r.max(prev_r * 0.8).min(1.0).to_bits(),
+            Ordering::Relaxed,
+        );
     }
     capture.stop();
     Ok(())
@@ -664,10 +673,18 @@ mod tests {
 
     fn cfg() -> BtSplitConfig {
         BtSplitConfig {
-            left_endpoint: "Xiaomi Sound-1695".into(),
-            right_endpoint: "Xiaomi Sound-5320".into(),
+            left_endpoint: "音箱 A".into(),
+            right_endpoint: "音箱 B".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn default_config_has_empty_channels_and_fails_validation() {
+        let c = BtSplitConfig::default();
+        assert!(c.left_endpoint.is_empty());
+        assert!(c.right_endpoint.is_empty());
+        assert!(c.validate().is_err());
     }
 
     #[test]
@@ -724,6 +741,9 @@ mod tests {
         sink.push([4, 5, 6].into_iter());
         assert_eq!(sink.queue.len(), 4);
         assert_eq!(sink.dropped_samples, 2);
-        assert_eq!(sink.queue.iter().copied().collect::<Vec<_>>(), vec![3, 4, 5, 6]);
+        assert_eq!(
+            sink.queue.iter().copied().collect::<Vec<_>>(),
+            vec![3, 4, 5, 6]
+        );
     }
 }

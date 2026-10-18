@@ -1,7 +1,7 @@
 //! 中文字体：egui 自带字体没有 CJK，直接显示中文会成方块。
 //!
 //! 从 Windows 系统字体目录里挑一个中文字体塞给 egui。优先微软雅黑（比黑体好看），
-//! 退到黑体/等线/宋体；也可以用环境变量 `STEREOLINK_FONT`（兼容旧的 `MIPLAY_FONT`） 指定任意 .ttf/.ttc。
+//! 退到黑体/等线/宋体；也可以用环境变量 `STEREOLINK_FONT` 指定任意 .ttf/.ttc。
 //!
 //! 字体文件只读一次、进内存；中文 UI 的渲染质量完全取决于这一步是否成功，
 //! 所以失败时会返回 `None` 并由界面显式提示「中文可能显示为方块」。
@@ -33,7 +33,9 @@ pub fn install(ctx: &egui::Context) -> Option<String> {
     data.index = index;
     let mut fonts = egui::FontDefinitions::default();
     let name = "cjk".to_string();
-    fonts.font_data.insert(name.clone(), std::sync::Arc::new(data));
+    fonts
+        .font_data
+        .insert(name.clone(), std::sync::Arc::new(data));
     // 中文字体放最前面：缺字时再回落到 egui 自带的英文/符号字体。
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts
@@ -49,14 +51,17 @@ pub fn install(ctx: &egui::Context) -> Option<String> {
 /// 按候选表读字体，返回 (路径, 字节, 集合索引)。
 fn load_font_bytes() -> Option<(String, Vec<u8>, u32)> {
     // 显式指定优先
-    if let Some(custom) = std::env::var_os("STEREOLINK_FONT").or_else(|| std::env::var_os("MIPLAY_FONT")) {
+    if let Some(custom) = std::env::var_os("STEREOLINK_FONT") {
         let path = PathBuf::from(custom);
         match std::fs::read(&path) {
             Ok(bytes) if bytes.len() > 100_000 => {
                 return Some((path.display().to_string(), bytes, 0));
             }
             _ => {
-                tracing::warn!("STEREOLINK_FONT/ MIPLAY_FONT={} 读不到或不是有效字体，改用系统字体", path.display());
+                tracing::warn!(
+                    "STEREOLINK_FONT={} 读不到或不是有效字体，改用系统字体",
+                    path.display()
+                );
             }
         }
     }

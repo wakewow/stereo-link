@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 pub struct SplitConfig {
     /// 打开面板时自动开始（默认开：开着就有声音）。
     pub enabled: bool,
-    /// 左声道推给哪个端点（完整友好名，例如 `扬声器 (Xiaomi Sound-1695)`）。
+    /// 左声道推给哪个端点（完整友好名，例如 `扬声器 (Living Room Speaker)`）；空 = 还没选。
     pub left_endpoint: String,
-    /// 右声道推给哪个端点。
+    /// 右声道推给哪个端点；空 = 还没选。
     pub right_endpoint: String,
     /// 采集增益（1.0 = 原样）。
     pub gain: f32,
@@ -35,8 +35,8 @@ impl Default for SplitConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            left_endpoint: "Xiaomi Sound-1695".to_string(),
-            right_endpoint: "Xiaomi Sound-5320".to_string(),
+            left_endpoint: String::new(),
+            right_endpoint: String::new(),
             gain: 1.0,
             queue_ms: 40,
             left_delay_ms: 0,
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn legacy_virtual_card_section_migrates_to_capture() {
         let old = r#"{
-            "split": { "left_endpoint": "扬声器 (Xiaomi Sound-1695)" },
+            "split": { "left_endpoint": "扬声器 (Living Room Speaker)" },
             "virtual_card": {
                 "name": "我的声卡",
                 "endpoint_id": "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}",
@@ -253,5 +253,13 @@ mod tests {
         let json = serde_json::to_string(&cfg).expect("配置要能序列化");
         assert!(json.contains("\"capture\""));
         assert!(!json.contains("\"virtual_card\""));
+    }
+
+    /// 开源默认值不能写死任何本机设备名：首次启动左右声道应为空，由用户在设备表里选。
+    #[test]
+    fn default_split_has_no_hardcoded_devices() {
+        let cfg = AppConfig::default();
+        assert!(cfg.split.left_endpoint.is_empty());
+        assert!(cfg.split.right_endpoint.is_empty());
     }
 }

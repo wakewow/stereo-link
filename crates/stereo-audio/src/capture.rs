@@ -330,17 +330,18 @@ fn open_stream(cfg: &CaptureConfig) -> Result<OpenedStream> {
     let client = com::activate_client(&dev.device)?;
     let mix = com::mix_format(&client)?;
     let wfx = com::pcm16_waveformatex(requested);
-    let flags_a = base_flags
-        | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
-        | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-    let init_a = unsafe { client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags_a, hns, 0, &wfx, None) };
+    let flags_a =
+        base_flags | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    let init_a =
+        unsafe { client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags_a, hns, 0, &wfx, None) };
 
     let (client, path, converter) = match init_a {
         Ok(()) => (client, ConversionPath::WasapiAutoConvert, None),
         Err(e_a) => {
             // 路径 B：按混音格式打开，自己转
             let client_b = com::activate_client(&dev.device)?;
-            let mix_ptr = unsafe { client_b.GetMixFormat() }.map_err(|e| map_err(e, "GetMixFormat"))?;
+            let mix_ptr =
+                unsafe { client_b.GetMixFormat() }.map_err(|e| map_err(e, "GetMixFormat"))?;
             let init_b = unsafe {
                 client_b.Initialize(AUDCLNT_SHAREMODE_SHARED, base_flags, hns, 0, mix_ptr, None)
             };
@@ -370,8 +371,8 @@ fn open_stream(cfg: &CaptureConfig) -> Result<OpenedStream> {
         }
     };
 
-    let capture: IAudioCaptureClient =
-        unsafe { client.GetService() }.map_err(|e| map_err(e, "GetService(IAudioCaptureClient)"))?;
+    let capture: IAudioCaptureClient = unsafe { client.GetService() }
+        .map_err(|e| map_err(e, "GetService(IAudioCaptureClient)"))?;
     unsafe { client.Start() }.map_err(|e| map_err(e, "IAudioClient::Start"))?;
 
     let negotiated = NegotiatedFormat {
@@ -418,8 +419,11 @@ fn pump(
             let mut data: *mut u8 = std::ptr::null_mut();
             let mut frames: u32 = 0;
             let mut flags: u32 = 0;
-            unsafe { st.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None) }
-                .map_err(|e| map_err(e, "IAudioCaptureClient::GetBuffer"))?;
+            unsafe {
+                st.capture
+                    .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
+            }
+            .map_err(|e| map_err(e, "IAudioCaptureClient::GetBuffer"))?;
             let silent = flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
 
             let converted = if let Some(conv) = st.converter.as_mut() {
@@ -434,8 +438,8 @@ fn pump(
                 }
                 Ok(())
             };
-            let released =
-                unsafe { st.capture.ReleaseBuffer(frames) }.map_err(|e| map_err(e, "ReleaseBuffer"));
+            let released = unsafe { st.capture.ReleaseBuffer(frames) }
+                .map_err(|e| map_err(e, "ReleaseBuffer"));
             converted?;
             released?;
             if !out.is_empty() {
@@ -753,8 +757,14 @@ mod tests {
 
     #[test]
     fn conversion_path_labels() {
-        assert_eq!(ConversionPath::WasapiAutoConvert.as_str(), "wasapi-autoconvert");
-        assert_eq!(ConversionPath::RustSideConversion.as_str(), "rust-side-conversion");
+        assert_eq!(
+            ConversionPath::WasapiAutoConvert.as_str(),
+            "wasapi-autoconvert"
+        );
+        assert_eq!(
+            ConversionPath::RustSideConversion.as_str(),
+            "rust-side-conversion"
+        );
         assert_eq!(CaptureMode::Loopback.as_str(), "loopback");
         assert_eq!(CaptureMode::Capture.as_str(), "capture");
     }
@@ -789,16 +799,28 @@ mod tests {
         let mut bytes = Vec::new();
         // 分块喂，模拟 WASAPI 包
         for chunk in pcm.chunks(48_000 * 8 / 10) {
-            conv.convert(chunk.as_ptr(), (chunk.len() / 8) as u32, false, &mut f32buf, &mut bytes)
-                .unwrap();
+            conv.convert(
+                chunk.as_ptr(),
+                (chunk.len() / 8) as u32,
+                false,
+                &mut f32buf,
+                &mut bytes,
+            )
+            .unwrap();
             assert_eq!(bytes.len() % 4, 0);
         }
         // 注意：上面每次 convert 都会覆盖 bytes，这里单独再跑一次收全程
         let mut all = Vec::new();
         let mut conv = StreamConverter::new(&f32_mix_format(), out_fmt).unwrap();
         for chunk in pcm.chunks(48_000 * 8 / 10) {
-            conv.convert(chunk.as_ptr(), (chunk.len() / 8) as u32, false, &mut f32buf, &mut bytes)
-                .unwrap();
+            conv.convert(
+                chunk.as_ptr(),
+                (chunk.len() / 8) as u32,
+                false,
+                &mut f32buf,
+                &mut bytes,
+            )
+            .unwrap();
             all.extend_from_slice(&bytes);
         }
         let expected_bytes = 44_100 * 4;
@@ -808,8 +830,10 @@ mod tests {
             all.len()
         );
         let samples: Vec<i16> = all
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| i16::from_le_bytes(*c))
             .collect();
         let peak = samples.iter().map(|s| (*s as i32).abs()).max().unwrap();
         let expected_peak = (0.5 * 32_767.0) as i32;

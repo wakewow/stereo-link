@@ -40,7 +40,7 @@ impl SampleFormat {
     /// 按格式把整块字节解码成 f32（标称 -1.0..1.0）。
     pub fn decode_into(self, bytes: &[u8], out: &mut Vec<f32>) -> Result<()> {
         let bps = self.bytes_per_sample();
-        if bytes.len() % bps != 0 {
+        if !bytes.len().is_multiple_of(bps) {
             return Err(AudioError::invalid(format!(
                 "{:?} 数据长度 {} 不是采样字节数 {} 的整数倍",
                 self,
@@ -51,26 +51,26 @@ impl SampleFormat {
         out.reserve(bytes.len() / bps);
         match self {
             SampleFormat::S16 => {
-                for c in bytes.chunks_exact(2) {
-                    out.push(s16_to_f32(i16::from_le_bytes([c[0], c[1]])));
+                for c in bytes.as_chunks::<2>().0 {
+                    out.push(s16_to_f32(i16::from_le_bytes(*c)));
                 }
             }
             SampleFormat::S24 => {
-                for c in bytes.chunks_exact(3) {
+                for c in bytes.as_chunks::<3>().0 {
                     let v = (c[0] as i32) | ((c[1] as i32) << 8) | ((c[2] as i32) << 16);
                     let v = (v << 8) >> 8; // 符号扩展到 32 位
                     out.push(v as f32 / 8_388_608.0);
                 }
             }
             SampleFormat::S32 => {
-                for c in bytes.chunks_exact(4) {
-                    let v = i32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                for c in bytes.as_chunks::<4>().0 {
+                    let v = i32::from_le_bytes(*c);
                     out.push(v as f32 / 2_147_483_648.0);
                 }
             }
             SampleFormat::F32 => {
-                for c in bytes.chunks_exact(4) {
-                    out.push(f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+                for c in bytes.as_chunks::<4>().0 {
+                    out.push(f32::from_le_bytes(*c));
                 }
             }
         }
@@ -214,7 +214,8 @@ impl StreamResampler {
         }
         if self.is_passthrough() {
             out.extend_from_slice(&input[..frames * ch]);
-            self.last.copy_from_slice(&input[(frames - 1) * ch..frames * ch]);
+            self.last
+                .copy_from_slice(&input[(frames - 1) * ch..frames * ch]);
             self.started = true;
             return;
         }
@@ -227,8 +228,7 @@ impl StreamResampler {
                 if !self.started {
                     break;
                 }
-                for c in 0..ch {
-                    let a = self.last[c];
+                for (c, &a) in self.last.iter().enumerate() {
                     let b = input[c];
                     out.push(a + (b - a) * frac);
                 }
@@ -279,9 +279,9 @@ pub fn build_sine_s16(freq_hz: f64, seconds: f64, amplitude: f32, format: PcmFor
     let channels = format.channels.max(1) as usize;
     let mut samples = Vec::with_capacity(frames * channels);
     for i in 0..frames {
-        let s =
-            (amp * (2.0 * std::f64::consts::PI * freq_hz * i as f64 / format.samplerate as f64).sin())
-                as f32;
+        let s = (amp
+            * (2.0 * std::f64::consts::PI * freq_hz * i as f64 / format.samplerate as f64).sin())
+            as f32;
         for _ in 0..channels {
             samples.push(s);
         }
@@ -377,7 +377,9 @@ mod tests {
     fn decode_rejects_ragged_byte_counts() {
         let mut out = Vec::new();
         assert!(SampleFormat::S16.decode_into(&[0, 1, 2], &mut out).is_err());
-        assert!(SampleFormat::S24.decode_into(&[0, 1, 2, 3], &mut out).is_err());
+        assert!(SampleFormat::S24
+            .decode_into(&[0, 1, 2, 3], &mut out)
+            .is_err());
         assert!(SampleFormat::F32.decode_into(&[0, 1, 2], &mut out).is_err());
     }
 
@@ -511,8 +513,10 @@ mod tests {
         let pcm = build_sine_s16(1_000.0, 1.0, 0.4, format);
         assert_eq!(pcm.len(), 44_100 * 4);
         let samples: Vec<i16> = pcm
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| i16::from_le_bytes(*c))
             .collect();
         // 左右声道交错且相同
         let left: Vec<i16> = samples.iter().step_by(2).copied().collect();
@@ -524,7 +528,10 @@ mod tests {
         let rms = (left.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>() / left.len() as f64)
             .sqrt();
         let expected_rms = 0.4 / std::f64::consts::SQRT_2 * 32_767.0;
-        assert!((rms - expected_rms).abs() / expected_rms < 0.01, "rms={rms}");
+        assert!(
+            (rms - expected_rms).abs() / expected_rms < 0.01,
+            "rms={rms}"
+        );
         let as_f32: Vec<f32> = left.iter().map(|s| *s as f32 / 32_768.0).collect();
         let freq = estimate_frequency(&as_f32, 44_100).unwrap();
         assert!((freq - 1_000.0).abs() < 0.5, "freq={freq}");
@@ -538,8 +545,10 @@ mod tests {
         let pcm = build_sine_s16(440.0, 0.01, 2.0, format);
         assert_eq!(pcm.len(), 80 * 2);
         let peak = pcm
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]) as i32)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| i16::from_le_bytes(*c) as i32)
             .fold(0, |m, s| m.max(s.abs()));
         assert!(peak <= 32_767);
     }

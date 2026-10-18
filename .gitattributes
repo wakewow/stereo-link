@@ -1,0 +1,19 @@
+# 统一换行与文本处理，避免 Windows/Linux 之间整文件 diff。
+* text=auto eol=lf
+
+# Windows 脚本保持 CRLF（PowerShell 5.1 对无 BOM 的 UTF-8 + LF 容忍度差）
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 驱动/二进制：不要当文本处理
+*.sys binary
+*.cat binary
+*.cer binary
+*.exe binary
+*.png binary
+*.ico binary
+*.wav binary
+
+# 这些文件在 diff 里不必显示
+*.png -diff

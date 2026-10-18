@@ -32,7 +32,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$NewName,
 
-    [string]$InstanceId = 'ROOT\STEAMSTREAMINGSPEAKERS\0000',
+    [string]$InstanceId = 'ROOT\MEDIA\0001',
 
     [string]$LogFile = ''
 )
@@ -84,7 +84,8 @@ if (-not (Test-Path $backupDir)) {
     New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
 }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$backup = Join-Path $backupDir ("backup-Enum-steamstreamingspeakers-0000.{0}.reg" -f $stamp)
+$safeInstance = ($InstanceId -replace '[\\/:*?"<>|]', '_')
+$backup = Join-Path $backupDir ("backup-Enum-{0}.{1}.reg" -f $safeInstance, $stamp)
 $regPath = 'HKLM\SYSTEM\CurrentControlSet\Enum\' + $InstanceId
 & reg.exe export $regPath $backup /y *> $null
 if (Test-Path $backup) {

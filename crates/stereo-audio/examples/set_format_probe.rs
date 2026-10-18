@@ -62,18 +62,16 @@ fn main() -> anyhow::Result<()> {
                     wReserved1: 0,
                     wReserved2: 0,
                     wReserved3: 0,
-                    Anonymous:
-                        windows::Win32::System::Com::StructuredStorage::PROPVARIANT_0_0_0 {
-                            blob: windows::Win32::System::Com::BLOB {
-                                cbSize: data.len() as u32,
-                                pBlobData: mem,
-                            },
+                    Anonymous: windows::Win32::System::Com::StructuredStorage::PROPVARIANT_0_0_0 {
+                        blob: windows::Win32::System::Com::BLOB {
+                            cbSize: data.len() as u32,
+                            pBlobData: mem,
                         },
+                    },
                 },
             ),
         },
     };
-    let mut pv_out = pv_out;
     match unsafe { store.SetValue(&key, &pv_out) } {
         Ok(()) => match unsafe { store.Commit() } {
             Ok(()) => println!("SetValue + Commit = OK (identical VT_BLOB written back)"),
@@ -87,8 +85,11 @@ fn main() -> anyhow::Result<()> {
     let pv2 = unsafe { store2.GetValue(&key)? };
     let cb2 = unsafe { pv2.Anonymous.Anonymous.Anonymous.blob.cbSize };
     let data2 = unsafe {
-        std::slice::from_raw_parts(pv2.Anonymous.Anonymous.Anonymous.blob.pBlobData, cb2 as usize)
-            .to_vec()
+        std::slice::from_raw_parts(
+            pv2.Anonymous.Anonymous.Anonymous.blob.pBlobData,
+            cb2 as usize,
+        )
+        .to_vec()
     };
     println!("readback cbSize = {cb2}, same = {}", data2 == data);
     unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(id.0.cast())) };
@@ -97,7 +98,10 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(windows)]
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" ")
+    b.iter()
+        .map(|x| format!("{x:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(not(windows))]

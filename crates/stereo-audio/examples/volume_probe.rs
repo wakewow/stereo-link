@@ -12,7 +12,7 @@
 //! ```
 //!
 //! `--get/--set/--mute` 的选择器：完整端点 id（`{0.0.0.00000000}.{guid}`）、
-//! 名字子串（如 `Xiaomi Sound-1695`）、或 `default`（默认播放端点）。
+//! 名字子串（如 `音箱 A`）、或 `default`（默认播放端点）。
 //!
 //! `--save` 把当前所有活动端点的 (id, 音量标量, 静音) 存成 TSV 基线；
 //! `--restore` 按基线逐条写回并读回校验——真机实验「改完必须还原」靠它兜底。
@@ -20,9 +20,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use stereo_audio::{
-    get_endpoint_volume, list_endpoints, set_endpoint_mute, set_endpoint_volume,
-};
+use stereo_audio::{get_endpoint_volume, list_endpoints, set_endpoint_mute, set_endpoint_volume};
 
 /// 默认基线文件（相对当前工作目录，即仓库根）。
 const DEFAULT_BASELINE: &str = ".scratch/volume/baseline.txt";
@@ -58,7 +56,7 @@ fn print_usage() {
 }
 
 /// 取第 `n` 个位置参数（0 = 子命令后面的第一个参数）。
-fn arg<'a>(args: &'a [String], n: usize) -> AnyResult<&'a str> {
+fn arg(args: &[String], n: usize) -> AnyResult<&str> {
     args.get(n + 1)
         .map(String::as_str)
         .ok_or_else(|| format!("缺少第 {} 个参数", n + 1).into())
@@ -180,7 +178,8 @@ fn cmd_restore(arg: Option<&str>) -> AnyResult<()> {
             continue;
         }
         let mut parts = line.split('\t');
-        let (Some(id), Some(scalar), Some(muted)) = (parts.next(), parts.next(), parts.next()) else {
+        let (Some(id), Some(scalar), Some(muted)) = (parts.next(), parts.next(), parts.next())
+        else {
             println!("忽略格式不对的基线行：{line}");
             fail += 1;
             continue;
@@ -217,7 +216,10 @@ fn cmd_restore(arg: Option<&str>) -> AnyResult<()> {
             }
         }
     }
-    println!("还原完成：{ok} 个成功，{fail} 个失败（基线 {}）", path.display());
+    println!(
+        "还原完成：{ok} 个成功，{fail} 个失败（基线 {}）",
+        path.display()
+    );
     if fail > 0 {
         return Err(format!("{fail} 个端点没有还原成功").into());
     }

@@ -25,7 +25,10 @@ fn main() -> eframe::Result<()> {
         tracing::error!("程序崩溃：{info}");
     }));
 
-    tracing::info!("StereoLink 立体声链启动，版本 {}", env!("CARGO_PKG_VERSION"));
+    tracing::info!(
+        "StereoLink 立体声链启动，版本 {}",
+        env!("CARGO_PKG_VERSION")
+    );
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

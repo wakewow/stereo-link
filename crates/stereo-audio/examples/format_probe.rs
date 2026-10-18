@@ -3,7 +3,7 @@
 //! 用法：
 //!
 //! ```text
-//! cargo run -q -p stereo-audio --example format_probe -- --endpoint "Xiaomi Sound-1695"
+//! cargo run -q -p stereo-audio --example format_probe -- --endpoint "音箱 A"
 //! cargo run -q -p stereo-audio --example format_probe -- --endpoint default
 //! cargo run -q -p stereo-audio --example format_probe -- --all
 //! ```
@@ -104,12 +104,12 @@ fn run() -> anyhow::Result<()> {
 /// 探测一个端点并打印全部信息（单端点失败不影响 `--all` 的其它端点）。
 #[cfg(windows)]
 fn probe_endpoint(endpoint: &stereo_audio::EndpointInfo, include_shared: bool) {
+    use std::time::Instant;
     use stereo_audio::format_support::{
         format_list_summary, format_supported, shared_format_supported, shared_formats,
         supported_formats,
     };
     use stereo_audio::get_endpoint_format;
-    use std::time::Instant;
 
     println!();
     println!("== {} ==", endpoint.name);
@@ -228,7 +228,7 @@ fn print_usage() {
     println!(
         "\
 用法：
-  cargo run -q -p stereo-audio --example format_probe -- --endpoint \"Xiaomi Sound-1695\"
+  cargo run -q -p stereo-audio --example format_probe -- --endpoint \"音箱 A\"
   cargo run -q -p stereo-audio --example format_probe -- --endpoint default
   cargo run -q -p stereo-audio --example format_probe -- --all
 

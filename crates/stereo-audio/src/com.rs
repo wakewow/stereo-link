@@ -4,11 +4,11 @@
 
 use std::ffi::c_void;
 
-use windows::core::{GUID, IUnknown, PWSTR};
+use windows::core::{IUnknown, GUID, PWSTR};
 use windows::Win32::Foundation::{PROPERTYKEY, S_OK};
 use windows::Win32::Media::Audio::{
-    eCapture, eConsole, eRender, IAudioClient, IMMDevice, IMMDeviceCollection, IMMDeviceEnumerator,
-    MMDeviceEnumerator, EDataFlow, DEVICE_STATE_ACTIVE, WAVEFORMATEX,
+    eCapture, eConsole, eRender, EDataFlow, IAudioClient, IMMDevice, IMMDeviceCollection,
+    IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE, WAVEFORMATEX,
 };
 use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
 use windows::Win32::System::Com::{
@@ -64,7 +64,10 @@ impl ComGuard {
             // STA 已初始化 或 S_FALSE（本线程已初始化过）：直接用，不重复反初始化。
             Ok(Self { uninit: false })
         } else {
-            Err(AudioError::wasapi(hr.0, "CoInitializeEx(COINIT_MULTITHREADED)"))
+            Err(AudioError::wasapi(
+                hr.0,
+                "CoInitializeEx(COINIT_MULTITHREADED)",
+            ))
         }
     }
 }
@@ -95,8 +98,9 @@ pub(crate) fn default_device(en: &IMMDeviceEnumerator, flow: DataFlow) -> Result
 }
 
 pub(crate) fn devices(en: &IMMDeviceEnumerator, flow: DataFlow) -> Result<Vec<IMMDevice>> {
-    let col: IMMDeviceCollection = unsafe { en.EnumAudioEndpoints(edataflow(flow), DEVICE_STATE_ACTIVE) }
-        .map_err(|e| AudioError::wasapi(e.code().0, "EnumAudioEndpoints"))?;
+    let col: IMMDeviceCollection =
+        unsafe { en.EnumAudioEndpoints(edataflow(flow), DEVICE_STATE_ACTIVE) }
+            .map_err(|e| AudioError::wasapi(e.code().0, "EnumAudioEndpoints"))?;
     let n = unsafe { col.GetCount() }.map_err(|e| AudioError::wasapi(e.code().0, "GetCount"))?;
     let mut out = Vec::with_capacity(n as usize);
     for i in 0..n {
@@ -119,7 +123,8 @@ fn pwstr_to_string(p: PWSTR) -> Result<String> {
 }
 
 pub(crate) fn device_id(dev: &IMMDevice) -> Result<String> {
-    let p = unsafe { dev.GetId() }.map_err(|e| AudioError::wasapi(e.code().0, "IMMDevice::GetId"))?;
+    let p =
+        unsafe { dev.GetId() }.map_err(|e| AudioError::wasapi(e.code().0, "IMMDevice::GetId"))?;
     pwstr_to_string(p)
 }
 
@@ -141,7 +146,8 @@ pub(crate) fn device_name(dev: &IMMDevice) -> Result<String> {
             String::new()
         }
     };
-    unsafe { PropVariantClear(&mut pv) }.map_err(|e| AudioError::wasapi(e.code().0, "PropVariantClear"))?;
+    unsafe { PropVariantClear(&mut pv) }
+        .map_err(|e| AudioError::wasapi(e.code().0, "PropVariantClear"))?;
     Ok(name)
 }
 
@@ -255,12 +261,13 @@ pub(crate) fn resolve(
     sel: &DeviceSelector,
     flow: DataFlow,
 ) -> Result<ResolvedDevice> {
-    let default_id = default_device(en, flow).ok().and_then(|d| device_id(&d).ok());
+    let default_id = default_device(en, flow)
+        .ok()
+        .and_then(|d| device_id(&d).ok());
     match sel {
         DeviceSelector::Default => {
-            let device = default_device(en, flow).map_err(|_| {
-                AudioError::NoDefaultDevice(format!("{flow} 方向没有默认端点"))
-            })?;
+            let device = default_device(en, flow)
+                .map_err(|_| AudioError::NoDefaultDevice(format!("{flow} 方向没有默认端点")))?;
             let id = device_id(&device)?;
             let name = device_name(&device).unwrap_or_default();
             Ok(ResolvedDevice {
@@ -284,7 +291,9 @@ pub(crate) fn resolve(
                     });
                 }
             }
-            Err(AudioError::DeviceNotFound(format!("id={want}（{flow} 方向）")))
+            Err(AudioError::DeviceNotFound(format!(
+                "id={want}（{flow} 方向）"
+            )))
         }
         DeviceSelector::NameContains(_) => {
             let all = devices(en, flow).unwrap_or_default();

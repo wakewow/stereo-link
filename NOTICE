@@ -1,0 +1,73 @@
+StereoLink (立体声链)
+Copyright (c) 2026 StereoLink contributors
+
+This product includes software derived from third parties. The notices below
+are provided for attribution and do not modify the license terms of any part.
+
+--------------------------------------------------------------------------------
+1. StereoLinkVad virtual audio driver - Microsoft Public License (MS-PL)
+--------------------------------------------------------------------------------
+
+Files:
+  drivers/scream-derived/            driver source code (MS-PL)
+  drivers/pkg-stereolink/            built and signed driver package (MS-PL)
+  drivers/certs/stereolink-dev.cer   development public certificate (no license claim)
+
+The StereoLinkVad virtual audio driver is derived from Scream
+(https://github.com/duncanthrax/scream, commit d789743c248b11d1df7e5ecc546b1bc60b90cd91),
+Copyright (c) Tom Kistner 2015, which is itself derived from the Microsoft
+Virtual Audio Device Driver (MSVAD) sample, Copyright (c) Microsoft Corporation.
+
+Copyright (c) 2015 Microsoft
+Portions Copyright (C) Tom Kistner 2015
+StereoLink modifications Copyright (c) 2026 StereoLink contributors
+
+Licensed under the Microsoft Public License (MS-PL).
+A complete copy of the MS-PL is provided in LICENSES/MS-PL.txt.
+
+"Scream", "Microsoft", "Windows" and "MSVAD" are used here only for descriptive
+attribution of origin. The MS-PL does not grant any trademark license
+(MS-PL section 3(A)); nothing in this NOTICE implies endorsement by, or
+affiliation with, Microsoft Corporation or Tom Kistner.
+
+--------------------------------------------------------------------------------
+2. egui / eframe default fonts - OFL-1.1 and Ubuntu Font Licence
+--------------------------------------------------------------------------------
+
+When stereo-link.exe is built with eframe's default "default_fonts" feature,
+the executable embeds font data from the crate epaint_default_fonts 0.31.1
+(part of egui, https://github.com/emilk/egui), which is licensed under
+"(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0".
+
+Redistributing a compiled stereo-link.exe therefore requires including the
+text of the SIL Open Font License 1.1 and the Ubuntu Font Licence, together
+with this NOTICE. SIL Open Font License 1.1 text:
+https://openfontlicense.org/open-font-license-official-text/
+Ubuntu Font Licence text:
+https://ubuntu.com/legal/font-licence
+
+If the program is rebuilt without the "default_fonts" feature and without
+embedding those fonts, this notice can be dropped for that build.
+
+--------------------------------------------------------------------------------
+3. Rust dependencies
+--------------------------------------------------------------------------------
+
+stereo-link and stereo-audio depend on crates published on crates.io. They are
+all permissively licensed (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0,
+CC0-1.0, BSL-1.0, OFL-1.1 for the font data above). The exact versions are
+pinned in Cargo.lock; a per-crate notice file should be generated for binary
+releases with `cargo about generate` (or `cargo deny` for policy checks).
+
+No GPL, AGPL, LGPL-only, SSPL or other strong-copyleft code is used.
+
+--------------------------------------------------------------------------------
+4. Trademarks
+--------------------------------------------------------------------------------
+
+Microsoft, Windows, Steam, Valve, Xiaomi, MiPlay, UU远程, VoiceMeeter,
+VB-CABLE, VB-Audio, Realtek and EDIFIER are trademarks or registered trademarks
+of their respective owners. StereoLink is not affiliated with, endorsed by, or
+sponsored by any of them. These names appear only for compatibility
+description, attribution, or factual reference; no trademark license is granted
+by this project. See also the trademark statement in README.md.

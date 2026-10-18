@@ -1,7 +1,7 @@
 # StereoLink 虚拟声卡（A 路线：自研驱动）实施报告 — task-1
 
 > 作者：teammate `vad-driver`　生成时间：2026-10-18（本机时间，Asia/Shanghai）
-> 全部写入范围：`E:\AI\MiPlay\.scratch\vad\**`（仓库 `drivers/**` 未创建、未修改；`crates/**`、`scripts/**`、`docs/**`、`Cargo.toml`、根 `target/` 未改动）
+> 全部写入范围：`.scratch\vad\**`（仓库 `drivers/**` 未创建、未修改；`crates/**`、`scripts/**`、`docs/**`、`Cargo.toml`、根 `target/` 未改动）
 > 状态：**构建 ✅ / 自签 ✅ / 安装 ✅（设备节点已建）/ 加载 ❌ 预期失败**；`bcdedit /set testsigning on` **按 Lead 指令未执行**（留到重启窗口）。
 
 ---
@@ -27,7 +27,7 @@
 
 ---
 
-## 1. 交付物与证据索引（全部在 `E:\AI\MiPlay\.scratch\vad\`）
+## 1. 交付物与证据索引（全部在 `.scratch\vad\`）
 
 ```
 drivers\                       恢复出来的驱动工程（含 build.ps1、scream-derived\、out\）
@@ -41,7 +41,7 @@ install-vad.ps1                信任证书 + pnputil 暂存 + devcon 建设备 
 pkg-stereolink\                已签名驱动包（.inf / .sys / .cat / LICENSE-MS-PL.txt）
 pkg-check\                     make_package.ps1 复现产物（证明 INF 可复现）
 certs\stereolink-dev.cer       公钥证书 820 B
-certs\stereolink-dev.pfx       私钥 2,654 B（口令见 §4，仅开发用）
+certs\stereolink-dev.pfx       私钥 2,654 B（口令不入库，见 sign-vad.ps1 参数，仅开发用）
 logs\build.stereolinkvad.log   构建日志
 logs\sign-vad.log              Inf2Cat + 签名日志（Signability test: Errors None / Warnings None）
 evidence\install-vad-run.log   安装全过程原始输出（人读）
@@ -54,10 +54,10 @@ drivers.tar                    从 git 恢复用的归档（可删）
 **构建 → 签名 → 安装的可复现链**（每条都能独立重跑）：
 
 ```powershell
-cd E:\AI\MiPlay\.scratch\vad
+cd .scratch\vad
 powershell -NoProfile -ExecutionPolicy Bypass -File .\drivers\build.ps1 -Config Release -BinName StereoLinkVad
 powershell -NoProfile -ExecutionPolicy Bypass -File .\make_package.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\sign-vad.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\sign-vad.ps1    # 需 -PfxPassword 或 $env:STEREOLINK_DEV_PFX_PASSWORD
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install-vad.ps1
 ```
 
@@ -71,7 +71,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-vad.ps1
 
 | 事实 | 值 |
 |---|---|
-| 恢复方式 | `git -C E:\AI\MiPlay archive 661c59b^ drivers \| tar -x -C .scratch\vad`（注意：`git archive` + 管道给 `tar` 会报 `bad header checksum`，改用 `-o` 落盘再解包即可） |
+| 恢复方式 | `git -C . archive 661c59b^ drivers \| tar -x -C .scratch\vad`（注意：`git archive` + 管道给 `tar` 会报 `bad header checksum`，改用 `-o` 落盘再解包即可） |
 | 源码血统 | Scream（`github.com/duncanthrax/scream`，commit `d789743c248b11d1df7e5ecc546b1bc60b90cd91`）← MSVAD（微软 WDK 示例） |
 | WDK | `C:\Program Files (x86)\Windows Kits\10`，使用 **10.0.26100.0**（`bin\10.0.26100.0\x64\signtool.exe`、`bin\10.0.26100.0\x86\Inf2Cat.exe`、`Tools\10.0.26100.0\x64\devcon.exe`） |
 | 编译器 | VS 2022 BuildTools（**无 WDK VS 集成**），MSVC 14.44.35207，`build.ps1` 直接驱动 `cl.exe`/`link.exe` |
@@ -83,7 +83,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-vad.ps1
 - 结构、`Include=ks.inf,wdmaudio.inf`、`Needs=KS.Registration, WDMAUDIO.Registration`、`AddInterface` 三条、`[Strings]` 键名布局：**完全沿用上游**。
 - 标识符：`CatalogFile` → `stereolinkvad.cat`；拷贝文件 → `StereoLinkVad.sys`；服务名 → `StereoLinkVad`；硬件 id → **`*StereoLinkVad`**；`Provider`/`MfgName` → `StereoLink`；`Manufacturer` 段只保留 `NTAMD64`（上游有 4 个架构，我们只构建 x64）。
 - 显示名（这就是“改名”的全部内容）：`DeviceDesc` / `Wave.szPname` / `Topo.szPname` → `立体声链虚拟声卡`，`SvcDesc` → `立体声链虚拟声卡 (StereoLink Virtual Audio)`。
-  （恢复出来的旧副本原来是 `小米妙播设备`，上游原本是 `Scream (WDM)`。）
+  （恢复出来的旧副本原来用的是早期产品名，上游原本是 `Scream (WDM)`。）
 - 内核代码：`scream.rc` 里的产品名/描述已改；`.cpp/.h` 逻辑**未改动**。
 
 **已知小坑（建议后续修）**：`DriverVer = 02/22/2007, 6.0.6000.1` 是从上游原样继承的旧版本号。同版本号重装时 DriverStore 会判定“无更新”，`pnputil /add-driver` 可能走旧副本路径。**下次要改动驱动内容时，请同时把 `DriverVer` 递增**（例如 `10/18/2026, 1.0.0.1`），否则改完文件装上去可能还是老的。
@@ -160,9 +160,9 @@ devcon install …\StereoLinkVad.inf *StereoLinkVad
 
 **许可证文件与出处**
 
-- 上游许可证正文：`E:\AI\MiPlay\.scratch\vad\pristine\scream-derived\LICENSE-MS-PL.txt`
+- 上游许可证正文：`.scratch\vad\pristine\scream-derived\LICENSE-MS-PL.txt`
   （上游 `LICENSE` 原样；同文件也在 `drivers\scream-derived\LICENSE-MS-PL.txt` 与 `pkg-stereolink\LICENSE-MS-PL.txt`）
-- 上游来源登记：`E:\AI\MiPlay\.scratch\vad\pristine\UPSTREAM.md`（仓库 `duncanthrax/scream`，commit `d789743c248b11d1df7e5ecc546b1bc60b90cd91`，快照 2026-10-17）
+- 上游来源登记：`.scratch\vad\pristine\UPSTREAM.md`（仓库 `duncanthrax/scream`，commit `d789743c248b11d1df7e5ecc546b1bc60b90cd91`，快照 2026-10-17）
 - 上游署名：`pristine\pkg\Scream.inf` 的 `[Strings] SCR="Tom Kistner"`
 
 **原文摘录（逐字）**
@@ -291,7 +291,7 @@ Get-ChildItem $r | ForEach-Object {
   }
 }                                        # 期望看到 立体声链虚拟声卡 与 立体声链设备 两条
 # 5) 我们的工具：列端点（期望出现 扬声器 (立体声链虚拟声卡)）
-E:\AI\MiPlay\target\debug\endpoints.exe
+target\debug\endpoints.exe
 #    没有现成 exe 就：cargo run -q -p stereo-audio --bin endpoints
 # 6) 格式 + 回环探测（每个 render 端点，含新端点）
 cargo run -q -p stereo-audio --example format_probe -- --all
@@ -313,7 +313,7 @@ cargo run -q -p stereo-audio --example route_demo      # 或直接跑 target\deb
 **一键回滚**（推荐，`install-vad.ps1 -Uninstall` 会做下面全部，并且只删我们自己的东西）：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File E:\AI\MiPlay\.scratch\vad\install-vad.ps1 -Uninstall
+powershell -NoProfile -ExecutionPolicy Bypass -File .scratch\vad\install-vad.ps1 -Uninstall
 ```
 
 **手动回滚 / 逐条复核**：
@@ -355,7 +355,7 @@ shutdown /r /t 0
 2. **WASAPI 回环能否真的取到数据**（§8）：架构上应该可以，但没有实证；若失败，症状是“端点出现但链路无声”，第一反应应查 `format_probe` 的共享格式与 `audiodg` 是否成功打开 pin。
 3. **端点匹配歧义**（§7）：不修 `VAD_NAME_HINTS`，新端点出现后**很可能静默选错端点**。建议在验证前就把默认值改成 `立体声链虚拟声卡`。
 4. **`DriverVer` 未递增**（§2）：同版本重装可能不生效，改驱动内容时务必递增。
-5. 证书私钥 `certs\stereolink-dev.pfx` 口令是硬编码的开发口令 `stereolink-dev-only`（`sign-vad.ps1:16`），**只能用于本机开发**，不可用于任何对外发布。
+5. 证书私钥 `certs\stereolink-dev.pfx` 的口令不写入仓库：用 `-PfxPassword` 或 `$env:STEREOLINK_DEV_PFX_PASSWORD` 提供；`.pfx` / `.pvk` / `.snk` 已被 `.gitignore` 忽略，**只能用于本机开发**，不可用于任何对外发布。
 
 ---
 

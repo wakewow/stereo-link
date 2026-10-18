@@ -50,3 +50,9 @@ scripts/backups/
 *.pvk
 *.snk
 drivers/certs/*.pfx
+
+# ---------- 发布 / 调研产物（个人机器信息，不进仓库） ----------
+/dist/
+/research/
+/docs/android-port/
+/.tmp-*

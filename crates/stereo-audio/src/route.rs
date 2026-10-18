@@ -19,12 +19,12 @@
 //!                    └─ Both  ─► 端点 C（双声道都填 (L+R)/2）
 //! ```
 //!
-//! **原生采样率端到端**：引擎采样率默认取采集源端点的混音采样率（本机全部 render 端点
-//! 都是 48000 Hz）。每个目标端点的混音采样率与它一致时，render 端不让 Windows 做任何
-//! 重采样（`AUTOCONVERTPCM` 只负责采样格式转换）；只有目标端点不一致时才走
-//! [`MixConverter`] + [`StreamResampler`] 的软件回退路径。旧实现硬编码 44100 Hz，采集端
-//! 48k→44.1k、渲染端 44.1k→48k 两趟级联非整数比 SRC，是音质损失与杂音的首要来源；现在
-//! 可用 [`RouteEngineConfig::rate`] 显式指定，`None` 表示自动。
+//! **原生采样率端到端**：引擎采样率默认取采集源端点的混音采样率（常见的本机端点都是
+//! 48000 Hz）。每个目标端点的混音采样率与它一致时，render 端不让 Windows 做任何重采样
+//! （`AUTOCONVERTPCM` 只负责采样格式转换）；只有目标端点不一致时才走 `MixConverter` +
+//! [`StreamResampler`] 的软件回退路径。旧实现硬编码 44100 Hz，采集端 48k→44.1k、渲染端
+//! 44.1k→48k 两趟级联非整数比 SRC，是音质损失与杂音的首要来源；现在可用
+//! [`RouteEngineConfig::rate`] 显式指定，`None` 表示自动。
 //!
 //! 采集链路：1 条采集线程（**端点原生混音格式**直接 loopback，**不使用
 //! `AUTOCONVERTPCM`**）→ 解码成 f32、应用 `capture_gain`，再按路由通道模式 +
@@ -35,7 +35,7 @@
 //!
 //! 开流顺序：目标端点混音采样率 == 引擎采样率 → `PcmFormat(引擎采样率, 2, 16)` +
 //! `AUTOCONVERTPCM`（零 SRC，只转采样格式）；不一致、或该自动转换路径被拒 → 按端点
-//! 混音格式（`GetMixFormat`）打开 + Rust 侧用 [`MixConverter`] 重采样 + 采样格式转换
+//! 混音格式（`GetMixFormat`）打开 + Rust 侧用 `MixConverter` 重采样 + 采样格式转换
 //! （真机实测蓝牙端点混音 44100 Hz 时 `AUTOCONVERTPCM` 必定失败 `0x88890008`，所以必须
 //! 保留回退）。实际走通的路径记录在 [`RouteStats::format_path`]。
 //!
@@ -136,7 +136,7 @@ impl fmt::Display for RouteChannel {
 /// 一条路由（一台输出设备）的配置。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouteConfig {
-    /// 目标端点：友好名**子串**（大小写不敏感），例如 `"Xiaomi Sound-1695"`。
+    /// 目标端点：友好名**子串**（大小写不敏感），例如 `"音箱 A"`。
     pub endpoint: String,
     /// 送哪个声道。
     pub channel: RouteChannel,
@@ -185,7 +185,7 @@ impl RouteConfig {
         delay_frames_for_ms(self.delay_ms, rate)
     }
 
-    /// 人读一行：`Left ← "Xiaomi Sound-1695" | 增益 1.00 | 延迟 0 ms`。
+    /// 人读一行：`Left ← "音箱 A" | 增益 1.00 | 延迟 0 ms`。
     pub fn describe(&self) -> String {
         format!(
             "{:?} ← \"{}\" | 增益 {:.2} | 延迟 {} ms{}{}",
@@ -212,13 +212,13 @@ pub struct RouteEngineConfig {
     pub render_buffer_ms: u32,
     /// 每条路由预排队的音频长度（毫秒，0–500）。越大越抗抖动、延迟越高。
     pub queue_ms: u32,
-    /// 引擎采样率（Hz）。`None` = **自动**：取采集源端点的混音采样率（推荐；本机全部
-    /// render 端点都是 48000 Hz），这样采集和输出两端都跑原生采样率、完全不经过
-    /// Windows 的重采样。也可以显式指定（8000–192000）——指定值与某个端点混音采样率
-    /// 不一致时，该端点会走 [`MixConverter`] 的软件重采样回退路径。
+    /// 引擎采样率（Hz）。`None` = **自动**：取采集源端点的混音采样率（推荐；常见端点都是
+    /// 48000 Hz），这样采集和输出两端都跑原生采样率、完全不经过 Windows 的重采样。也可以
+    /// 显式指定（8000–192000）——指定值与某个端点混音采样率不一致时，该端点会走
+    /// `MixConverter` 的软件重采样回退路径。
     pub rate: Option<u32>,
     /// 采集端 WASAPI 缓冲（毫秒，20–2000）。`None` = 默认
-    /// [`DEFAULT_CAPTURE_BUFFER_MS`]（40 ms）。回环采集**物理输出端点**时（空闲/切换
+    /// `DEFAULT_CAPTURE_BUFFER_MS`（40 ms）。回环采集**物理输出端点**时（空闲/切换
     /// 设备容易爆音滋啦），可以适当加大。
     pub capture_buffer_ms: Option<u32>,
 }
@@ -242,8 +242,7 @@ impl Default for RouteEngineConfig {
 impl RouteEngineConfig {
     /// 实际使用的采集 WASAPI 缓冲（毫秒）：`capture_buffer_ms` 或默认值。
     pub fn effective_capture_buffer_ms(&self) -> u32 {
-        self.capture_buffer_ms
-            .unwrap_or(DEFAULT_CAPTURE_BUFFER_MS)
+        self.capture_buffer_ms.unwrap_or(DEFAULT_CAPTURE_BUFFER_MS)
     }
 
     /// 校验配置（不打开设备）。
@@ -521,7 +520,7 @@ pub struct RouteEngineHandle {
 impl RouteEngineHandle {
     /// 启动路由引擎：每条启用路由一条 sink 线程 + 1 条采集线程。
     ///
-    /// 返回前最多等 [`START_TIMEOUT`]（3 秒）让各条路由的 render 流打开：
+    /// 返回前最多等 `START_TIMEOUT`（3 秒）让各条路由的 render 流打开：
     /// * 单条（或部分）路由打开失败 → 只记进该路 `error`，其它路继续，整体仍 `running`；
     ///   打不开的路由会在后台按 1s→2s→4s→8s→（封顶 30s）指数退避重试，
     ///   设备休眠/掉线恢复后自动补上，不用重启引擎；
@@ -579,9 +578,14 @@ impl RouteEngineHandle {
             match thread::Builder::new()
                 .name(format!("stereo-link-route-sink-{index}"))
                 .spawn(move || {
-                    run_sink(thread_shared, index, thread_route, render_buffer_ms, engine_rate)
-                })
-            {
+                    run_sink(
+                        thread_shared,
+                        index,
+                        thread_route,
+                        render_buffer_ms,
+                        engine_rate,
+                    )
+                }) {
                 Ok(handle) => threads.push(handle),
                 Err(e) => {
                     return Err(spawn_failure(
@@ -1043,7 +1047,7 @@ impl CaptureDsp {
         left.reserve(out_frames);
         right.reserve(out_frames);
         let (mut peak_l, mut peak_r) = (0.0f32, 0.0f32);
-        for frame in converted.chunks_exact(2) {
+        for frame in converted.as_chunks::<2>().0 {
             let l = f32_to_s16(frame[0]);
             let r = f32_to_s16(frame[1]);
             peak_l = peak_l.max((l as f32 / 32_768.0).abs());
@@ -1065,7 +1069,6 @@ impl CaptureDsp {
 fn capture_resamples(dsp: &CaptureDsp) -> bool {
     dsp.resampler.is_some()
 }
-
 
 /// 按通道模式从采集的 L/R 取该路由的单声道样本（`Both` = 整数平均，不会溢出）。
 fn mix_sample(channel: RouteChannel, left: i16, right: i16) -> i16 {
@@ -1654,14 +1657,14 @@ fn sink_loop(
     let rate_matches = target_mix
         .map(|mix| mix.samplerate == engine_rate)
         .unwrap_or(false);
-    // 诊断开关：设置 MIPLAY_ROUTE_FORCE_MIX_FORMAT=1 可跳过自动转换、强制走混音格式
+    // 诊断开关：设置 STEREOLINK_ROUTE_FORCE_MIX_FORMAT=1 可跳过自动转换、强制走混音格式
     // 回退路径（排障/真机验证用，正常播放不要设置）。
-    let force_mix_fallback = std::env::var_os("MIPLAY_ROUTE_FORCE_MIX_FORMAT").is_some();
+    let force_mix_fallback = std::env::var_os("STEREOLINK_ROUTE_FORCE_MIX_FORMAT").is_some();
 
     // 路径一（首选）：WASAPI 自动转换到 `引擎采样率/2ch/s16`（采样率一致 → 零 SRC）。
     let mut init_error: Option<String> = None;
     if force_mix_fallback {
-        init_error = Some("设置 MIPLAY_ROUTE_FORCE_MIX_FORMAT 强制回退".to_owned());
+        init_error = Some("设置 STEREOLINK_ROUTE_FORCE_MIX_FORMAT 强制回退".to_owned());
     } else if !rate_matches {
         init_error = Some(format!(
             "目标端点混音采样率 {} Hz 与引擎 {engine_rate} Hz 不一致",
@@ -1698,8 +1701,10 @@ fn sink_loop(
         Some(primary) => {
             // 失败后这个 client 的状态不可靠，重新 Activate 一个干净的再试。
             client = com::activate_client(&device.device)?;
-            let mix = initialize_with_mix_format(&client, render_buffer_ms)
-                .map_err(|fallback| AudioError::invalid(render_init_error_text(&primary, &fallback)))?;
+            let mix =
+                initialize_with_mix_format(&client, render_buffer_ms).map_err(|fallback| {
+                    AudioError::invalid(render_init_error_text(&primary, &fallback))
+                })?;
             SinkOutput::Converted {
                 mix,
                 converter: MixConverter::new(mix, engine_rate),
@@ -1708,14 +1713,15 @@ fn sink_loop(
     };
 
     let buffer_frames = unsafe { client.GetBufferSize() }
-        .map_err(|e| AudioError::wasapi(e.code().0, "GetBufferSize(route)"))? as usize;
+        .map_err(|e| AudioError::wasapi(e.code().0, "GetBufferSize(route)"))?
+        as usize;
     let render: IAudioRenderClient = unsafe { client.GetService() }
         .map_err(|e| AudioError::wasapi(e.code().0, "GetService(IAudioRenderClient, route)"))?;
 
     // 预填一点静音，避免 Start 后第一轮就欠载。帧数按实际输出采样率算。
     let bytes_per_frame = output.bytes_per_frame();
-    let prefill = (RENDER_PREFILL_MS as usize * output.samplerate() as usize / 1000)
-        .min(buffer_frames);
+    let prefill =
+        (RENDER_PREFILL_MS as usize * output.samplerate() as usize / 1000).min(buffer_frames);
     if prefill > 0 {
         write_silence(&render, prefill, bytes_per_frame)?;
     }
@@ -1998,15 +2004,13 @@ fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> 
             let mut data: *mut u8 = std::ptr::null_mut();
             let mut frames: u32 = 0;
             let mut flags: u32 = 0;
-            if let Err(e) = unsafe { capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None) }
+            if let Err(e) =
+                unsafe { capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None) }
             {
                 if shared.stop.load(Ordering::Relaxed) {
                     break;
                 }
-                return Err(AudioError::wasapi(
-                    e.code().0,
-                    "GetBuffer(route capture)",
-                ));
+                return Err(AudioError::wasapi(e.code().0, "GetBuffer(route capture)"));
             }
             let silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
             let byte_len = frames as usize * format.bytes_per_frame();
@@ -2087,8 +2091,8 @@ mod tests {
         RouteEngineConfig {
             source_endpoint: "立体声链虚拟声卡".to_owned(),
             routes: vec![
-                route("Xiaomi Sound-1695", RouteChannel::Left),
-                route("Xiaomi Sound-5320", RouteChannel::Right),
+                route("音箱 A", RouteChannel::Left),
+                route("音箱 B", RouteChannel::Right),
             ],
             ..Default::default()
         }
@@ -2177,14 +2181,8 @@ mod tests {
         // 反相抵消
         assert_eq!(mix_sample(RouteChannel::Both, 5, -5), 0);
         // 极端值不溢出
-        assert_eq!(
-            mix_sample(RouteChannel::Both, i16::MAX, i16::MAX),
-            i16::MAX
-        );
-        assert_eq!(
-            mix_sample(RouteChannel::Both, i16::MIN, i16::MIN),
-            i16::MIN
-        );
+        assert_eq!(mix_sample(RouteChannel::Both, i16::MAX, i16::MAX), i16::MAX);
+        assert_eq!(mix_sample(RouteChannel::Both, i16::MIN, i16::MIN), i16::MIN);
     }
 
     #[test]
@@ -2386,7 +2384,10 @@ mod tests {
             out.push(delay.process(sample));
         }
         assert!(sink.dropped_samples > 0, "这个测试需要队列真的丢过样本");
-        assert!(out[..10].iter().all(|value| *value == 0), "前 10 帧应是延迟线垫的静音");
+        assert!(
+            out[..10].iter().all(|value| *value == 0),
+            "前 10 帧应是延迟线垫的静音"
+        );
         assert!(
             out[10..].iter().all(|value| *value >= 100),
             "延迟线之后的每一帧都必须是真实音频（丢最旧只发生在队列侧）"
@@ -2453,7 +2454,7 @@ mod tests {
     fn selector_for_treats_guid_shape_as_exact_endpoint_id() {
         // 零安装 D 模式：GUI 传端点 id（`{...}` 形状）时必须精确锁定，不能退化成
         // 名字子串——本机有两个同名 NVIDIA 端点，按名字匹配会撞名被拒。
-        let id = "{0.0.0.00000000}.{fc933984-2634-48ec-855d-f51bbddfdd71}";
+        let id = "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}";
         assert!(
             matches!(crate::sync::selector_for(id), DeviceSelector::Id(found) if found == id),
             "id 形状应解析成 DeviceSelector::Id"
@@ -2462,7 +2463,7 @@ mod tests {
 
     #[test]
     fn selector_for_treats_plain_names_as_substring_match() {
-        let name = "Xiaomi Sound-1695";
+        let name = "音箱 A";
         assert!(
             matches!(crate::sync::selector_for(name), DeviceSelector::NameContains(found) if found == name),
             "普通名字应保留 DeviceSelector::NameContains 语义"
@@ -2472,7 +2473,7 @@ mod tests {
     #[test]
     fn validation_accepts_guid_shaped_source_endpoint() {
         let mut cfg = config();
-        cfg.source_endpoint = "{0.0.0.00000000}.{6e6d7f6c-a61a-4fb2-9e4c-0fdef7303832}".to_owned();
+        cfg.source_endpoint = "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}".to_owned();
         assert!(
             cfg.validate().is_ok(),
             "id 形状的采集源应通过校验，而不是被当成非法名字"
@@ -2493,15 +2494,20 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_duplicate_enabled_endpoints_case_insensitively() {
+    fn validation_rejects_duplicate_enabled_endpoints() {
         let mut cfg = config();
-        cfg.routes[1].endpoint = "xiaomi sound-1695".to_owned();
+        cfg.routes[1].endpoint = "音箱 A".to_owned();
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("重复"), "{err}");
 
         // 大小写、首尾空白不同的同一个端点也算重复
         let mut cfg = config();
-        cfg.routes[1].endpoint = "  XIAOMI SOUND-1695  ".to_owned();
+        cfg.routes[1].endpoint = "  音箱 a  ".to_owned();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("重复"), "{err}");
+
+        let mut cfg = config();
+        cfg.routes[1].endpoint = "  音箱 A  ".to_owned();
         assert!(cfg.validate().is_err());
     }
 
@@ -2581,8 +2587,8 @@ mod tests {
         let describe = config().describe();
         assert!(describe.contains("2 条路由（2 条启用）"), "{describe}");
         assert!(describe.contains("立体声链"), "{describe}");
-        let route = route("Xiaomi Sound-1695", RouteChannel::Left).describe();
-        assert!(route.contains("Xiaomi Sound-1695"), "{route}");
+        let route = route("音箱 A", RouteChannel::Left).describe();
+        assert!(route.contains("音箱 A"), "{route}");
         assert!(route.contains("Left"), "{route}");
         assert!(route.contains("延迟 0 ms"), "{route}");
     }
@@ -2650,7 +2656,10 @@ mod tests {
         // 回退路径（混音格式 + 软件转换）要在 describe() 里能看到，便于 GUI 显示。
         assert!(describe.contains("mix-format"), "{describe}");
         // 重试中的路由要能看出来（GUI 日志/自检用）。
-        assert!(describe.contains("重试中：第 2 次失败，4000 ms 后重试"), "{describe}");
+        assert!(
+            describe.contains("重试中：第 2 次失败，4000 ms 后重试"),
+            "{describe}"
+        );
     }
 
     #[test]
@@ -2704,15 +2713,12 @@ mod tests {
         assert!((stats.routes[0].level - 0.25).abs() < f32::EPSILON);
         assert!((stats.level_l - 0.5).abs() < f32::EPSILON);
         assert!((stats.level_r - 0.25).abs() < f32::EPSILON);
-        assert_eq!(stats.uptime_seconds >= 0.0, true);
+        assert!(stats.uptime_seconds >= 0.0);
     }
 
     /// 造一个引擎内部状态（不启动线程），供 stats()/重试字段测试用。
     fn shared_with(states: Vec<SinkState>, stop: bool) -> Arc<Shared> {
-        let delays_ms = states
-            .iter()
-            .map(|_| AtomicU32::new(0))
-            .collect::<Vec<_>>();
+        let delays_ms = states.iter().map(|_| AtomicU32::new(0)).collect::<Vec<_>>();
         Arc::new(Shared {
             stop: AtomicBool::new(stop),
             captured_frames: AtomicU64::new(0),
@@ -2763,7 +2769,9 @@ mod tests {
     #[test]
     fn retryable_errors_are_classified() {
         assert!(is_retryable(&AudioError::DeviceNotFound("箱".to_owned())));
-        assert!(is_retryable(&AudioError::NoDefaultDevice("没有".to_owned())));
+        assert!(is_retryable(&AudioError::NoDefaultDevice(
+            "没有".to_owned()
+        )));
         assert!(is_retryable(&AudioError::DeviceInvalidated));
         assert!(is_retryable(&AudioError::wasapi(
             0x8889_0004u32 as i32,
@@ -2859,12 +2867,10 @@ mod tests {
     // ---- 回退路径（混音格式 + 软件转换）的纯逻辑测试 ----
 
     /// 造一个混音格式（回退路径的目标）。
-    fn mix_info(
-        samplerate: u32,
-        channels: u16,
-        sample_format: Option<SampleFormat>,
-    ) -> FormatInfo {
-        let bytes = sample_format.map(SampleFormat::bytes_per_sample).unwrap_or(2);
+    fn mix_info(samplerate: u32, channels: u16, sample_format: Option<SampleFormat>) -> FormatInfo {
+        let bytes = sample_format
+            .map(SampleFormat::bytes_per_sample)
+            .unwrap_or(2);
         FormatInfo {
             sample_format,
             channels,
@@ -3013,7 +3019,10 @@ mod tests {
             SinkOutput::AutoConvert { rate: 44_100 }.input_frames_for_available(10_000),
             441
         );
-        assert_eq!(SinkOutput::AutoConvert { rate: 48_000 }.input_frames_for_available(0), 0);
+        assert_eq!(
+            SinkOutput::AutoConvert { rate: 48_000 }.input_frames_for_available(0),
+            0
+        );
         assert_eq!(
             SinkOutput::AutoConvert { rate: 48_000 }.input_frames_for_available(100),
             100

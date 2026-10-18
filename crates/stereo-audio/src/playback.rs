@@ -55,7 +55,11 @@ fn map_err(e: windows::core::Error, ctx: &str) -> AudioError {
 }
 
 /// 往默认（或指定）render 端点播一段 s16le PCM。
-pub fn play_pcm_s16(device: &DeviceSelector, format: PcmFormat, pcm: &[u8]) -> Result<PlaybackInfo> {
+pub fn play_pcm_s16(
+    device: &DeviceSelector,
+    format: PcmFormat,
+    pcm: &[u8],
+) -> Result<PlaybackInfo> {
     if format.bits != 16 {
         return Err(AudioError::invalid(format!(
             "play_pcm_s16 只接受 16 bit，收到 {}",
@@ -63,7 +67,7 @@ pub fn play_pcm_s16(device: &DeviceSelector, format: PcmFormat, pcm: &[u8]) -> R
         )));
     }
     let frame_bytes = format.frame_bytes();
-    if frame_bytes == 0 || pcm.len() % frame_bytes != 0 {
+    if frame_bytes == 0 || !pcm.len().is_multiple_of(frame_bytes) {
         return Err(AudioError::invalid(format!(
             "PCM 长度 {} 不是帧长 {} 的整数倍",
             pcm.len(),
@@ -86,7 +90,8 @@ pub fn play_pcm_s16(device: &DeviceSelector, format: PcmFormat, pcm: &[u8]) -> R
     let wfx = com::pcm16_waveformatex(format);
     let flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
     let mut path = ConversionPath::WasapiAutoConvert;
-    let mut init = unsafe { client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, hns, 0, &wfx, None) };
+    let mut init =
+        unsafe { client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, hns, 0, &wfx, None) };
     if let Err(e_a) = init {
         // 路径 B：只有当目标格式与端点混音格式一致时才能直接打开
         let same = mix.channels == format.channels
@@ -102,8 +107,7 @@ pub fn play_pcm_s16(device: &DeviceSelector, format: PcmFormat, pcm: &[u8]) -> R
                 ),
             ));
         }
-        let fmt_ptr =
-            unsafe { client.GetMixFormat() }.map_err(|e| map_err(e, "GetMixFormat"))?;
+        let fmt_ptr = unsafe { client.GetMixFormat() }.map_err(|e| map_err(e, "GetMixFormat"))?;
         init = unsafe { client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, hns, 0, fmt_ptr, None) };
         unsafe { CoTaskMemFree(Some(fmt_ptr as *const c_void)) };
         path = ConversionPath::RustSideConversion;
@@ -128,7 +132,8 @@ pub fn play_pcm_s16(device: &DeviceSelector, format: PcmFormat, pcm: &[u8]) -> R
 
     let mut written = 0usize;
     while written < total_frames {
-        let pad = unsafe { client.GetCurrentPadding() }.map_err(|e| map_err(e, "GetCurrentPadding"))?;
+        let pad =
+            unsafe { client.GetCurrentPadding() }.map_err(|e| map_err(e, "GetCurrentPadding"))?;
         let avail = (buffer_frames.saturating_sub(pad) as usize)
             .min(total_frames - written)
             .min(WRITE_CHUNK_FRAMES);
@@ -140,15 +145,11 @@ pub fn play_pcm_s16(device: &DeviceSelector, format: PcmFormat, pcm: &[u8]) -> R
         let off = written * frame_bytes;
         let p = unsafe { render.GetBuffer(n) }.map_err(|e| map_err(e, "GetBuffer"))?;
         if p.is_null() {
-            return Err(AudioError::invalid("IAudioRenderClient::GetBuffer 返回空指针"));
+            return Err(AudioError::invalid(
+                "IAudioRenderClient::GetBuffer 返回空指针",
+            ));
         }
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                pcm[off..].as_ptr(),
-                p,
-                n as usize * frame_bytes,
-            )
-        };
+        unsafe { std::ptr::copy_nonoverlapping(pcm[off..].as_ptr(), p, n as usize * frame_bytes) };
         unsafe { render.ReleaseBuffer(n, 0) }.map_err(|e| map_err(e, "ReleaseBuffer"))?;
         written += n as usize;
     }
@@ -157,7 +158,8 @@ pub fn play_pcm_s16(device: &DeviceSelector, format: PcmFormat, pcm: &[u8]) -> R
     let seconds = total_frames as f64 / format.samplerate as f64;
     let deadline = Instant::now() + Duration::from_secs_f64(seconds + 3.0);
     loop {
-        let pad = unsafe { client.GetCurrentPadding() }.map_err(|e| map_err(e, "GetCurrentPadding"))?;
+        let pad =
+            unsafe { client.GetCurrentPadding() }.map_err(|e| map_err(e, "GetCurrentPadding"))?;
         if pad == 0 || Instant::now() >= deadline {
             break;
         }

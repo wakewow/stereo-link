@@ -15,11 +15,11 @@ Windows 播放器（浏览器 / 音乐播放器 / 视频 / 游戏 …）
 采集源端点（任选一个「不会被听见」的本机输出）
   ├─ 虚拟音频设备：自研 StereoLink 虚拟声卡 / UU远程虚拟音频设备 / Steam Streaming
   └─ 空闲物理输出：板载扬声器口 / 空着的 HDMI、DP
-        │  WASAPI loopback 采集（44.1 kHz / 2 ch / 16 bit）
+        │  WASAPI loopback 采集（原生混音格式，本机 48 kHz / 2 ch，零重采样）
         ▼
 StereoLink 路由引擎（每 10 ms 一块）
-        ├── 左声道 → 设备 A（如 Xiaomi Sound-1695）
-        └── 右声道 → 设备 B（如 Xiaomi Sound-5320）
+        ├── 左声道 → 设备 A（例如：蓝牙音箱 A）
+        └── 右声道 → 设备 B（例如：蓝牙音箱 B）
 ```
 
 播放器不需要任何配置：只要 Windows 默认输出选到采集源（面板开始路由时会自动切），声音就会
@@ -110,6 +110,10 @@ powershell -File .\sign-vad.ps1            # 自签证书 + Inf2Cat + signtool �
 powershell -File .\install-vad.ps1         # 信任证书 + 暂存驱动 + 创建设备（不含 bcdedit）
 ```
 
+> 签名要读 PFX 口令：先设置 `$env:STEREOLINK_DEV_PFX_PASSWORD`，或给
+> `sign-vad.ps1 -PfxPassword` 传参；仓库与脚本里都不保存口令（私钥 `.pfx` 也不入库，只有公钥
+> `.cer` 随仓库提交）。
+
 签名用自签开发证书（`CN=StereoLink Virtual Audio Driver (dev)`，有效期 2026–2031，
 PFX 口令是本机开发口令）。自签证书只能过用户态的 `signtool verify /pa`；
 内核加载要求驱动证书链到微软根，所以 `signtool verify /kp` 会报
@@ -188,7 +192,7 @@ bcdedit /set testsigning off                         # 可选
 | --- | --- |
 | 端点类型 | 仅 render（播放），没有录音端点 |
 | 回环采集 | 已验证可用（自研虚拟声卡实测连续采集 83759 帧、峰值 0.8014） |
-| 采样格式 | 共享格式 48 kHz / 2 ch / 32 bit float；StereoLink 内部转 44.1 kHz / 16 bit 后路由 |
+| 采样格式 | 共享格式 48 kHz / 2 ch / 32 bit float；引擎跟随采集源原生混音格式（本机 48 kHz，零重采样）后路由 |
 | 用户态开销 | 无驱动侧混音线程；只在有程序播放时占 CPU，静音时基本为 0 |
 
 ## 6. 采集源、默认输出与恢复

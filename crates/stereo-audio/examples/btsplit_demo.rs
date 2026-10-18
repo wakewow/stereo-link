@@ -5,15 +5,13 @@
 //! ```powershell
 //! cargo run -p stereo-audio --example btsplit_demo -- <左端点名子串> <右端点名子串>
 //! ```
-//! 默认左 `Xiaomi Sound-1695`、右 `Xiaomi Sound-5320`，测试音 12 秒：
+//! 两个参数都必填（左/右端点名子串），测试音 12 秒：
 //! 0–3s 只有左声道 440Hz；3–6s 只有右声道 880Hz；6–9s 两边各一路；9–12s 两边同一 660Hz（听声像是否居中）。
 
 use std::thread;
 use std::time::{Duration, Instant};
 
-use stereo_audio::{
-    play_pcm_s16, BtSplitConfig, BtSplitHandle, DeviceSelector, PcmFormat,
-};
+use stereo_audio::{play_pcm_s16, BtSplitConfig, BtSplitHandle, DeviceSelector, PcmFormat};
 
 const RATE: u32 = 44_100;
 
@@ -37,14 +35,13 @@ fn sine(hz: f64, t: f64) -> f32 {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let left = args
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "Xiaomi Sound-1695".to_owned());
-    let right = args
-        .get(1)
-        .cloned()
-        .unwrap_or_else(|| "Xiaomi Sound-5320".to_owned());
+    if args.len() < 2 {
+        eprintln!("用法: btsplit_demo <左端点名子串> <右端点名子串>");
+        eprintln!("（端点名按友好名子串匹配，大小写不敏感；先确认两台音箱已连到本机）");
+        std::process::exit(2);
+    }
+    let left = args[0].clone();
+    let right = args[1].clone();
 
     let config = BtSplitConfig {
         left_endpoint: left.clone(),
@@ -54,7 +51,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.validate()?;
     println!("== 蓝牙左右分离自检 ==");
     println!("配置: {}", config.describe());
-    println!("软件侧缓冲估计: {} ms（不含蓝牙链路本身）", config.software_latency_ms());
+    println!(
+        "软件侧缓冲估计: {} ms（不含蓝牙链路本身）",
+        config.software_latency_ms()
+    );
 
     let source = config.source_endpoint.clone();
     let mut split = BtSplitHandle::start(config)?;

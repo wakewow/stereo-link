@@ -18,8 +18,8 @@
 //! 用法（`endpoint_id` 可以是端点 id，也可以是友好名子串，或 `"default"`）：
 //!
 //! ```text
-//! let formats = stereo_audio::format_support::supported_formats("Xiaomi Sound-1695")?;
-//! println!("{}", stereo_audio::format_support::supported_summary("Xiaomi Sound-1695")?);
+//! let formats = stereo_audio::format_support::supported_formats("<音箱 A 名字子串>")?;
+//! println!("{}", stereo_audio::format_support::supported_summary("<音箱 A 名字子串>")?);
 //! ```
 //!
 //! 注意：`IsFormatSupported` 只反映驱动接受哪些格式，不代表设备当前没被别的
@@ -60,13 +60,19 @@ struct Candidate {
 impl Candidate {
     /// 生成 40 字节 WAVEFORMATEXTENSIBLE 请求块。
     fn waveformat(self) -> Vec<u8> {
-        build_waveformat_ext(self.samplerate, self.channels, self.valid_bits, self.is_float)
+        build_waveformat_ext(
+            self.samplerate,
+            self.channels,
+            self.valid_bits,
+            self.is_float,
+        )
     }
 }
 
 fn candidate_triples() -> Vec<Candidate> {
-    let mut out =
-        Vec::with_capacity(CANDIDATE_SAMPLERATES.len() * CANDIDATE_CHANNELS.len() * CANDIDATE_BIT_DEPTHS.len());
+    let mut out = Vec::with_capacity(
+        CANDIDATE_SAMPLERATES.len() * CANDIDATE_CHANNELS.len() * CANDIDATE_BIT_DEPTHS.len(),
+    );
     for &samplerate in &CANDIDATE_SAMPLERATES {
         for &channels in &CANDIDATE_CHANNELS {
             for &(valid_bits, is_float) in &CANDIDATE_BIT_DEPTHS {
@@ -84,13 +90,15 @@ fn candidate_triples() -> Vec<Candidate> {
 
 /// 候选三元组 → [`EndpointFormat`]（自建字节必定可解析）。
 fn candidate_format(candidate: Candidate) -> EndpointFormat {
-    parse_waveformat(&candidate.waveformat())
-        .expect("本模块构造的 WAVEFORMATEXTENSIBLE 必定能解析")
+    parse_waveformat(&candidate.waveformat()).expect("本模块构造的 WAVEFORMATEXTENSIBLE 必定能解析")
 }
 
 /// 候选格式矩阵（未探测）。GUI 可拿它来显示「哪些不支持」。
 pub fn candidate_formats() -> Vec<EndpointFormat> {
-    candidate_triples().into_iter().map(candidate_format).collect()
+    candidate_triples()
+        .into_iter()
+        .map(candidate_format)
+        .collect()
 }
 
 /// 探测模式：独占（判断真实能力）/ 共享（判断能否直接出声）。
@@ -158,14 +166,15 @@ fn resolve_any(en: &IMMDeviceEnumerator, endpoint_id: &str) -> Result<ResolvedDe
     if let Ok(resolved) = resolve(en, &DeviceSelector::Id(want.to_owned()), DataFlow::Render) {
         return Ok(resolved);
     }
-    resolve(en, &DeviceSelector::NameContains(want.to_owned()), DataFlow::Render)
+    resolve(
+        en,
+        &DeviceSelector::NameContains(want.to_owned()),
+        DataFlow::Render,
+    )
 }
 
 /// 在 COM 已初始化、端点已激活的 `IAudioClient` 上执行探测。
-fn with_client<T>(
-    endpoint_id: &str,
-    probe: impl FnOnce(&IAudioClient) -> Result<T>,
-) -> Result<T> {
+fn with_client<T>(endpoint_id: &str, probe: impl FnOnce(&IAudioClient) -> Result<T>) -> Result<T> {
     let _com = ComGuard::new()?;
     let en = enumerator()?;
     let resolved = resolve_any(&en, endpoint_id)?;
@@ -268,8 +277,7 @@ pub fn mix_format(endpoint_id: &str) -> Result<EndpointFormat> {
         }
         let bytes = read_format_block(ptr as *const u8);
         unsafe { CoTaskMemFree(Some(ptr as *const c_void)) };
-        parse_waveformat(&bytes)
-            .map_err(|e| AudioError::invalid(format!("混音格式无法解析：{e}")))
+        parse_waveformat(&bytes).map_err(|e| AudioError::invalid(format!("混音格式无法解析：{e}")))
     })
 }
 
@@ -329,7 +337,9 @@ mod tests {
         // 24 bit PCM：装进 32-bit 容器，valid_bits 保持 24。
         let pcm24 = formats
             .iter()
-            .find(|f| f.samplerate == 48_000 && f.channels == 2 && f.valid_bits == 24 && !f.is_float)
+            .find(|f| {
+                f.samplerate == 48_000 && f.channels == 2 && f.valid_bits == 24 && !f.is_float
+            })
             .expect("48k/2ch/24bit 候选存在");
         assert_eq!(pcm24.bits, 32);
         assert_eq!(pcm24.block_align, 8);
@@ -365,7 +375,10 @@ mod tests {
         assert_eq!(bytes.len(), 40);
         assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0xFFFE);
         assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), 2);
-        assert_eq!(u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]), 48_000);
+        assert_eq!(
+            u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            48_000
+        );
         assert_eq!(
             u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
             48_000 * 8
@@ -374,20 +387,23 @@ mod tests {
         assert_eq!(u16::from_le_bytes([bytes[14], bytes[15]]), 32); // 容器位宽
         assert_eq!(u16::from_le_bytes([bytes[16], bytes[17]]), 22); // cbSize
         assert_eq!(u16::from_le_bytes([bytes[18], bytes[19]]), 24); // valid bits
-        assert_eq!(u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]), 0x3);
+        assert_eq!(
+            u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]),
+            0x3
+        );
         // PCM GUID = {00000001-0000-0010-8000-00aa00389b71}（内存序）。
         assert_eq!(
             &bytes[24..40],
             &[
-                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00,
-                0x38, 0x9b, 0x71
+                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38,
+                0x9b, 0x71
             ]
         );
 
         // float 版本 GUID 首字节是 3。
         let float_bytes = build_waveformat_ext(48_000, 2, 32, true);
         assert_eq!(float_bytes[24], 0x03);
-        assert_eq!(parse_waveformat(&float_bytes).unwrap().is_float, true);
+        assert!(parse_waveformat(&float_bytes).unwrap().is_float);
     }
 
     #[test]

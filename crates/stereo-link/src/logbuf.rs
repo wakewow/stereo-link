@@ -86,14 +86,14 @@ impl LogBuffer {
 
 /// 把日志缓冲接到全局 `tracing` 订阅器上。
 ///
-/// 默认只进内存（GUI 正式版没有控制台）。调试时设 `STEREOLINK_LOG_CONSOLE=1`（兼容旧名 `MIPLAY_LOG_CONSOLE`）
+/// 默认只进内存（GUI 正式版没有控制台）。调试时设 `STEREOLINK_LOG_CONSOLE=1`
 /// 会额外往控制台打一份，方便命令行/脚本抓日志。
 pub fn install(buffer: LogBuffer) {
     use tracing_subscriber::layer::SubscriberExt;
 
     let layer = BufferLayer { buffer };
     let registry = tracing_subscriber::registry().with(layer);
-    if std::env::var_os("STEREOLINK_LOG_CONSOLE").or_else(|| std::env::var_os("MIPLAY_LOG_CONSOLE")).is_some() {
+    if std::env::var_os("STEREOLINK_LOG_CONSOLE").is_some() {
         let subscriber = registry.with(
             tracing_subscriber::fmt::layer()
                 .with_target(false)
@@ -116,8 +116,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for BufferLayer {
         if visitor.message.is_empty() {
             return;
         }
-        self.buffer
-            .push(*event.metadata().level(), visitor.message);
+        self.buffer.push(*event.metadata().level(), visitor.message);
     }
 }
 

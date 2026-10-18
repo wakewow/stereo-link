@@ -8,9 +8,11 @@
 use stereo_audio::{build_sine_s16, playback::play_pcm_s16, DeviceSelector, PcmFormat};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let target = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "Xiaomi Sound-5320".to_string());
+    let Some(target) = std::env::args().nth(1) else {
+        eprintln!("用法: open_probe <端点名子串或端点 id>");
+        eprintln!("（对同一个 render 端点依次尝试多种 PCM 格式，报告哪一种能开流）");
+        std::process::exit(2);
+    };
     println!("== 打开端点探针：{target} ==");
 
     let formats = [
@@ -27,7 +29,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pcm = build_sine_s16(440.0, 0.2, 0.15, fmt);
         let sel = DeviceSelector::name_contains(&target);
         match play_pcm_s16(&sel, fmt, &pcm) {
-            Ok(info) => println!("  OK  {rate} Hz / {channels} ch / {bits} bit -> {}", info.describe()),
+            Ok(info) => println!(
+                "  OK  {rate} Hz / {channels} ch / {bits} bit -> {}",
+                info.describe()
+            ),
             Err(e) => println!("  ERR {rate} Hz / {channels} ch / {bits} bit -> {e}"),
         }
     }

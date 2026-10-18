@@ -119,10 +119,11 @@ fn parse_args() -> Result<Option<Args>, String> {
     let mut have_source = false;
     let mut have_target = false;
     while let Some(arg) = it.next() {
-        let value = |it: &mut std::iter::Skip<std::env::Args>, name: &str| -> Result<String, String> {
-            it.next()
-                .ok_or_else(|| format!("{name} 后面缺少值（用 --help 看用法）"))
-        };
+        let value =
+            |it: &mut std::iter::Skip<std::env::Args>, name: &str| -> Result<String, String> {
+                it.next()
+                    .ok_or_else(|| format!("{name} 后面缺少值（用 --help 看用法）"))
+            };
         match arg.as_str() {
             "-h" | "--help" => {
                 println!("{}", usage());
@@ -164,7 +165,9 @@ fn parse_args() -> Result<Option<Args>, String> {
                 }
                 args.gain = v;
             }
-            "--queue-ms" => args.queue_ms = parse_u32(&value(&mut it, "--queue-ms")?, "--queue-ms")?,
+            "--queue-ms" => {
+                args.queue_ms = parse_u32(&value(&mut it, "--queue-ms")?, "--queue-ms")?
+            }
             "--render-buffer-ms" => {
                 args.render_buffer_ms =
                     parse_u32(&value(&mut it, "--render-buffer-ms")?, "--render-buffer-ms")?
@@ -173,12 +176,10 @@ fn parse_args() -> Result<Option<Args>, String> {
                 args.save_dir = Some(value(&mut it, "--save")?);
             }
             "--src-vol-db" => {
-                args.src_vol_db =
-                    parse_f64(&value(&mut it, "--src-vol-db")?, "--src-vol-db")?
+                args.src_vol_db = parse_f64(&value(&mut it, "--src-vol-db")?, "--src-vol-db")?
             }
             "--tgt-vol-db" => {
-                args.tgt_vol_db =
-                    parse_f64(&value(&mut it, "--tgt-vol-db")?, "--tgt-vol-db")?
+                args.tgt_vol_db = parse_f64(&value(&mut it, "--tgt-vol-db")?, "--tgt-vol-db")?
             }
             other => return Err(format!("未知参数 {other}（用 --help 看用法）")),
         }
@@ -248,8 +249,8 @@ fn run() -> Result<i32, String> {
         capture_buffer_ms: None,
     };
     println!("引擎配置: {}", engine_cfg.describe());
-    let engine = RouteEngineHandle::start(engine_cfg)
-        .map_err(|e| format!("启动路由引擎失败: {e}"))?;
+    let engine =
+        RouteEngineHandle::start(engine_cfg).map_err(|e| format!("启动路由引擎失败: {e}"))?;
     std::thread::sleep(Duration::from_millis(300));
 
     // 4. 对目标端点做 WASAPI 回环采集（后台线程持续读，主线程累积）
@@ -275,18 +276,20 @@ fn run() -> Result<i32, String> {
     let pcm_bytes = pcm_i16_to_bytes(&pcm_i16);
     let play_dev: DeviceSelector = selector_for(&source_ep.name);
     let play_pcm = pcm_bytes.clone();
-    let play_handle = std::thread::spawn(move || -> (Duration, Duration, Result<PlaybackInfo, String>) {
-        std::thread::sleep(Duration::from_millis(PLAY_START_DELAY_MS as u64));
-        let call_at = Instant::now();
-        let started = Instant::now();
-        let res = play_pcm_s16(&play_dev, PcmFormat::new(SR, 2, 16), &play_pcm)
-            .map_err(|e| e.to_string());
-        (call_at.duration_since(cap_start), started.elapsed(), res)
-    });
+    let play_handle = std::thread::spawn(
+        move || -> (Duration, Duration, Result<PlaybackInfo, String>) {
+            std::thread::sleep(Duration::from_millis(PLAY_START_DELAY_MS as u64));
+            let call_at = Instant::now();
+            let started = Instant::now();
+            let res = play_pcm_s16(&play_dev, PcmFormat::new(SR, 2, 16), &play_pcm)
+                .map_err(|e| e.to_string());
+            (call_at.duration_since(cap_start), started.elapsed(), res)
+        },
+    );
 
     // 6. 主线程收数据（读完整个播放窗口 + 余量）
-    let wanted_ms = (PREFILL_MS as f64 + PLAY_START_DELAY_MS as f64 + args.seconds * 1_000.0) * 1.0
-        + 900.0;
+    let wanted_ms =
+        (PREFILL_MS as f64 + PLAY_START_DELAY_MS as f64 + args.seconds * 1_000.0) * 1.0 + 900.0;
     let capture_deadline = Duration::from_millis(wanted_ms.max(1_500.0) as u64);
     let mut captured: Vec<u8> = Vec::new();
     let mut capture_error: Option<String> = None;
@@ -435,7 +438,9 @@ fn pcm_i16_to_bytes(pcm: &[i16]) -> Vec<u8> {
 
 fn bytes_to_mono(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(FRAME_BYTES)
+        .as_chunks::<FRAME_BYTES>()
+        .0
+        .iter()
         .map(|frame| {
             let l = i16::from_le_bytes([frame[0], frame[1]]) as f32;
             let r = i16::from_le_bytes([frame[2], frame[3]]) as f32;
@@ -447,10 +452,10 @@ fn bytes_to_mono(bytes: &[u8]) -> Vec<f32> {
 fn bytes_to_channel(bytes: &[u8], channel: usize) -> Vec<f32> {
     let offset = channel * 2;
     bytes
-        .chunks_exact(FRAME_BYTES)
-        .map(|frame| {
-            i16::from_le_bytes([frame[offset], frame[offset + 1]]) as f32 / 32_768.0
-        })
+        .as_chunks::<FRAME_BYTES>()
+        .0
+        .iter()
+        .map(|frame| i16::from_le_bytes([frame[offset], frame[offset + 1]]) as f32 / 32_768.0)
         .collect()
 }
 
@@ -489,8 +494,8 @@ struct Analysis {
     thd_percent: f64,
     thdn_db: f64,
     sweep_ratios_db: Vec<(f64, f64)>, // (期望频率, 录制/参考 幅度比 dB)
-    sweep_hf_ratio_db: f64,          // 相对中频的衰减（真正看「高频被削」）
-    sweep_hf_abs_db: f64,            // 高频端绝对 录制/参考 比
+    sweep_hf_ratio_db: f64,           // 相对中频的衰减（真正看「高频被削」）
+    sweep_hf_abs_db: f64,             // 高频端绝对 录制/参考 比
     frames: usize,
     captured_seconds: f64,
     engine_underruns: u64,
@@ -520,7 +525,10 @@ impl Analysis {
     }
 
     fn print(&self, args: &Args, source: &EndpointInfo, target: &EndpointInfo) {
-        println!("--- 分析（录制 {} 帧 = {:.3} s）---", self.frames, self.captured_seconds);
+        println!(
+            "--- 分析（录制 {} 帧 = {:.3} s）---",
+            self.frames, self.captured_seconds
+        );
         println!(
             "信号起点(录制时间轴): {:.1} ms（预填 {} ms + 播放调用偏移 {:.1} ms → 额外管线延迟 ≈ {:.1} ms，含 play_pcm_s16 的 1 s 初始缓冲）",
             self.onset_ms, PREFILL_MS, self.play_call_offset_ms, self.path_latency_ms
@@ -531,7 +539,12 @@ impl Analysis {
                 if i > 0 {
                     line.push_str(" | ");
                 }
-                line.push_str(&format!("{:.2}–{:.2} s 峰值 {:.1} dBFS", s / 1_000.0, e / 1_000.0, p));
+                line.push_str(&format!(
+                    "{:.2}–{:.2} s 峰值 {:.1} dBFS",
+                    s / 1_000.0,
+                    e / 1_000.0,
+                    p
+                ));
             }
             println!("{}", line);
         } else {
@@ -540,7 +553,11 @@ impl Analysis {
         println!(
             "互相关: {:.6}（{}）",
             self.corr,
-            if self.corr >= 0.0 { "正相" } else { "反相/极性反转" }
+            if self.corr >= 0.0 {
+                "正相"
+            } else {
+                "反相/极性反转"
+            }
         );
         println!(
             "电平: 稳态 RMS {:.2} dBFS（参考 {:.2} dBFS；整段 L {:.2} / R {:.2} dBFS），增益 {:+.2} dB，归因误差 {:+.2} dB（|误差| < 1.5 dB 即引擎 0 dB）",
@@ -613,7 +630,14 @@ impl Analysis {
             "端点: 源 \"{}\" [{}] → 目标 \"{}\" [{}]",
             source.name, source.id, target.name, target.id
         );
-        println!("--- 判定: {} ---", if self.verdict_is_clean() { "数字路径干净" } else { "有可疑点（见上）" });
+        println!(
+            "--- 判定: {} ---",
+            if self.verdict_is_clean() {
+                "数字路径干净"
+            } else {
+                "有可疑点（见上）"
+            }
+        );
         println!("{}", self.summary_line(args, source, target));
     }
 
@@ -655,7 +679,10 @@ impl Analysis {
             self.thdn_db
         );
         if !self.sweep_ratios_db.is_empty() {
-            s.push_str(&format!(" hf_ratio_db={:.2} hf_abs_db={:.2}", self.sweep_hf_ratio_db, self.sweep_hf_abs_db));
+            s.push_str(&format!(
+                " hf_ratio_db={:.2} hf_abs_db={:.2}",
+                self.sweep_hf_ratio_db, self.sweep_hf_abs_db
+            ));
             let parts: Vec<String> = self
                 .sweep_ratios_db
                 .iter()
@@ -730,7 +757,9 @@ fn analyze(
     let steady = &recorded[steady_start..steady_start + steady_len];
 
     // 稳态段 RMS 与「参考里对应的一段」比：绝不能用整段录制 RMS（里面含预填静音，会把增益算低约 2–3 dB）。
-    let ref_steady_start = steady_start.saturating_sub(onset_sample).min(reference.len().saturating_sub(1));
+    let ref_steady_start = steady_start
+        .saturating_sub(onset_sample)
+        .min(reference.len().saturating_sub(1));
     let ref_steady_len = steady_len.min(reference.len().saturating_sub(ref_steady_start));
     let ref_steady = &reference[ref_steady_start..ref_steady_start + ref_steady_len];
     let rec_steady_rms = rms(steady);
@@ -783,7 +812,8 @@ fn analyze(
                 for k in 0..segs {
                     let rel = (k as f64 + 0.1) / segs as f64;
                     let start = (rel * signal_samples as f64) as usize;
-                    let len = (signal_samples / segs).min(recorded.len().saturating_sub(onset_sample + start));
+                    let len = (signal_samples / segs)
+                        .min(recorded.len().saturating_sub(onset_sample + start));
                     if len == 0 {
                         continue;
                     }
@@ -801,7 +831,8 @@ fn analyze(
                 }
                 // 高频端更细：信号最后 8%（≈8.5–10 kHz）
                 let hf_start = (0.92 * signal_samples as f64) as usize;
-                let hf_len = signal_samples.saturating_sub(hf_start)
+                let hf_len = signal_samples
+                    .saturating_sub(hf_start)
                     .min(recorded.len().saturating_sub(onset_sample + hf_start));
                 if hf_len > 0 {
                     let rec = &recorded[onset_sample + hf_start..onset_sample + hf_start + hf_len];
@@ -814,7 +845,11 @@ fn analyze(
                 }
                 // 归一化：减去中频段（六段比值的中位数）→ 0 dB 表示平坦，负值表示高频被削
                 if sweep_hf_abs_db.is_finite() && !sweep_ratios_db.is_empty() {
-                    let mut rs: Vec<f64> = sweep_ratios_db.iter().map(|(_, r)| *r).filter(|r| r.is_finite()).collect();
+                    let mut rs: Vec<f64> = sweep_ratios_db
+                        .iter()
+                        .map(|(_, r)| *r)
+                        .filter(|r| r.is_finite())
+                        .collect();
                     rs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                     if !rs.is_empty() {
                         let flat_ref = rs[rs.len() / 2];

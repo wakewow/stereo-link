@@ -1,5 +1,10 @@
 # StereoLink 立体声链
 
+![CI](https://github.com/wakewow/stereo-link/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
+
+源码仓库：<https://github.com/wakewow/stereo-link>
+
 把本机播放设备组合成一对左右声道：系统声音拆成左 / 右两路，分别推给两台设备（例如两只蓝牙音箱），
 同时在面板里实时显示每条链路的状态。
 
@@ -39,11 +44,11 @@ StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别
           ├─ 虚拟音频设备（自研 StereoLink 虚拟声卡 / UU远程 / Steam Streaming）
           └─ 没接音箱的物理输出（板载扬声器口 / 空着的 HDMI、DP）
                           │  WASAPI loopback 采集（原生混音格式）
-                          │  本机 48 kHz / 2 ch / 16 bit，全程零重采样
+                          │  本机 48 kHz / 2 ch（原生混音格式，零重采样）
                           ▼
                    StereoLink 路由引擎
-                    ├── 左声道 → 设备 A（如 Xiaomi Sound-1695）  ≈10 ms 一块
-                    └── 右声道 → 设备 B（如 Xiaomi Sound-5320）
+                    ├── 左声道 → 设备 A（例如：蓝牙音箱 A）  ≈10 ms 一块
+                    └── 右声道 → 设备 B（例如：蓝牙音箱 B）
 ```
 
 - **左 / 右分离**：左声道整份送给设备 A，右声道整份送给设备 B。两路各自独立起流、独立失败：
@@ -62,7 +67,7 @@ StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别
 - **实测反馈**：每路实时电平、累计发送量、缓冲、欠载次数；左右自检音；增益、抖动缓冲、左右
   微调延迟都在面板里可调。
 - **零重采样（音质）**：引擎采样率自动跟随采集源的原生混音格式（本机 48000 Hz），采集 → 队列
-  → 渲染全程同率，不再有 44.1k ↔ 48k 的级联重采样；「路径」列显示 `Auto`（悬停可见完整
+  → 渲染全程同率，不再有固定采样率与设备采样率之间的级联重采样；「路径」列显示 `Auto`（悬停可见完整
   `wasapi-autoconvert（48000 Hz / 2 ch / 16-bit int，零 SRC）`）。实测波形相关系数 1.000000、
   THD 0.001%、0 削顶 / 0 掉块 / 0 突变块、扫频 100 Hz–10 kHz 平坦 +0.0 dB。
 - **系统音量联动**：采集源是不吃系统音量的第三方虚拟音频设备（UU远程、Steam 等）时，面板默认
@@ -84,9 +89,9 @@ StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别
 | 操作系统 | Windows 11 24H2（build 26100.9711，x64）<br>※ 注册表 `ProductName` 仍写 “Windows 10 Pro”，这是 Win11 的已知显示现象 |
 | 蓝牙适配器 | Intel(R) Wireless Bluetooth(R)，`USB\VID_8087&PID_0033`，驱动 23.140.0.5，固件 3719a3584001000d19（Intel Wi-Fi 6E AX211 的 CNVi 组合模块） |
 | 蓝牙协议 | 经典蓝牙 A2DP（Windows 内置蓝牙栈，SBC 编码）；适配器上报 LMP 13 / 子版本 0x3058（蓝牙 5.4 档位；Intel 对 AX211 标称蓝牙 5.3） |
-| 音箱 | 2 × 小米 Sound（`Xiaomi Sound-1695` / `Xiaomi Sound-5320`），各自独立蓝牙连接，**没有组「立体声组合」** |
+| 音箱 | 2 × 蓝牙音箱（各自独立 A2DP 连接，**没有组「立体声组合」**；本机实测用的是两台同型号音箱） |
 | 采集源 | 「扬声器 (UU远程虚拟音频设备)」（零安装路径）；自研 `StereoLinkVad` 驱动是可选的高级路径 |
-| 工具链 | Rust 1.82+（MSVC）、cargo 1.99 |
+| 工具链 | Rust 1.88+（MSVC）、cargo 1.99 |
 | 程序形态 | 单个 `stereo-link.exe`（egui / OpenGL），无安装包、无后台服务、无网页前端 |
 | 开销 | 面板常驻约 150 MB 内存、约 4.7% 单核（可见时；最小化后更低） |
 
@@ -174,7 +179,7 @@ cargo build --release -p stereo-link
 # 产物：target\release\stereo-link.exe（约 5.6 MB，单文件、无外部依赖）
 ```
 
-需要 Rust 1.82+（MSVC 工具链）。`cargo test --workspace` 跑全部单元测试。
+需要 Rust 1.88+（MSVC 工具链）。`cargo test --workspace` 跑全部单元测试。
 
 自研虚拟声卡驱动是独立的 WDK 工程（不在 Rust workspace 里，属于可选高级路径），源码、签名流水线
 与驱动包都在 `drivers\`：`scream-derived\`（驱动源码）、`make_package.ps1` / `sign-vad.ps1` /
@@ -257,6 +262,9 @@ scripts/
 安装虚拟声卡.cmd / 卸载虚拟声卡.cmd   自研虚拟声卡的安装 / 卸载入口（可选高级路径，需管理员、需重启）
 docs/gui.md                 面板手册（界面、采集源、操作、FAQ）
 docs/virtual-soundcard.md   采集源与虚拟声卡：三种采集源、自研驱动、testsigning、FAQ
+LICENSE-MIT / LICENSE-APACHE   项目主体双许可全文
+NOTICE                         第三方署名与商标声明
+LICENSES/                      非 MIT/Apache 部分：MS-PL 全文与来源说明（LICENSES/README.md）
 ```
 
 驱动源码、构建流水线与签名后的驱动包（`StereoLinkVad.inf` / `.sys` / `.cat` / `LICENSE-MS-PL.txt`）
@@ -267,7 +275,7 @@ docs/virtual-soundcard.md   采集源与虚拟声卡：三种采集源、自研�
 ```powershell
 cargo test --workspace                      # 单元测试
 cargo run -p stereo-audio --bin endpoints   # 列出本机所有音频端点
-cargo run -p stereo-audio --example route_demo -- --left "Xiaomi Sound-1695" --right "Xiaomi Sound-5320"
+cargo run -p stereo-audio --example route_demo -- --left "蓝牙音箱 A" --right "蓝牙音箱 B"
 ```
 
 `route_demo` 是路由引擎的命令行自检：可选 `--both`（双声道混音）、`--source`（采集源子串）、
@@ -279,6 +287,54 @@ cargo run -p stereo-audio --example route_demo -- --left "Xiaomi Sound-1695" --r
 
 ## 许可证
 
-MIT（面板与音频库）。自研虚拟声卡驱动是从 Scream 派生的 MS-PL 代码（上游血统 MSVAD → Scream →
-StereoLinkVad），许可证全文随驱动包提供（`LICENSE-MS-PL.txt`），再分发时需保留版权与许可声明。
-驱动二进制与开发公钥证书（`drivers\certs\stereolink-dev.cer`）随仓库提交，签名私钥不入库。
+本项目采用 **MIT OR Apache-2.0** 双许可（SPDX：`MIT OR Apache-2.0`）。除下方特别说明的
+少数文件外，你可以任选 MIT 或 Apache-2.0 之一来使用、修改和再分发：
+
+| 路径 | 许可 |
+| --- | --- |
+| `crates/**`、`scripts/**`、`docs/**`、根目录 `*.cmd`、`README.md` | MIT OR Apache-2.0 |
+| `drivers/scream-derived/**`（虚拟声卡驱动源码） | **MS-PL**（Microsoft Public License） |
+| `drivers/pkg-stereolink/**`（编译出的 `StereoLinkVad` 驱动包） | **MS-PL** |
+| `drivers/certs/stereolink-dev.cer` | 开发用公钥证书，无许可声明（私钥不入库） |
+
+- MIT 全文：[`LICENSE-MIT`](LICENSE-MIT)；Apache-2.0 全文：[`LICENSE-APACHE`](LICENSE-APACHE)。
+- 第三方署名与商标说明见 [`NOTICE`](NOTICE)；MS-PL 全文与来源说明见
+  [`LICENSES/MS-PL.txt`](LICENSES/MS-PL.txt) 与 [`LICENSES/README.md`](LICENSES/README.md)。
+
+### 虚拟声卡驱动（MS-PL）
+
+`drivers/scream-derived/` 是从 [Scream](https://github.com/duncanthrax/scream)
+（commit `d789743c248b11d1df7e5ecc546b1bc60b90cd91`，Copyright (c) Tom Kistner 2015）派生的
+Windows 内核驱动源码；Scream 又派生自微软 MSVAD 示例。血统为
+**MSVAD（Microsoft，MS-PL）→ Scream（Tom Kistner，MS-PL）→ StereoLinkVad**。
+这一部分按 **MS-PL** 授权，再分发时：
+
+- 保留 `drivers/scream-derived/` 下每个源文件头里的 Microsoft / Tom Kistner 版权与出处注释
+  （MS-PL §3(C)）；
+- 随附 MS-PL 完整副本（仓库里 `drivers/scream-derived/LICENSE-MS-PL.txt` 与
+  `LICENSES/MS-PL.txt` 各一份）；
+- 「Scream」只能作为描述性出处使用，不能作为产品名或商标（MS-PL §3(A)）。
+
+驱动只以源码 + 自签名构建产物形式提供，不随附微软 WDK 文件；安装需要开启 testsigning，
+风险与副作用见 [`docs/virtual-soundcard.md`](docs/virtual-soundcard.md)。
+
+### 发布二进制时
+
+`stereo-link.exe` 的默认构建内嵌了 egui 的默认字体（`epaint_default_fonts`，OFL-1.1 +
+Ubuntu Font Licence）。发布 exe / 安装包时请同时附上 `LICENSES/OFL-1.1.txt`、
+`LICENSES/Ubuntu-font-1.0.txt`、`NOTICE` 以及 Rust 依赖的许可清单
+（建议用 `cargo about generate` 生成）。
+
+### 商标
+
+Microsoft、Windows、Steam、Valve、Xiaomi、MiPlay、妙播、UU远程、VoiceMeeter、VB-CABLE、
+VB-Audio、Realtek、EDIFIER 等名称是各自所有者的商标或注册商标。本项目与上述公司/产品
+**没有**任何隶属、赞助或背书关系；文档与代码里出现这些名称，仅用于说明兼容性、来源或
+客观事实（如「可选用某个第三方虚拟音频设备」），不构成商标授权。Scream 与 MSVAD 的名称
+仅用于履行 MS-PL 的署名义务。
+
+### 免责
+
+本软件按「现状」提供，不附带任何明示或暗示的担保（包括但不限于适销性、特定用途适用性
+与不侵权）。安装内核驱动、启用 testsigning、修改系统默认音频设备等操作有系统风险，请自行
+评估；详见 [`docs/virtual-soundcard.md`](docs/virtual-soundcard.md) 的「注意事项」。
