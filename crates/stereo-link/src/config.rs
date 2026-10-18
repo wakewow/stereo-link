@@ -25,6 +25,10 @@ pub struct SplitConfig {
     pub left_delay_ms: u32,
     /// 右链路额外延迟（毫秒）。
     pub right_delay_ms: u32,
+    /// 左链路反相 180°（两箱极性相反时，居中的人声/低音会互相抵消——勾上这个修）。
+    pub invert_left: bool,
+    /// 右链路反相 180°。
+    pub invert_right: bool,
 }
 
 impl Default for SplitConfig {
@@ -37,6 +41,8 @@ impl Default for SplitConfig {
             queue_ms: 40,
             left_delay_ms: 0,
             right_delay_ms: 0,
+            invert_left: false,
+            invert_right: false,
         }
     }
 }
@@ -79,6 +85,35 @@ impl Default for CaptureConfig {
     }
 }
 
+/// 音量联动策略。
+///
+/// 采集源分两类：**受系统音量控制**的（自研虚拟声卡、板载/HDMI 等物理输出——WASAPI 回环是
+/// 后置音量，调音量采集幅度就跟着变）和**不受控制**的（UU远程、Steam 等第三方虚拟设备——
+/// 采集幅度恒定，调它们的音量对音箱毫无作用）。后者必须把采集源的音量/静音镜像到每台目标
+/// 设备，用户拖动系统音量条时音箱才会跟着变。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VolumeFollow {
+    /// 自动判断：虚拟设备（非自研）→ 镜像；物理输出/自研虚拟声卡 → 不镜像（否则音量会双重生效）。
+    #[default]
+    Auto,
+    /// 总是把采集源的音量与静音镜像到每台目标设备。
+    On,
+    /// 完全不碰目标设备的音量。
+    Off,
+}
+
+impl VolumeFollow {
+    /// 界面上显示的文字。
+    pub fn label(self) -> &'static str {
+        match self {
+            VolumeFollow::Auto => "自动",
+            VolumeFollow::On => "跟随系统音量",
+            VolumeFollow::Off => "不联动",
+        }
+    }
+}
+
 /// 面板持久化配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -101,6 +136,9 @@ pub struct AppConfig {
     pub auto_start: bool,
     /// 声学自校验用的麦克风端点 id（`{GUID}`），空 = 还没选。
     pub sync_mic: String,
+    /// 音量联动策略（默认自动）。
+    #[serde(default)]
+    pub volume_follow: VolumeFollow,
 }
 
 fn default_auto_start() -> bool {
@@ -116,6 +154,7 @@ impl Default for AppConfig {
             tone_seconds: 3.0,
             auto_start: true,
             sync_mic: String::new(),
+            volume_follow: VolumeFollow::Auto,
         }
     }
 }

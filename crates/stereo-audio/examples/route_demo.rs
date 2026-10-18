@@ -186,6 +186,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         capture_gain: 1.0,
         render_buffer_ms: 40,
         queue_ms: 40,
+        // task-9：采样率自动跟随采集源混音格式、采集缓冲用默认值。
+        rate: None,
+        capture_buffer_ms: None,
     };
     if let Err(e) = config.validate() {
         eprintln!("路由配置不合法：{e}\n\n{}", usage());

@@ -19,13 +19,14 @@ use eframe::egui::{
     Align, Color32, CornerRadius, FontId, Layout, Margin, Rect, RichText, Sense, Stroke, Vec2,
 };
 use stereo_audio::{
-    DataFlow, EndpointFormat, EndpointInfo, MicCandidate, MicHealth, PcmFormat, RouteChannel,
-    RouteConfig, RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats, SyncConfig,
-    SyncMethod, SyncResult,
+    get_endpoint_volume, set_endpoint_mute, set_endpoint_volume, DataFlow, EndpointFormat,
+    EndpointInfo, EndpointVolume, MicCandidate, MicHealth, PcmFormat, RouteChannel, RouteConfig,
+    RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats, SyncConfig, SyncMethod,
+    SyncResult,
 };
 
 use crate::audio_default;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, VolumeFollow};
 use crate::fonts;
 use crate::logbuf::{LogBuffer, LogLine};
 
@@ -194,6 +195,15 @@ const UNDERRUN_HELP: &str = "\
 并确认采集源就是 Windows 默认输出、播放器确实在放声音。\n\
 反方向的问题是丢帧：缓冲满了就丢掉最旧的采样，用来吸收两条链路的时钟漂移。";
 
+/// 「系统音量」联动的悬停说明。
+const VOLUME_FOLLOW_HELP: &str = "\
+系统音量怎么作用到音箱：\n\
+· 第三方虚拟声卡（UU远程、Steam 等）不吃系统音量 —— 调它自己的音量音箱毫无反应，\
+所以自动模式会把采集源的音量/静音镜像到每台目标设备，拖系统音量条时音箱就跟着变；\n\
+· 自研虚拟声卡与板载/HDMI 等物理输出是「后置音量」—— 回环采集到的幅度已经跟着音量变过了，\
+再镜像一次会双重生效（音量变化过陡），所以自动模式不联动；\n\
+· 联动期间改过的目标设备音量，会在停止路由/退出面板时还原成原值（强杀不还原）。";
+
 /// 设备列吃掉剩余宽度：同一窗口尺寸下恒定，不随数值变化。
 fn route_device_width(available: f32, spacing: f32) -> f32 {
     let fixed = ROUTE_COL_CH
@@ -352,6 +362,14 @@ fn capture_kind(name: &str) -> CaptureKind {
     CaptureKind::Physical
 }
 
+/// 采集源是不是「调它自己的音量对音箱没用」的第三方虚拟设备（自动策略的依据）。
+///
+/// 自研虚拟声卡与物理输出的 WASAPI 回环是**后置音量**：调音量采集幅度就跟着变，
+/// 再镜像到目标设备就会双重生效（音量变化过陡），所以这两类不联动。
+fn ignores_system_volume(name: &str) -> bool {
+    capture_kind(name) == CaptureKind::Virtual && !name.contains("立体声链")
+}
+
 /// 引擎要的采集源字符串：完整名字在 render 列表里重复时用端点 id（精确匹配），否则用完整名。
 ///
 /// 本机两个 NVIDIA 端点同名，按名字匹配会选错；`{...}` 形状由 `stereo-audio`
@@ -448,6 +466,18 @@ pub struct StereoLinkApp {
     clicks_busy: bool,
     /// 点击串开始时间（用于自动解除忙碌标记）。
     clicks_at: Option<Instant>,
+    /// 音量联动：目标设备的原始音量（写之前记下，停止路由时还原）。
+    volume_saved: BTreeMap<String, (f32, bool)>,
+    /// 上一次镜像出去的音量与静音，避免每帧都写 COM。
+    volume_last: Option<(f32, bool)>,
+    /// 上次轮询采集源音量的时间。
+    volume_at: Option<Instant>,
+    /// 最近一次音量联动失败的原因（显示在界面上）。
+    volume_error: Option<String>,
+    /// 采集源端点的音量（每 ~1 s 读一次；与「是否联动」无关，用来诊断「信号被衰减」）。
+    volume_source: Option<EndpointVolume>,
+    /// 上次读采集源音量的时间。
+    volume_source_at: Option<Instant>,
 }
 
 impl StereoLinkApp {
@@ -490,6 +520,12 @@ impl StereoLinkApp {
             sync_result: None,
             clicks_busy: false,
             clicks_at: None,
+            volume_saved: BTreeMap::new(),
+            volume_last: None,
+            volume_at: None,
+            volume_error: None,
+            volume_source: None,
+            volume_source_at: None,
         };
         app.refresh_endpoints();
         app.refresh_formats();
@@ -553,6 +589,8 @@ impl StereoLinkApp {
         self.poll_format_probe();
         self.poll_sync();
         self.refresh_default_output(false);
+        self.tick_volume_follow();
+        self.tick_volume_watch();
 
         if self.clicks_busy
             && self
@@ -567,6 +605,26 @@ impl StereoLinkApp {
             if engine.alive() {
                 self.stats = Some(engine.stats());
             } else {
+                // 引擎已经停止：把最后一份快照里的每路错误打出来，方便定位「为什么停了」。
+                let final_stats = engine.stats();
+                tracing::warn!(
+                    "[路由诊断] 引擎已停止：running={} 采集源={} 采集错误={:?} 采集帧={} 采样率={}",
+                    final_stats.running,
+                    final_stats.source_device,
+                    final_stats.source_error,
+                    final_stats.captured_frames,
+                    final_stats.rate
+                );
+                for r in &final_stats.routes {
+                    tracing::warn!(
+                        "[路由诊断] {} → {} | 已发 {} B | 欠载 {} | 错误 {:?}",
+                        r.channel.as_str(),
+                        r.endpoint,
+                        r.sent_bytes,
+                        r.underruns,
+                        r.error
+                    );
+                }
                 tracing::warn!("路由线程已退出（可能输出设备被拔掉/切换）");
                 self.engine = None;
                 self.stats = None;
@@ -837,6 +895,7 @@ impl StereoLinkApp {
                 gain: self.cfg.split.gain,
                 delay_ms: self.cfg.split.left_delay_ms,
                 enabled: true,
+                invert: self.cfg.split.invert_left,
             });
         }
         let right = self.cfg.split.right_endpoint.trim();
@@ -847,6 +906,7 @@ impl StereoLinkApp {
                 gain: self.cfg.split.gain,
                 delay_ms: self.cfg.split.right_delay_ms,
                 enabled: true,
+                invert: self.cfg.split.invert_right,
             });
         }
         if routes.is_empty() {
@@ -858,6 +918,9 @@ impl StereoLinkApp {
             capture_gain: 1.0,
             render_buffer_ms: 40,
             queue_ms: self.cfg.split.queue_ms,
+            // 自动：引擎采样率跟随采集源的原生混音格式 → 全程零 SRC（这是「杂音/音质差」的修复）。
+            rate: None,
+            capture_buffer_ms: None,
         })
     }
 
@@ -909,6 +972,7 @@ impl StereoLinkApp {
             tracing::info!("[路由] 已停止");
         }
         self.stats = None;
+        self.restore_target_volumes();
         if restore_output {
             self.restore_previous_output();
         }
@@ -1257,6 +1321,183 @@ impl StereoLinkApp {
         self.toast("正在放点击串：听到两下就是没对齐，调到重合成一下");
     }
 
+    // ---- 音量联动 ---------------------------------------------------------
+
+    /// 采集源是不是「调它自己的音量对音箱没用」的虚拟设备（自动策略的依据）。
+    ///
+    /// 自研虚拟声卡与物理输出的 WASAPI 回环是**后置音量**：调音量采集幅度就跟着变，
+    /// 再镜像到目标设备就会双重生效（音量变化过陡），所以这两类不联动。
+    fn capture_ignores_volume(&self) -> bool {
+        let Some(ep) = self.capture_endpoint() else {
+            return false;
+        };
+        ignores_system_volume(&ep.name)
+    }
+
+    /// 当前是否要把采集源的音量/静音镜像到目标设备。
+    fn volume_follow_active(&self) -> bool {
+        match self.cfg.volume_follow {
+            VolumeFollow::On => true,
+            VolumeFollow::Off => false,
+            VolumeFollow::Auto => self.capture_ignores_volume(),
+        }
+    }
+
+    /// 目标端点（左/右，按配置里的名字或 id 子串），去重。
+    fn target_endpoints(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for name in [
+            self.cfg.split.left_endpoint.trim(),
+            self.cfg.split.right_endpoint.trim(),
+        ] {
+            if !name.is_empty() && !out.iter().any(|n| n == name) {
+                out.push(name.to_string());
+            }
+        }
+        out
+    }
+
+    /// 每 ~400 ms 把采集源的音量与静音镜像到目标设备（虚拟声卡场景）。
+    fn tick_volume_follow(&mut self) {
+        if !self.volume_follow_active() || self.engine.is_none() {
+            return;
+        }
+        let due = self
+            .volume_at
+            .map(|t| t.elapsed() > Duration::from_millis(400))
+            .unwrap_or(true);
+        if !due {
+            return;
+        }
+        self.volume_at = Some(Instant::now());
+
+        let Some(source) = self.capture_selector() else {
+            return;
+        };
+        let volume = match get_endpoint_volume(&source) {
+            Ok(v) => v,
+            Err(e) => {
+                if self.volume_error.is_none() {
+                    self.volume_error =
+                        Some(format!("读不到采集源音量（{}）：{e}", short_endpoint(&source)));
+                    tracing::warn!("[音量] 读采集源音量失败：{e}");
+                }
+                return;
+            }
+        };
+
+        let changed = match self.volume_last {
+            Some((scalar, muted)) => {
+                (scalar - volume.scalar).abs() >= 0.005 || muted != volume.muted
+            }
+            None => true,
+        };
+        if !changed {
+            return;
+        }
+        let big = match self.volume_last {
+            Some((scalar, muted)) => {
+                (scalar - volume.scalar).abs() >= 0.03 || muted != volume.muted
+            }
+            None => true,
+        };
+        self.volume_last = Some((volume.scalar, volume.muted));
+        self.volume_error = None;
+
+        let targets = self.target_endpoints();
+        for target in &targets {
+            if !self.volume_saved.contains_key(target) {
+                if let Ok(original) = get_endpoint_volume(target) {
+                    self.volume_saved
+                        .insert(target.clone(), (original.scalar, original.muted));
+                }
+            }
+            if let Err(e) = set_endpoint_volume(target, volume.scalar) {
+                self.volume_error = Some(format!("写音量失败（{}）：{e}", short_endpoint(target)));
+                tracing::warn!("[音量] 写 {target} 音量失败：{e}");
+                continue;
+            }
+            if let Err(e) = set_endpoint_mute(target, volume.muted) {
+                tracing::warn!("[音量] 写 {target} 静音失败：{e}");
+            }
+        }
+        if big {
+            tracing::info!(
+                "[音量] 跟随采集源 {:.0}%{} → {}",
+                volume.scalar * 100.0,
+                if volume.muted { "（静音）" } else { "" },
+                targets.join(" / ")
+            );
+        }
+    }
+
+    /// 每 ~1 s 读一次采集源音量（不依赖「是否联动」），供「信号被衰减」诊断用。
+    ///
+    /// 实测：自研虚拟声卡的端点音量是**后置**的（0.14 → 回环幅度 -29.7 dB），
+    /// 而 Realtek 等物理输出是**前置**的（调它不影响回环）。所以只有虚拟声卡
+    /// 需要这条诊断。
+    fn tick_volume_watch(&mut self) {
+        let due = self
+            .volume_source_at
+            .map(|t| t.elapsed() > Duration::from_millis(1000))
+            .unwrap_or(true);
+        if !due {
+            return;
+        }
+        self.volume_source_at = Some(Instant::now());
+        let Some(source) = self.capture_selector() else {
+            self.volume_source = None;
+            return;
+        };
+        self.volume_source = get_endpoint_volume(&source).ok();
+    }
+
+    /// 采集源音量是否低到「整条链路被衰减」的程度（只对后置音量的虚拟声卡报警）。
+    fn source_volume_warning(&self) -> Option<(f32, f32)> {
+        let ep = self.capture_endpoint()?;
+        if !ep.name.contains("立体声链") {
+            return None;
+        }
+        let v = self.volume_source.as_ref()?;
+        if v.muted || v.scalar >= 0.9 {
+            return None;
+        }
+        // Windows 的音量曲线不是简单的 20·log10（本机 0.14 对应 -29.7 dB 而不是 -17.1 dB），
+        // 优先用 IAudioEndpointVolume 报的 dB，跟系统音量界面/探针保持一致。
+        let db = v
+            .db
+            .unwrap_or_else(|| 20.0 * v.scalar.max(1e-4).log10());
+        Some((v.scalar, db))
+    }
+
+    /// 把采集源音量设为 100%（保住有效位深：这是「人声低 / 音质差」的直接原因）。
+    fn normalize_source_volume(&mut self) {
+        let Some(source) = self.capture_selector() else {
+            self.toast("先选好采集源");
+            return;
+        };
+        match set_endpoint_volume(&source, 1.0) {
+            Ok(v) => {
+                self.volume_source = Some(v);
+                self.volume_source_at = Some(Instant::now());
+                self.toast("采集源音量已设为 100%（响度请用系统音量或音箱音量控制）");
+            }
+            Err(e) => self.toast(format!("设置失败：{e}")),
+        }
+    }
+
+    /// 还原目标设备被联动改掉的音量（best-effort：强杀/崩溃不会还原）。
+    fn restore_target_volumes(&mut self) {
+        let saved = std::mem::take(&mut self.volume_saved);
+        for (target, (scalar, muted)) in saved {
+            let _ = set_endpoint_volume(&target, scalar);
+            let _ = set_endpoint_mute(&target, muted);
+        }
+        self.volume_last = None;
+        self.volume_at = None;
+        self.volume_error = None;
+    }
+
     fn toast(&mut self, text: impl Into<String>) {
         self.notice = Some((text.into(), Instant::now()));
     }
@@ -1353,6 +1594,18 @@ impl StereoLinkApp {
             hints.push(Hint {
                 tone: Tone::Ok,
                 text: "系统默认输出 = 采集源".to_string(),
+            });
+        }
+
+        if let Some((scalar, db)) = self.source_volume_warning() {
+            hints.push(Hint {
+                tone: Tone::Warn,
+                text: format!(
+                    "采集源音量只有 {:.0}%（整条链路衰减 {:.1} dB）——「人声低/音质差」的直接原因；\
+                     点声道路由卡里的「设为 100%」",
+                    scalar * 100.0,
+                    db
+                ),
             });
         }
 
@@ -1913,6 +2166,90 @@ impl StereoLinkApp {
                 }
             });
 
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(muted("系统音量"));
+                let mut follow = self.cfg.volume_follow;
+                egui::ComboBox::from_id_salt("volume_follow")
+                    .width(150.0)
+                    .selected_text(follow.label())
+                    .show_ui(ui, |ui| {
+                        for option in [VolumeFollow::Auto, VolumeFollow::On, VolumeFollow::Off] {
+                            ui.selectable_value(&mut follow, option, option.label());
+                        }
+                    });
+                if follow != self.cfg.volume_follow {
+                    self.cfg.volume_follow = follow;
+                    self.cfg.save();
+                    if follow == VolumeFollow::Off {
+                        self.restore_target_volumes();
+                    } else {
+                        self.volume_last = None;
+                        self.volume_at = None;
+                    }
+                }
+                let (text, color) = if self.volume_follow_active() {
+                    match self.volume_last {
+                        Some((scalar, muted)) => (
+                            format!(
+                                "跟随中：{:.0}%{}",
+                                scalar * 100.0,
+                                if muted { "（静音）" } else { "" }
+                            ),
+                            OK,
+                        ),
+                        None => ("跟随中".to_string(), OK),
+                    }
+                } else {
+                    ("不联动".to_string(), MUTED)
+                };
+                ui.add(
+                    egui::Label::new(RichText::new(text).size(12.0).color(color))
+                        .selectable(false),
+                );
+                if let Some(err) = self.volume_error.clone() {
+                    ui.add(
+                        egui::Label::new(RichText::new(err).size(11.0).color(ERR))
+                            .selectable(false),
+                    );
+                }
+            })
+            .response
+            .on_hover_text(VOLUME_FOLLOW_HELP);
+
+            // 采集源音量诊断：后置音量的虚拟声卡如果被调低，整条链路会平白衰减几十 dB，
+            // 听感就是「人声低、没劲、音质差」（数字链路已实测无损）。
+            if let Some((scalar, db)) = self.source_volume_warning() {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "⚠ 采集源音量 {:.0}%（衰减 {:.1} dB）",
+                                scalar * 100.0,
+                                db
+                            ))
+                            .size(11.0)
+                            .color(WARN),
+                        )
+                        .selectable(false),
+                    )
+                    .on_hover_text(
+                        "实测：自研虚拟声卡的端点音量是后置的，它直接衰减送进回环的音频。\
+                         音量只有 14% 时整条链路少 29.7 dB —— 这正是「人声太低/发闷」的原因\
+                         （引擎数字通路实测无损）。把采集源音量拉满，再用系统音量或音箱音量\
+                         控制响度即可。",
+                    );
+                    if ui
+                        .small_button("设为 100%")
+                        .on_hover_text("把采集源端点音量设为 100%，保住有效位深")
+                        .clicked()
+                    {
+                        self.normalize_source_volume();
+                    }
+                });
+            }
+
             ui.collapsing("高级：左右微调延迟", |ui| {
                 ui.horizontal(|ui| {
                     ui.label(muted("左额外延迟"));
@@ -1938,6 +2275,27 @@ impl StereoLinkApp {
                     }
                 });
                 ui.label(muted("两箱固定时差（比如左箱偏慢）可以在这里补齐。"));
+
+                ui.add_space(6.0);
+                let mut inv_l = self.cfg.split.invert_left;
+                let mut inv_r = self.cfg.split.invert_right;
+                let a = ui
+                    .checkbox(&mut inv_l, "左声道反相 180°")
+                    .on_hover_text(
+                        "两台音箱极性相反时，居中的人声与低音在房间里会互相抵消\
+                         （听感：人声小、发虚、低音没劲），勾上任一路反相即可修好。",
+                    )
+                    .changed();
+                let b = ui
+                    .checkbox(&mut inv_r, "右声道反相 180°")
+                    .on_hover_text("同上；只勾一路即可，两路都勾等于没勾。")
+                    .changed();
+                if a || b {
+                    self.cfg.split.invert_left = inv_l;
+                    self.cfg.split.invert_right = inv_r;
+                    self.cfg.save();
+                    self.restart_routing();
+                }
             });
 
             // ---- 声学自校验 ----
@@ -2699,6 +3057,18 @@ mod tests {
             channel_color(RouteChannel::Left),
             channel_color(RouteChannel::Right)
         );
+    }
+
+    #[test]
+    fn only_third_party_virtual_sources_ignore_system_volume() {
+        // 第三方虚拟设备：不吃系统音量 → 需要镜像。
+        assert!(ignores_system_volume("扬声器 (UU远程虚拟音频设备)"));
+        assert!(ignores_system_volume("扬声器 (Steam Streaming Microphone)"));
+        // 自研虚拟声卡与物理输出：后置音量，系统音量本来就已经作用在采集幅度里 → 不镜像。
+        assert!(!ignores_system_volume("扬声器 (立体声链虚拟声卡)"));
+        assert!(!ignores_system_volume("扬声器 (Realtek High Definition Audio)"));
+        assert!(!ignores_system_volume("CG345UK (NVIDIA High Definition Audio)"));
+        assert!(!ignores_system_volume("扬声器 (Xiaomi Sound-1695)"));
     }
 
     fn test_endpoint(id: &str, name: &str) -> EndpointInfo {

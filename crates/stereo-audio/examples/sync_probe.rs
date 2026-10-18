@@ -26,8 +26,9 @@
 use std::time::{Duration, Instant};
 
 use stereo_audio::sync::{
-    calibrate_pair, calibrate_pair_sequential, list_microphones, mic_health,
-    play_alignment_clicks, SyncConfig, SyncProbe,
+    calibrate_pair, calibrate_pair_sequential, check_alignment, list_microphones, measure_comb,
+    measure_polarity, mic_health, play_alignment_clicks, scan_alignment, CombResult,
+    PolarityResult, SyncConfig, SyncProbe,
 };
 use stereo_audio::{
     build_sine_s16, list_endpoints, play_pcm_s16, AudioCapture, CaptureConfig, CaptureMode,
@@ -325,9 +326,14 @@ fn activate_meter(dev: &IMMDevice) -> Result<IAudioMeterInformationLocal, AnyErr
 
 // ---------------------------------------------------------------- --volume
 
-fn volume_mode(mic: &str, set: Option<f32>, unmute: bool) -> Result<(), AnyErr> {
+fn volume_mode(
+    mic: &str,
+    flow: DataFlow,
+    set: Option<f32>,
+    unmute: bool,
+) -> Result<(), AnyErr> {
     com_init()?;
-    let dev = device_by_name(mic, DataFlow::Capture)?;
+    let dev = device_by_name(mic, flow)?;
     let vol = activate_volume(&dev)?;
     unsafe {
         let mut ch = 0u32;
@@ -932,6 +938,327 @@ fn clicks_mode(left: &str, right: &str, ld: u32, rd: u32, seconds: f64) -> Resul
     Ok(())
 }
 
+/// `--polarity`：声学诊断两路之间的**相对极性**与**梳状滤波**。
+///
+/// 会真实从两只箱放出测试音。只给 `--left` 时做单端点测量；`--pair-only` 只做两次单箱测量
+/// （快，但拿不到时间差）。
+fn polarity_mode(
+    mic: &str,
+    left: &str,
+    right: Option<&str>,
+    cfg: &SyncConfig,
+    pair_only: bool,
+) -> Result<(), AnyErr> {
+    println!("== 极性与梳状滤波诊断 ==");
+    println!("  麦克风：{mic}");
+    println!("  左路：{left}");
+    if let Some(r) = right {
+        println!("  右路：{r}");
+    }
+    println!("  {}", cfg.describe());
+
+    println!("  先给麦克风做体检…");
+    let h = mic_health(mic, 1_000)?;
+    println!("  {}", h.describe());
+    if !h.verdict.is_usable() {
+        println!(
+            "  麦克风不可用（{}），无法做声学诊断。",
+            h.verdict.as_str()
+        );
+        return Ok(());
+    }
+
+    let Some(right) = right else {
+        println!("  单端点测量（放一次测试音）…");
+        let t0 = Instant::now();
+        let p = measure_polarity(mic, left, cfg)?;
+        println!("  耗时 {:.1}s", t0.elapsed().as_secs_f64());
+        println!("  {}", p.describe());
+        print_peaks(&p);
+        println!(
+            "  注意：单端点只能给出**带符号相关**这一个数；要判断「两只箱是否反相」必须用同样的\
+             参考信号测另一个端点，比较两次的符号。"
+        );
+        return Ok(());
+    };
+
+    if pair_only {
+        println!("  依次测两路的相对极性（只放两次测试音）…");
+        let t0 = Instant::now();
+        let (l, r) = stereo_audio::sync::measure_pair_polarity(mic, left, right, cfg)?;
+        println!("  耗时 {:.1}s", t0.elapsed().as_secs_f64());
+        println!("  左路：{}", l.describe());
+        print_peaks(&l);
+        println!("  右路：{}", r.describe());
+        print_peaks(&r);
+        println!("  {}", polarity_note(&l, &r));
+        return Ok(());
+    }
+
+    println!("  完整诊断：左单独 / 右单独 / 两路同时，共三段测试音…");
+    let t0 = Instant::now();
+    let c: CombResult = measure_comb(mic, left, right, cfg)?;
+    println!("  耗时 {:.1}s", t0.elapsed().as_secs_f64());
+    println!();
+    println!("{}", c.describe());
+    println!();
+    {
+        let mut line = String::new();
+        for (ms, v) in &c.both_peaks {
+            line.push_str(&format!(" {ms:.3}ms/{v:+.3}"));
+        }
+        println!("  两路同时播的相关峰（滞后/带符号值）：{line}");
+        if c.both_peaks.len() >= 2 {
+            let gap = (c.both_peaks[1].0 - c.both_peaks[0].0).abs();
+            if gap > 20.0 {
+                println!(
+                    "  ⚠ 两个峰相距 {gap:.1} ms（>20 ms）→ 两路在时间上**基本不重叠**，\
+                     这不是梳状滤波而是回声；此时「合成幅度比」没有意义。"
+                );
+            }
+        }
+    }
+    println!();
+    println!("  逐频点梳状曲线（ratio = 合成幅度 / 单只幅度之和）：");
+    println!("     频率Hz      左        右       合成      ratio");
+    for p in &c.curve {
+        println!(
+            "  {:>9.0}  {:8.5}  {:8.5}  {:8.5}   {:6.3}",
+            p.freq_hz, p.left, p.right, p.both, p.ratio
+        );
+    }
+    println!();
+    println!("  {}", polarity_note(&c.left, &c.right));
+    match c.verdict {
+        stereo_audio::sync::CombVerdict::Aligned => {
+            println!("  建议：不需要改动。若用户仍觉得人声低，问题不在两路相位/时间差。")
+        }
+        stereo_audio::sync::CombVerdict::Inverted => {
+            println!("  建议：把其中一只箱的极性翻转（交换扬声器线序，或在软件里对该路取反）。")
+        }
+        stereo_audio::sync::CombVerdict::CombFiltered => {
+            println!(
+                "  建议：用 --calibrate 测出延迟差，再用 --clicks 手动微调到两下重合成一下。"
+            )
+        }
+        stereo_audio::sync::CombVerdict::InvertedAndComb => {
+            println!("  建议：先翻转极性，再用 --clicks 对齐时间。")
+        }
+    }
+    Ok(())
+}
+
+/// `--align-scan`：左右同时播同一段单频正弦，相对延迟从 `--from` 扫到 `--to`，测合成幅度。
+///
+/// 直接回答「当前配置里的延迟值对不对」：合成幅度最大的那个延迟才是真正的对齐点，
+/// `--current` 给出配置里的值，会算出它比最佳点低多少 dB。
+fn align_scan_mode(
+    mic: &str,
+    left: &str,
+    right: &str,
+    cfg: &SyncConfig,
+    tone_hz: f64,
+    from_ms: f64,
+    to_ms: f64,
+    step_ms: f64,
+    current_ms: Option<f64>,
+) -> Result<(), AnyErr> {
+    println!("== 相对延迟扫描（对齐点搜索）==");
+    println!("  麦克风：{mic}");
+    println!("  左路：{left}");
+    println!("  右路：{right}");
+    println!("  {}", cfg.describe());
+    println!(
+        "  探测单音：{tone_hz} Hz | 范围 {from_ms} → {to_ms} ms | 步进 {step_ms} ms"
+    );
+
+    // 单音扫描的合成幅度是 |1 + e^{j2πfΔ}|，以 1/f 为周期摆动；如果步进恰好是音调周期的
+    // 整数倍（例如 1 kHz 配 2 ms 步进 = 整整 2 个周期），每个采样点落在同一相位上，
+    // 扫出来是一条平线——那不是「没有对齐点」，而是扫描参数自带了混叠。
+    let cycles_per_step = tone_hz * step_ms / 1000.0;
+    let nearest = cycles_per_step.round();
+    if (cycles_per_step - nearest).abs() < 0.02 && nearest >= 1.0 {
+        println!(
+            "  ⚠ 扫描参数自带混叠：{tone_hz} Hz 的周期是 {:.3} ms，而步进 {step_ms} ms 正好是它的 {nearest:.0} 倍，\n\
+             \x20    每个采样点都落在同一相位上 → 扫出来必然是平线，看不到对齐点。\n\
+             \x20    请把 --step 改成 1（或任何不是 {:.3} ms 整数倍的步进），或把 --tone-hz 改成与步进不成整数倍关系的频率（例如 997）。",
+            1000.0 / tone_hz,
+            1000.0 / tone_hz
+        );
+    }
+    println!(
+        "  提示：单音只能验证「候选延迟附近有没有峰」，找不到绝对零点；\n\
+         \x20    要量两箱真实到达差请用 --align-check（同一次录音里的相关峰间隔）。"
+    );
+
+    println!("  先给麦克风做体检…");
+    let h = mic_health(mic, 1_000)?;
+    println!("  {}", h.describe());
+    if !h.verdict.is_usable() {
+        println!("  麦克风不可用（{}），无法扫描。", h.verdict.as_str());
+        return Ok(());
+    }
+
+    println!("  开始扫描（每个点放一段测试音）…");
+    let t0 = Instant::now();
+    let scan = scan_alignment(mic, left, right, cfg, tone_hz, from_ms, to_ms, step_ms)?;
+    println!("  耗时 {:.1}s", t0.elapsed().as_secs_f64());
+    println!();
+    println!("     延迟ms      tone幅度          RMS       峰值    窗起点ms");
+    for p in &scan.points {
+        println!(
+            "  {:>9.2}  {:>12.6}  {:>11.6}  {:>9.5}  {:>10.1}",
+            p.delay_ms, p.tone, p.rms, p.peak_abs, p.tone_at_ms
+        );
+    }
+    println!();
+    println!("  {}", scan.describe());
+
+    if let Some(cur) = current_ms {
+        let near = scan
+            .points
+            .iter()
+            .min_by(|a, b| {
+                (a.delay_ms - cur)
+                    .abs()
+                    .partial_cmp(&(b.delay_ms - cur).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied()
+            .unwrap_or_default();
+        let loss_db = if near.tone > 0.0 && scan.best.tone > 0.0 {
+            20.0 * (scan.best.tone / near.tone).log10()
+        } else {
+            0.0
+        };
+        println!(
+            "  当前配置的 {cur:.1} ms（表里最近点 {:.1} ms，幅度 {:.6}）比最佳点低 **{loss_db:.1} dB**",
+            near.delay_ms, near.tone
+        );
+    }
+
+    println!(
+        "  注意：单频正弦的合成幅度以 1/f 为周期摆动（1 kHz 即 1 ms），所以只有**扫描范围内**\n\
+         \x20 的峰才是可信的对齐点；若整条曲线是平的，说明两路在时间上根本不重叠——\n\
+         \x20 先用 --polarity --right 看「两路同时播」的相关峰相距多远。"
+    );
+    Ok(())
+}
+
+/// `--align-check`：两路同时播同一段探测信号（各自可预垫延迟），量相关峰间隔。
+///
+/// 先用 `--apply-left 0` 量出真实到达差，再把这个差填回去复测：间隔应塌到 0、RMS 抬高。
+fn align_check_mode(
+    mic: &str,
+    left: &str,
+    right: &str,
+    cfg: &SyncConfig,
+    apply_left_ms: i32,
+    apply_right_ms: i32,
+) -> Result<(), AnyErr> {
+    println!("== 两路对齐检查（同一段录音里两个相关峰的间隔）==");
+    println!("  麦克风：{mic}");
+    println!("  左路：{left}  预垫 {apply_left_ms} ms");
+    println!("  右路：{right}  预垫 {apply_right_ms} ms");
+    println!("  {}", cfg.describe());
+    let h = mic_health(mic, 1_000)?;
+    println!("  {}", h.describe());
+    if !h.verdict.is_usable() {
+        println!("  麦克风不可用（{}），无法测量。", h.verdict.as_str());
+        return Ok(());
+    }
+    let t0 = Instant::now();
+    let c = check_alignment(mic, left, right, cfg, apply_left_ms, apply_right_ms)?;
+    println!("  耗时 {:.1}s", t0.elapsed().as_secs_f64());
+    println!("  左路播放：{}", c.left_playback);
+    println!("  右路播放：{}", c.right_playback);
+    println!(
+        "  起播时刻（相对 Barrier 放行）：左 {} ms / 右 {} ms → 相差 {} ms",
+        c.left_start_ms,
+        c.right_start_ms,
+        (c.right_start_ms - c.left_start_ms).abs()
+    );
+    println!(
+        "  播放占用（建流+播放+排空）：左 {} ms / 右 {} ms",
+        c.left_end_ms - c.left_start_ms,
+        c.right_end_ms - c.right_start_ms
+    );
+    if (c.right_start_ms - c.left_start_ms).abs() > 50
+        || (c.left_end_ms - c.left_start_ms) > 2 * (c.right_end_ms - c.right_start_ms).max(1)
+    {
+        println!("  ⚠ 两路没有真正并发起播，本次测量不可信（请重跑）");
+    }
+    println!("  {}", c.describe());
+    if !c.merged {
+        println!(
+            "  → 两路在麦克风处相隔 {:.1} ms（≈ {:.2} 米声程），**没对齐**：\n\
+             \x20    这么大的偏移不是梳状滤波，而是**可听见的回声/双声**（人声会发糊、定位散）。\n\
+             \x20    把「左垫」改成 {:.0} ms（或右垫对应值）再测一次，间隔应塌到 0。",
+            c.gap_ms,
+            c.gap_ms / 1000.0 * 343.0,
+            apply_left_ms as f64 + c.gap_ms
+        );
+    } else {
+        println!(
+            "  → 两路已重合（间隔 {:.3} ms ≤ {:.1} ms）：这就是当前设置下两路能拿到的最大相干叠加。",
+            c.gap_ms,
+            stereo_audio::sync::ALIGN_MERGE_MS
+        );
+    }
+    Ok(())
+}
+
+/// 打印互相关曲线上的前几个峰——用来判断「峰是不是唯一的」。
+///
+/// 如果出现**符号相反、幅度相当**的第二个峰，说明录音里有两份反相的探测信号
+/// （两只箱其实都在出声、或存在反相强反射），此时最大 `|峰|` 的符号会随机翻转，
+/// 极性结论不成立。
+fn print_peaks(p: &PolarityResult) {
+    if p.peaks.is_empty() {
+        return;
+    }
+    let mut line = String::new();
+    for (ms, v) in &p.peaks {
+        line.push_str(&format!(" {ms:.3}ms/{v:+.3}"));
+    }
+    println!("    相关峰（滞后/带符号值）：{line}");
+    if p.direct * p.correlation < 0.0 {
+        println!(
+            "    ⚠ 最大|峰|（{:+.3}）与直达声（{:+.3}）**符号相反** → 最大|峰|量到的是反相强反射；\
+             判极性已自动改用直达声",
+            p.correlation, p.direct
+        );
+    }
+    if p.peaks.len() >= 2 {
+        let (a, b) = (p.peaks[0].1, p.peaks[1].1);
+        if a * b < 0.0 && b.abs() >= 0.8 * a.abs() {
+            println!(
+                "    ⚠ 存在符号相反、幅度相当的第二个峰（{a:+.3} vs {b:+.3}，相隔 {:.3} ms）\
+                 → 本次极性结论**不可信**",
+                p.peaks[1].0 - p.peaks[0].0
+            );
+        }
+    }
+}
+
+/// 由两次单箱测量给出「是否有一只箱反相」的一句话。
+///
+/// 用 `direct`（直达声）而不是 `correlation`（最大 |峰|）：本机实测两只箱的互相关曲线都是
+/// 「直达声 + 其后 ~7 ms 一个更强的反相反射」，取最大 |峰| 会量到反射。
+fn polarity_note(l: &PolarityResult, r: &PolarityResult) -> String {
+    let (a, b) = (l.direct, r.direct);
+    if a.abs() < 0.15 || b.abs() < 0.15 {
+        return format!(
+            "直达声相关峰太弱（左 {a:+.3} / 右 {b:+.3}），极性不可判——先确认麦克风听得见。"
+        );
+    }
+    if a * b < 0.0 {
+        format!("两路**直达声**符号相反（左 {a:+.3} / 右 {b:+.3}）→ **有一只箱极性相反**。")
+    } else {
+        format!("两路**直达声**同号（左 {a:+.3} / 右 {b:+.3}）→ 两路相对极性一致，没有反相。")
+    }
+}
+
 fn main() -> Result<(), AnyErr> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -987,6 +1314,87 @@ fn main() -> Result<(), AnyErr> {
         return clicks_mode(&left, &right, ld, rd, seconds.min(30.0));
     }
 
+    if has_flag(&args, "--volume") {
+        let set = arg_value(&args, "--set").and_then(|v| v.parse::<f32>().ok());
+        let unmute = has_flag(&args, "--unmute");
+        if let Some(sp) = arg_value(&args, "--speaker") {
+            println!("== 端点音量 / 静音（render）：{sp} ==");
+            return volume_mode(&sp, DataFlow::Render, set, unmute);
+        }
+        let mic = arg_value(&args, "--mic").ok_or("缺少 --mic 或 --speaker <子串>")?;
+        println!("== 端点音量 / 静音（capture）：{mic} ==");
+        return volume_mode(&mic, DataFlow::Capture, set, unmute);
+    }
+
+    if has_flag(&args, "--polarity") {
+        let mic = arg_value(&args, "--mic").ok_or("缺少 --mic <子串>")?;
+        let left = arg_value(&args, "--left").ok_or("缺少 --left <子串>")?;
+        let right = arg_value(&args, "--right");
+        let mut cfg = SyncConfig::new(mic.clone(), left.clone());
+        if let Some(v) = arg_value(&args, "--probe-ms").and_then(|v| v.parse::<u32>().ok()) {
+            cfg = cfg.with_probe_ms(v);
+        }
+        if let Some(v) = arg_value(&args, "--amplitude").and_then(|v| v.parse::<f32>().ok()) {
+            cfg = cfg.with_amplitude(v);
+        }
+        return polarity_mode(
+            &mic,
+            &left,
+            right.as_deref(),
+            &cfg,
+            has_flag(&args, "--pair-only"),
+        );
+    }
+
+    if has_flag(&args, "--align-check") {
+        let mic = arg_value(&args, "--mic").ok_or("缺少 --mic <子串>")?;
+        let left = arg_value(&args, "--left").ok_or("缺少 --left <子串>")?;
+        let right = arg_value(&args, "--right").ok_or("缺少 --right <子串>")?;
+        let mut cfg = SyncConfig::new(mic.clone(), left.clone());
+        if let Some(v) = arg_value(&args, "--probe-ms").and_then(|v| v.parse::<u32>().ok()) {
+            cfg = cfg.with_probe_ms(v);
+        }
+        if let Some(v) = arg_value(&args, "--amplitude").and_then(|v| v.parse::<f32>().ok()) {
+            cfg = cfg.with_amplitude(v);
+        }
+        let ld = arg_value(&args, "--apply-left")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(0);
+        let rd = arg_value(&args, "--apply-right")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(0);
+        return align_check_mode(&mic, &left, &right, &cfg, ld, rd);
+    }
+
+    if has_flag(&args, "--align-scan") {
+        let mic = arg_value(&args, "--mic").ok_or("缺少 --mic <子串>")?;
+        let left = arg_value(&args, "--left").ok_or("缺少 --left <子串>")?;
+        let right = arg_value(&args, "--right").ok_or("缺少 --right <子串>")?;
+        let mut cfg = SyncConfig::new(mic.clone(), left.clone());
+        if let Some(v) = arg_value(&args, "--probe-ms").and_then(|v| v.parse::<u32>().ok()) {
+            cfg = cfg.with_probe_ms(v);
+        }
+        if let Some(v) = arg_value(&args, "--amplitude").and_then(|v| v.parse::<f32>().ok()) {
+            cfg = cfg.with_amplitude(v);
+        }
+        let tone_hz = arg_value(&args, "--tone-hz")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(1_000.0);
+        let from_ms = arg_value(&args, "--from")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(-40.0);
+        let to_ms = arg_value(&args, "--to")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(40.0);
+        let step_ms = arg_value(&args, "--step")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(2.0);
+        let current_ms = arg_value(&args, "--current").and_then(|v| v.parse::<f64>().ok());
+        return align_scan_mode(
+            &mic, &left, &right, &cfg, tone_hz, from_ms, to_ms, step_ms, current_ms,
+        );
+    }
+
     if has_flag(&args, "--calibrate") {
         let mic = arg_value(&args, "--mic").ok_or("缺少 --mic <子串>")?;
         let left = arg_value(&args, "--left").ok_or("缺少 --left <子串>")?;
@@ -1008,12 +1416,6 @@ fn main() -> Result<(), AnyErr> {
     }
 
     let mic = arg_value(&args, "--mic").ok_or("缺少 --mic <名字子串>")?;
-
-    if has_flag(&args, "--volume") {
-        println!("== 端点音量 / 静音：{mic} ==");
-        let set = arg_value(&args, "--set").and_then(|v| v.parse::<f32>().ok());
-        return volume_mode(&mic, set, has_flag(&args, "--unmute"));
-    }
 
     if has_flag(&args, "--exclusive") {
         let live = has_flag(&args, "--meter");
@@ -1067,6 +1469,9 @@ fn main() -> Result<(), AnyErr> {
          \x20 --list\n\
          \x20 --health [--mic <子串>] [--ms <n>]            麦克风体检（独占优先，含判定与建议）\n\
          \x20 --calibrate --mic <子串> --left <子串> --right <子串> [--probe sweep|click|mls] [--probe-ms <n>] [--amplitude <0..1>] [--sequential]\n\
+         \x20 --polarity --mic <子串> --left <子串> --right <子串> [--probe-ms <n>] [--amplitude <0..1>] [--pair-only]\n\
+         \x20 --align-scan --mic <子串> --left <子串> --right <子串> [--tone-hz <n>] [--from <ms>] [--to <ms>] [--step <ms>] [--current <ms>]\n\
+         \x20 --align-check --mic <子串> --left <子串> --right <子串> [--apply-left <ms>] [--apply-right <ms>] [--probe-ms <n>]\n\
          \x20 --clicks --left <子串> --right <子串> [--left-delay <ms>] [--right-delay <ms>] [--seconds <n>]\n\
          \x20 --mic <子串> --check [--speaker <子串>] [--rate <hz>] [--wav <路径>]\n\
          \x20 --mic <子串> --volume [--set <0..100>] [--unmute]\n\

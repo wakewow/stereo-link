@@ -109,3 +109,9 @@ pub use capture::{
 };
 #[cfg(windows)]
 pub use playback::{play_pcm_s16, play_sine, PlaybackInfo};
+#[cfg(windows)]
+pub mod volume;
+#[cfg(windows)]
+pub use volume::{
+    get_endpoint_volume, set_endpoint_mute, set_endpoint_volume, EndpointVolume,
+};
