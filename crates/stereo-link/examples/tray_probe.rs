@@ -16,7 +16,7 @@
 //!
 //! 用法：
 //! ```text
-//! cargo run -p stereo-link --example tray_probe -- E:\AI\MiPlay\.scratch\tray-probe-egui.log
+//! cargo run -p stereo-link --example tray_probe -- %TEMP%\tray-probe-egui.log
 //! ```
 //! 参数是日志文件路径（默认写到系统临时目录）。图形界面用 ASCII 文案，避免依赖中文字体；
 //! 日志文件与 stdout 都是中文/UTF-8。

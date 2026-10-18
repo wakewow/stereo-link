@@ -3,9 +3,9 @@
 //! ```text
 //! cargo run -p stereo-audio --example balance_probe -- --list
 //! cargo run -p stereo-audio --example balance_probe -- \
-//!     --mic "Chu2 DSP" --left "Xiaomi Sound-1695" --right "Xiaomi Sound-5320"
+//!     --mic "麦克风" --left "音箱 A" --right "音箱 B"
 //! cargo run -p stereo-audio --example balance_probe -- \
-//!     --mic "Chu2 DSP" --left "Xiaomi Sound-1695" --right "Realtek" --apply
+//!     --mic "麦克风" --left "音箱 A" --right "板载输出" --apply
 //! ```
 //!
 //! 做两件事：
