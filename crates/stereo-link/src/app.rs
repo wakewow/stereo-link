@@ -1,11 +1,13 @@
 //! StereoLink 立体声链 —— 桌面面板。
 //!
 //! 界面按「一屏看懂」组织：顶栏是身份与总状态，中间左侧是声道路由与设备表，
-//! 右侧是虚拟声卡、诊断与说明。所有动作（开始/停止/自检音/切默认输出）都在一屏内。
+//! 右侧是采集源、诊断与说明。所有动作（开始/停止/自检音/切默认输出）都在一屏内。
 //!
 //! 设计要点：
-//! - 面板只做两件事：把虚拟声卡的回环流拆成左右两路推给两台蓝牙音箱；把 Windows
-//!   默认输出切到虚拟声卡（并在退出时切回）。
+//! - 面板只做两件事：把「采集源」的 WASAPI 回环流拆成左右两路推给两台蓝牙音箱；
+//!   把 Windows 默认输出切到采集源（并在退出时切回）。
+//! - 采集源不再限定虚拟声卡：任意播放端点都能选（自研虚拟声卡、UU远程虚拟设备、
+//!   没接音箱的物理输出都行），只要它同时是 Windows 默认输出就能采到声音。
 //! - 引擎跑在自己的线程里（见 `stereo_audio::route`），UI 线程只读快照 + 发命令。
 //! - 状态用少量自定义绘制（电平条、胶囊、卡片）代替默认控件外观，避免糊成一团。
 
@@ -26,7 +28,6 @@ use crate::audio_default;
 use crate::config::AppConfig;
 use crate::fonts;
 use crate::logbuf::{LogBuffer, LogLine};
-use crate::virtual_card;
 
 // ---------------------------------------------------------------------------
 // 主题：深色 + 青/紫双声道配色
@@ -286,6 +287,74 @@ fn channel_label(channel: RouteChannel) -> &'static str {
     }
 }
 
+/// 采集端点的类别：决定界面标注、是否推荐、以及要不要给兜底提示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureKind {
+    /// 虚拟声卡/虚拟音频设备：无声，最适合当采集源。
+    Virtual,
+    /// 蓝牙音箱：本身会出声，当采集源会重复出声。
+    Bluetooth,
+    /// 其他物理输出：可能从接着的音箱漏声。
+    Physical,
+}
+
+impl CaptureKind {
+    /// 下拉框/诊断里的完整说明。
+    fn label(self) -> &'static str {
+        match self {
+            CaptureKind::Virtual => "虚拟声卡（无声，推荐）",
+            CaptureKind::Bluetooth => "蓝牙音箱（会重复出声，别选）",
+            CaptureKind::Physical => "物理输出（可能出声）",
+        }
+    }
+
+    /// 卡片右上角徽标用的短名。
+    fn short_label(self) -> &'static str {
+        match self {
+            CaptureKind::Virtual => "虚拟设备",
+            CaptureKind::Bluetooth => "蓝牙音箱",
+            CaptureKind::Physical => "物理输出",
+        }
+    }
+
+    fn color(self) -> Color32 {
+        match self {
+            CaptureKind::Virtual => OK,
+            CaptureKind::Bluetooth => WARN,
+            CaptureKind::Physical => MUTED,
+        }
+    }
+
+    fn is_virtual(self) -> bool {
+        self == CaptureKind::Virtual
+    }
+}
+
+/// 按端点名判断采集源类别（虚拟声卡 / 蓝牙音箱 / 其他物理输出）。
+fn capture_kind(name: &str) -> CaptureKind {
+    if audio_default::is_virtual_name(name) {
+        return CaptureKind::Virtual;
+    }
+    const BLUETOOTH_HINTS: &[&str] = &["Xiaomi Sound", "立体声组合", "Bluetooth", "蓝牙", "EDIFIER"];
+    if BLUETOOTH_HINTS.iter().any(|hint| name.contains(hint)) {
+        return CaptureKind::Bluetooth;
+    }
+    CaptureKind::Physical
+}
+
+/// 引擎要的采集源字符串：完整名字在 render 列表里重复时用端点 id（精确匹配），否则用完整名。
+///
+/// 本机两个 NVIDIA 端点同名，按名字匹配会选错；`{...}` 形状由 `stereo-audio`
+/// 的路由引擎按端点 id 精确匹配。
+fn capture_selector_for(ep: &EndpointInfo, renders: &[EndpointInfo]) -> String {
+    let duplicated = renders.iter().filter(|e| e.name == ep.name).count() > 1;
+    if duplicated {
+        ep.id.clone()
+    } else {
+        ep.name.clone()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 诊断条目
 // ---------------------------------------------------------------------------
@@ -334,16 +403,11 @@ pub struct StereoLinkApp {
     font: Option<String>,
     /// 默认输出（每 ~1s 实时探测；引擎快照里的值只是启动时的静态值）。
     live_default_output: Option<String>,
-    live_default_is_virtual: bool,
+    /// 当前 Windows 默认输出是不是采集端点（不是就采不到声）。
+    live_default_is_capture: bool,
     live_default_at: Option<Instant>,
     auto_started: bool,
     exit_handled: bool,
-    /// 虚拟声卡设备改名输入框。
-    rename_input: String,
-    /// 改名进行中（等 UAC / 脚本执行）。
-    rename_busy: bool,
-    /// 后台改名线程的结果通道。
-    rename_rx: Option<std::sync::mpsc::Receiver<Result<Vec<String>, String>>>,
     /// 每个端点当前设备默认格式（含读取失败）。
     format_cache: BTreeMap<String, Option<EndpointFormat>>,
     /// 每个端点**真实支持**的格式（独占模式 `IsFormatSupported` 探测；后台线程填充）。
@@ -388,7 +452,6 @@ impl StereoLinkApp {
         let cfg = AppConfig::load();
         let cfg_sync_mic = cfg.sync_mic.clone();
         let mut app = Self {
-            rename_input: cfg.virtual_card.name.clone(),
             cfg,
             engine: None,
             stats: None,
@@ -398,12 +461,10 @@ impl StereoLinkApp {
             notice: None,
             font,
             live_default_output: None,
-            live_default_is_virtual: false,
+            live_default_is_capture: false,
             live_default_at: None,
             auto_started: false,
             exit_handled: false,
-            rename_busy: false,
-            rename_rx: None,
             format_cache: BTreeMap::new(),
             format_supported: BTreeMap::new(),
             format_probing: BTreeSet::new(),
@@ -479,7 +540,6 @@ impl StereoLinkApp {
     // ---- 状态 ----
 
     fn tick(&mut self) {
-        self.poll_rename();
         self.poll_format_probe();
         self.poll_sync();
         self.refresh_default_output(false);
@@ -529,26 +589,18 @@ impl StereoLinkApp {
         }
         let ep = audio_default::default_render();
         self.live_default_at = Some(Instant::now());
-        let is_virtual = ep
-            .as_ref()
-            .map(|e| {
-                audio_default::is_virtual(e)
-                    || self
-                        .cfg
-                        .virtual_card
-                        .endpoint_id
-                        .as_deref()
-                        .map(|id| id.eq_ignore_ascii_case(&e.id))
-                        .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        self.live_default_is_virtual = is_virtual;
-        // 记住最后一次见到的「真实」默认输出：即使启动时默认已经是虚拟声卡
+        // 「默认输出 == 采集端点」才采得到声（D 模式下采集源可以是任意端点，不再只看名字）。
+        let is_capture = match (&ep, self.capture_endpoint()) {
+            (Some(current), Some(capture)) => current.id.eq_ignore_ascii_case(&capture.id),
+            _ => false,
+        };
+        self.live_default_is_capture = is_capture;
+        // 记住最后一次见到的「真实」默认输出：即使启动时默认已经是采集端点
         // （上次被强杀没来得及恢复），退出时也能切回去。
-        if !is_virtual {
+        if !is_capture {
             if let Some(id) = ep.as_ref().map(|e| e.id.clone()) {
-                if self.cfg.virtual_card.last_real_output.as_deref() != Some(id.as_str()) {
-                    self.cfg.virtual_card.last_real_output = Some(id);
+                if self.cfg.capture.last_real_output.as_deref() != Some(id.as_str()) {
+                    self.cfg.capture.last_real_output = Some(id);
                     self.save();
                 }
             }
@@ -567,38 +619,42 @@ impl StereoLinkApp {
                 tracing::warn!("枚举播放端点失败：{e}");
             }
         }
-        self.remember_virtual_endpoint();
     }
 
-    /// 把「当前虚拟声卡端点」的 id/名字记进配置。
+    /// 当前选中的采集端点：优先配置里记住的 id，解析不到再回退到按虚拟声卡名字提示自动挑。
     ///
-    /// 名字可以被用户改，端点 id 不会变，所以优先认 id：改过名的虚拟声卡
-    /// （比如用户起名「我的声卡」）也能继续被识别、自动切默认输出、当采集源。
-    fn remember_virtual_endpoint(&mut self) {
-        let remembered = self.cfg.virtual_card.endpoint_id.clone();
-        let Some(ep) = audio_default::resolve_virtual_endpoint(remembered.as_deref()) else {
-            return;
-        };
-        if ep.flow != DataFlow::Render {
-            return;
+    /// 名字可以被用户改、端点也可能被移除，所以优先认 id；id 找不到时按
+    /// [`audio_default`] 的提示顺序挑一块虚拟声卡（自研驱动 → UU远程 → Steam）。
+    fn capture_endpoint(&self) -> Option<EndpointInfo> {
+        if let Some(id) = self
+            .cfg
+            .capture
+            .endpoint_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            if let Some(ep) = self
+                .endpoints
+                .iter()
+                .find(|e| e.flow == DataFlow::Render && e.id.eq_ignore_ascii_case(id))
+            {
+                return Some(ep.clone());
+            }
+            if let Some(ep) = audio_default::endpoint_by_id(id) {
+                return Some(ep);
+            }
         }
-        // 配置里存“设备名”（去掉 `扬声器 (` 前后缀），不是完整端点名——改名输入框用它。
-        let device_name = short_endpoint(&ep.name);
-        let changed = self.cfg.virtual_card.endpoint_id.as_deref() != Some(ep.id.as_str())
-            || self.cfg.virtual_card.name != device_name;
-        self.cfg.virtual_card.endpoint_id = Some(ep.id.clone());
-        self.cfg.virtual_card.name = device_name;
-        if changed {
-            self.save();
+        // 2) 已枚举列表里按名字提示挑（id 失效/从未选过时的主要路径，零开销）。
+        let renders = self.render_devices();
+        if let Some(ep) = audio_default::pick_virtual(&renders) {
+            return Some(ep);
         }
-    }
-
-    /// 记住的虚拟声卡端点（在已枚举的列表里找，避免重复枚举设备）。
-    fn remembered_virtual_endpoint(&self) -> Option<&EndpointInfo> {
-        let id = self.cfg.virtual_card.endpoint_id.as_deref()?;
-        self.endpoints
-            .iter()
-            .find(|e| e.flow == DataFlow::Render && e.id.eq_ignore_ascii_case(id))
+        // 3) 列表为空（枚举失败/启动早期）才再全量解析一次。
+        if self.endpoints.is_empty() {
+            return audio_default::resolve_virtual_endpoint(None);
+        }
+        None
     }
 
     fn render_devices(&self) -> Vec<EndpointInfo> {
@@ -736,83 +792,19 @@ impl StereoLinkApp {
             .copied()
     }
 
-    /// 启动虚拟声卡改名（后台线程 + UAC，不阻塞界面）。
-    fn start_rename(&mut self) {
-        let name = self.rename_input.trim().to_string();
-        if let Err(e) = virtual_card::validate_name(&name) {
-            self.toast(format!("{e}"));
-            return;
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.rename_rx = Some(rx);
-        self.rename_busy = true;
-        tracing::info!("[改名] 请求把虚拟声卡改名为「{name}」，等待管理员授权…");
-        std::thread::spawn(move || {
-            let result = virtual_card::rename_virtual_card(&name).map_err(|e| e.to_string());
-            let _ = tx.send(result);
-        });
-    }
-
-    /// 轮询改名线程的结果。
-    fn poll_rename(&mut self) {
-        let Some(rx) = &self.rename_rx else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(Ok(lines)) => {
-                self.rename_rx = None;
-                self.rename_busy = false;
-                let name = self.rename_input.trim().to_string();
-                for line in lines.iter().rev().take(3).rev() {
-                    tracing::info!("[改名] {line}");
-                }
-                self.refresh_endpoints();
-                // 改名会重建端点，端点 id 可能变；按新名字重新锁定虚拟声卡。
-                if let Some(ep) = self
-                    .endpoints
-                    .iter()
-                    .find(|e| e.flow == DataFlow::Render && e.name.contains(&name))
-                {
-                    self.cfg.virtual_card.endpoint_id = Some(ep.id.clone());
-                    self.cfg.virtual_card.name = short_endpoint(&ep.name);
-                }
-                self.cfg.save();
-                self.refresh_formats();
-                self.toast(format!("虚拟声卡已改名为「{name}」"));
-            }
-            Ok(Err(e)) => {
-                self.rename_rx = None;
-                self.rename_busy = false;
-                tracing::warn!("[改名] 失败：{e}");
-                self.toast(format!("改名失败：{e}"));
-            }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.rename_rx = None;
-                self.rename_busy = false;
-                self.toast("改名线程异常结束");
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-        }
-    }
-
     fn render_names(&self) -> Vec<String> {
         self.render_devices().into_iter().map(|e| e.name).collect()
     }
 
-    /// 虚拟声卡端点名（优先记住的端点 id，其次按名字提示找）。
-    fn virtual_name(&self) -> Option<String> {
-        if let Some(ep) = self.remembered_virtual_endpoint() {
-            return Some(ep.name.clone());
-        }
-        audio_default::virtual_endpoint().map(|e| e.name)
+    /// 引擎要的采集源字符串：完整名字在 render 列表里重复时填 id（精确匹配），否则填完整名。
+    fn capture_selector(&self) -> Option<String> {
+        let ep = self.capture_endpoint()?;
+        Some(capture_selector_for(&ep, &self.render_devices()))
     }
 
-    fn source_endpoint_name(&self) -> Option<String> {
-        let configured = self.cfg.split.source_endpoint.trim();
-        if !configured.is_empty() {
-            return Some(configured.to_string());
-        }
-        self.virtual_name()
+    /// 采集源完整端点名（界面展示/自检音用）。
+    fn capture_full_name(&self) -> Option<String> {
+        self.capture_endpoint().map(|ep| ep.name)
     }
 
     fn route_of(&self, channel: RouteChannel) -> Option<&RouteStats> {
@@ -824,7 +816,8 @@ impl StereoLinkApp {
     }
 
     fn route_engine_config(&self) -> Option<RouteEngineConfig> {
-        let source = self.source_endpoint_name()?;
+        // D 模式：采集源是用户选的任意端点；同名端点（本机两个 NVIDIA）用 id 精确匹配。
+        let source = self.capture_selector()?;
         let mut routes = Vec::new();
         let left = self.cfg.split.left_endpoint.trim();
         if !left.is_empty() {
@@ -863,7 +856,7 @@ impl StereoLinkApp {
             return true;
         }
         let Some(config) = self.route_engine_config() else {
-            tracing::warn!("开始路由失败：还没有为左/右声道选择输出设备，或找不到虚拟声卡");
+            tracing::warn!("开始路由失败：还没有为左/右声道选择输出设备，或找不到采集源");
             if from_ui {
                 self.toast("先在「声道路由」里为左/右声道选好输出设备");
             }
@@ -919,22 +912,90 @@ impl StereoLinkApp {
         }
     }
 
+    /// 手动把默认输出切到当前采集端点（「切为默认输出」按钮）。
+    fn switch_default_to_capture(&mut self) {
+        let Some(capture) = self.capture_endpoint() else {
+            self.toast("还没有可用的采集端点");
+            return;
+        };
+        match audio_default::switch_to_endpoint_id(&capture.id, &capture) {
+            Ok(outcome) => {
+                if let Some(id) = outcome.previous_id {
+                    if self.cfg.capture.previous_output.is_none() {
+                        self.cfg.capture.previous_output = Some(id);
+                        self.cfg.save();
+                    }
+                }
+                self.refresh_default_output(true);
+                self.toast(format!(
+                    "已把默认输出切到「{}」",
+                    short_endpoint(&capture.name)
+                ));
+                tracing::info!("[默认输出] {}", outcome.message);
+            }
+            Err(e) => {
+                tracing::warn!("切换默认输出失败：{e}");
+                self.toast(format!("切换失败：{e}"));
+            }
+        }
+    }
+
+    /// 切换采集源：写配置 + 保存；正在路由就重启，默认输出正指旧采集端点就顺手切过去。
+    fn select_capture_endpoint(&mut self, id: &str) {
+        let Some(ep) = self
+            .render_devices()
+            .into_iter()
+            .find(|e| e.id.eq_ignore_ascii_case(id))
+        else {
+            return;
+        };
+        let old_id = self.cfg.capture.endpoint_id.clone();
+        self.cfg.capture.endpoint_id = Some(ep.id.clone());
+        self.cfg.capture.endpoint_name = short_endpoint(&ep.name);
+        self.cfg.save();
+        tracing::info!("[采集源] 切换为「{}」", ep.name);
+        // 默认输出正指着旧采集端点的话顺手切到新端点（否则用户会突然听不到声）。
+        let default_was_old = match (audio_default::default_render(), old_id.as_deref()) {
+            (Some(current), Some(old)) => current.id.eq_ignore_ascii_case(old),
+            _ => false,
+        };
+        if self.engine.is_some() {
+            self.restart_routing();
+        } else if default_was_old && self.cfg.capture.auto_switch_default {
+            match audio_default::switch_to_endpoint_id(&ep.id, &ep) {
+                Ok(outcome) => {
+                    if let Some(previous) = outcome.previous_id {
+                        if self.cfg.capture.previous_output.is_none() {
+                            self.cfg.capture.previous_output = Some(previous);
+                            self.save();
+                        }
+                    }
+                    self.refresh_default_output(true);
+                }
+                Err(e) => {
+                    tracing::warn!("[采集源] 切换默认输出失败：{e}");
+                    self.toast(format!("切换默认输出失败：{e}"));
+                }
+            }
+        }
+        self.toast(format!("采集源已切换为「{}」", short_endpoint(&ep.name)));
+    }
+
+    /// 开始路由/切换采集源后，把 Windows 默认输出切到采集端点。
     fn apply_default_output(&mut self) {
-        if !self.cfg.virtual_card.auto_switch_default {
+        if !self.cfg.capture.auto_switch_default {
             self.refresh_default_output(true);
             return;
         }
-        let remembered = self.cfg.virtual_card.endpoint_id.clone();
-        let vad = audio_default::resolve_virtual_endpoint(remembered.as_deref());
-        let outcome = match &vad {
-            Some(ep) => audio_default::switch_to_endpoint_id(&ep.id, ep),
-            None => audio_default::switch_to_virtual(),
+        let Some(capture) = self.capture_endpoint() else {
+            tracing::warn!("[默认输出] 没有可用的采集端点，跳过自动切换");
+            return;
         };
-        match outcome {
+        match audio_default::switch_to_endpoint_id(&capture.id, &capture) {
             Ok(outcome) => {
                 if let Some(id) = outcome.previous_id {
-                    if self.cfg.virtual_card.previous_output.is_none() {
-                        self.cfg.virtual_card.previous_output = Some(id);
+                    if self.cfg.capture.previous_output.is_none() {
+                        self.cfg.capture.previous_output = Some(id);
                         self.save();
                     }
                 }
@@ -949,25 +1010,25 @@ impl StereoLinkApp {
     }
 
     fn restore_previous_output(&mut self) {
-        // 优先用本次切换前记录的；没有（启动时默认已经是虚拟声卡）就用最后一次
+        // 优先用本次切换前记录的；没有（启动时默认已经是采集端点）就用最后一次
         // 见到的真实默认输出兜底。
         let id = self
             .cfg
-            .virtual_card
+            .capture
             .previous_output
             .clone()
-            .or_else(|| self.cfg.virtual_card.last_real_output.clone());
+            .or_else(|| self.cfg.capture.last_real_output.clone());
         let Some(id) = id else {
-            if self.live_default_is_virtual {
+            if self.live_default_is_capture {
                 tracing::warn!(
-                    "[默认输出] 没有可恢复的记录（启动时默认输出已经是虚拟声卡），退出后请在 Windows 声音设置里手动切回音箱"
+                    "[默认输出] 没有可恢复的记录（启动时默认输出已经是采集端点），退出后请在 Windows 声音设置里手动切回音箱"
                 );
             }
             return;
         };
         match audio_default::switch_to_id(&id) {
             Ok(_) => {
-                self.cfg.virtual_card.previous_output = None;
+                self.cfg.capture.previous_output = None;
                 self.save();
                 self.refresh_default_output(true);
                 tracing::info!("[默认输出] 已恢复切换前的默认输出");
@@ -977,8 +1038,8 @@ impl StereoLinkApp {
     }
 
     fn play_test_tone(&mut self) {
-        let Some(source) = self.source_endpoint_name() else {
-            self.toast("找不到虚拟声卡采集源，无法播放自检音");
+        let Some(source) = self.capture_full_name() else {
+            self.toast("找不到采集源，无法播放自检音");
             return;
         };
         let seconds = self.cfg.tone_seconds.clamp(0.5, 20.0);
@@ -1204,16 +1265,23 @@ impl StereoLinkApp {
 
     fn hints(&self) -> Vec<Hint> {
         let mut hints = Vec::new();
-        let virtual_name = self.virtual_name();
+        let capture = self.capture_endpoint();
 
-        match &virtual_name {
-            Some(name) => hints.push(Hint {
-                tone: Tone::Ok,
-                text: format!("虚拟声卡就绪：{}", short_endpoint(name)),
-            }),
+        match &capture {
+            Some(ep) => {
+                let kind = capture_kind(&ep.name);
+                hints.push(Hint {
+                    tone: if kind.is_virtual() { Tone::Ok } else { Tone::Warn },
+                    text: format!(
+                        "采集源就绪：{}（{}）",
+                        short_endpoint(&ep.name),
+                        kind.label()
+                    ),
+                });
+            }
             None => hints.push(Hint {
                 tone: Tone::Err,
-                text: "没找到虚拟声卡端点（驱动可能被卸载）".to_string(),
+                text: "没有可用的采集源：在「采集源」卡里选一个播放端点".to_string(),
             }),
         }
 
@@ -1261,7 +1329,7 @@ impl StereoLinkApp {
             }
         }
 
-        if self.engine.is_some() && !self.live_default_is_virtual {
+        if self.engine.is_some() && !self.live_default_is_capture {
             let current = self
                 .live_default_output
                 .as_deref()
@@ -1271,10 +1339,10 @@ impl StereoLinkApp {
                 tone: Tone::Warn,
                 text: format!("系统默认输出是「{current}」：播放器的声音不会进分离链路"),
             });
-        } else if self.live_default_is_virtual {
+        } else if self.live_default_is_capture {
             hints.push(Hint {
                 tone: Tone::Ok,
-                text: "系统默认输出 = 虚拟声卡".to_string(),
+                text: "系统默认输出 = 采集源".to_string(),
             });
         }
 
@@ -1327,8 +1395,8 @@ impl StereoLinkApp {
                     }
                     ui.add_space(4.0);
 
-                    if self.live_default_is_virtual {
-                        pill(ui, "默认输出 = 虚拟声卡", ACCENT, 160.0);
+                    if self.live_default_is_capture {
+                        pill(ui, "默认输出 = 采集源", ACCENT, 160.0);
                     } else {
                         pill(ui, "默认输出未切换", WARN, 160.0);
                     }
@@ -1387,7 +1455,7 @@ impl StereoLinkApp {
                     .id_salt("side_scroll")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        self.virtual_card(ui);
+                        self.capture_card(ui);
                         ui.add_space(12.0);
                         self.diagnostics_card(ui);
                         ui.add_space(12.0);
@@ -1396,45 +1464,66 @@ impl StereoLinkApp {
             });
     }
 
-    fn virtual_card(&mut self, ui: &mut egui::Ui) {
+    /// 采集源卡：D 模式下采集源可以是任意播放端点（虚拟声卡 / UU远程 / 物理输出）。
+    fn capture_card(&mut self, ui: &mut egui::Ui) {
+        let devices = self.render_devices();
+        let capture = self.capture_endpoint();
+        let capture_id = capture.as_ref().map(|ep| ep.id.clone());
+        let kind_now = capture.as_ref().map(|ep| capture_kind(&ep.name));
+        let uu_present = devices.iter().any(|ep| ep.name.contains("UU远程"));
+        let mut chosen_id: Option<String> = None;
+
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.set_min_height(210.0);
+            ui.set_min_height(268.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("虚拟声卡").size(15.0).strong());
+                ui.label(RichText::new("采集源").size(15.0).strong());
                 help(
                     ui,
-                    "虚拟声卡是播放器与两条蓝牙链路之间的中转（WASAPI 回环）。\n\
-                     把 Windows 默认输出切到它，播放器的声音才会流进分离链路；\n\
-                     开始路由时会自动切过去，退出面板时自动切回原来的输出。",
+                    "采集源 = 引擎从哪个播放端点的 WASAPI 回环流里取声。\n\
+                     不用装虚拟声卡也能用：任意一个播放端点都行，只要把 Windows 默认输出切到它。\n\
+                     推荐选无声的虚拟设备（自研虚拟声卡 / UU远程虚拟音频设备 / Steam Streaming）；\n\
+                     选蓝牙音箱会重复出声，选物理输出可能从音箱漏音。",
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    badge(ui, "WASAPI 回环", ACCENT);
+                    match kind_now {
+                        Some(kind) => badge(ui, kind.short_label(), kind.color()),
+                        None => badge(ui, "未找到", ERR),
+                    };
                 });
             });
             ui.add_space(6.0);
 
-            let (name, full_name) = match self.virtual_name() {
-                Some(full) => (short_endpoint(&full), full),
-                None => ("未找到".to_string(), "没找到虚拟声卡端点".to_string()),
+            // 当前采集端点（短名 + 全名 tooltip）。
+            let (name, full_name) = match &capture {
+                Some(ep) => (short_endpoint(&ep.name), ep.name.clone()),
+                None => (
+                    "未找到可用端点".to_string(),
+                    "系统里没有可用的播放端点".to_string(),
+                ),
             };
             let width = ui.available_width().max(120.0);
             text_cell(ui, width, 26.0, &name, FontId::proportional(17.0), TEXT, false)
                 .on_hover_text(full_name);
             ui.add_space(2.0);
 
-            let (current_short, current_full, is_virtual) = match &self.live_default_output {
-                Some(full) => (
-                    short_endpoint(full),
-                    full.clone(),
-                    self.live_default_is_virtual,
-                ),
-                None => ("未知".to_string(), "未知".to_string(), self.live_default_is_virtual),
+            // Windows 默认输出现在是不是采集端点（不是就采不到声）。
+            let (current_short, current_full) = match &self.live_default_output {
+                Some(full) => (short_endpoint(full), full.clone()),
+                None => ("未知".to_string(), "未知".to_string()),
             };
             ui.horizontal(|ui| {
-                text_cell(ui, 96.0, 20.0, "系统默认输出：", FontId::proportional(12.0), MUTED, false);
+                text_cell(
+                    ui,
+                    96.0,
+                    20.0,
+                    "系统默认输出：",
+                    FontId::proportional(12.0),
+                    MUTED,
+                    false,
+                );
                 let rest = ui.available_width().max(120.0);
-                let text = if is_virtual {
+                let text = if self.live_default_is_capture {
                     format!("{current_short} √")
                 } else {
                     current_short
@@ -1445,16 +1534,66 @@ impl StereoLinkApp {
                     20.0,
                     &text,
                     FontId::proportional(12.5),
-                    if is_virtual { OK } else { WARN },
+                    if self.live_default_is_capture { OK } else { WARN },
                     false,
                 )
                 .on_hover_text(current_full);
             });
-            ui.add_space(6.0);
 
+            // 常驻说明：这是 D 模式最关键的一条。
+            let width = ui.available_width().max(120.0);
+            text_cell(
+                ui,
+                width,
+                18.0,
+                "采集源必须同时是 Windows 默认输出，否则采不到声音。",
+                FontId::proportional(12.0),
+                MUTED,
+                false,
+            );
+
+            ui.add_space(6.0);
+            // 采集源下拉：全部播放端点 + 类别标注（虚拟声卡/蓝牙音箱/物理输出）。
+            egui::ComboBox::from_id_salt("capture_source")
+                .width(ui.available_width().max(160.0))
+                .selected_text(match (&capture, kind_now) {
+                    (Some(ep), Some(kind)) => RichText::new(format!(
+                        "{} · {}",
+                        clip_text(&short_endpoint(&ep.name), 24),
+                        kind.short_label()
+                    ))
+                    .size(12.5),
+                    _ => RichText::new("（未选择采集源）").color(MUTED).size(12.5),
+                })
+                .show_ui(ui, |ui| {
+                    for ep in &devices {
+                        let kind = capture_kind(&ep.name);
+                        let selected = capture_id
+                            .as_deref()
+                            .map(|id| id.eq_ignore_ascii_case(&ep.id))
+                            .unwrap_or(false);
+                        let text = format!(
+                            "{}  ·  {}",
+                            clip_text(&short_endpoint(&ep.name), 26),
+                            kind.label()
+                        );
+                        if ui
+                            .selectable_label(
+                                selected,
+                                RichText::new(text).size(12.5).color(kind.color()),
+                            )
+                            .on_hover_text(ep.name.clone())
+                            .clicked()
+                        {
+                            chosen_id = Some(ep.id.clone());
+                        }
+                    }
+                });
+
+            ui.add_space(6.0);
             if ui
                 .checkbox(
-                    &mut self.cfg.virtual_card.auto_switch_default,
+                    &mut self.cfg.capture.auto_switch_default,
                     "开始路由时自动切为默认输出（退出时切回）",
                 )
                 .changed()
@@ -1462,70 +1601,46 @@ impl StereoLinkApp {
                 self.cfg.save();
             }
 
-            ui.add_space(8.0);
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui.button("切为默认输出").clicked() {
-                    let remembered = self.cfg.virtual_card.endpoint_id.clone();
-                    let vad = audio_default::resolve_virtual_endpoint(remembered.as_deref());
-                    let outcome = match &vad {
-                        Some(ep) => audio_default::switch_to_endpoint_id(&ep.id, ep),
-                        None => audio_default::switch_to_virtual(),
-                    };
-                    match outcome {
-                        Ok(outcome) => {
-                            if let Some(id) = outcome.previous_id {
-                                if self.cfg.virtual_card.previous_output.is_none() {
-                                    self.cfg.virtual_card.previous_output = Some(id);
-                                    self.cfg.save();
-                                }
-                            }
-                            self.refresh_default_output(true);
-                            self.toast("已把默认输出切到虚拟声卡");
-                            tracing::info!("[默认输出] {}", outcome.message);
-                        }
-                        Err(e) => {
-                            tracing::warn!("切换默认输出失败：{e}");
-                            self.toast(format!("切换失败：{e}"));
-                        }
-                    }
+                    self.switch_default_to_capture();
                 }
-                let has_previous = self.cfg.virtual_card.previous_output.is_some();
+                let has_previous = self.cfg.capture.previous_output.is_some();
                 if ui
                     .add_enabled(has_previous, egui::Button::new("恢复原输出"))
                     .on_hover_text("切回开始路由前的默认输出")
                     .clicked()
                 {
                     self.restore_previous_output();
-                    self.refresh_default_output(true);
                 }
             });
 
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(muted("设备名"));
-                let edit = ui.add_enabled(
-                    !self.rename_busy,
-                    egui::TextEdit::singleline(&mut self.rename_input)
-                        .desired_width(150.0)
-                        .hint_text(virtual_card::SUGGESTED_NAME),
-                );
-                edit.on_hover_text("Windows 声音列表里显示成「扬声器 (这个名字)」");
-                if ui
-                    .add_enabled(
-                        !self.rename_busy,
-                        egui::Button::new("应用改名").small(),
-                    )
-                    .on_hover_text("需要管理员授权（会弹 UAC），改完自动禁用/启用设备")
-                    .clicked()
-                {
-                    self.start_rename();
-                }
-                if self.rename_busy {
-                    ui.spinner();
-                    ui.label(muted("等待授权…"));
-                }
-            });
+            // 非虚拟类采集源：琥珀色兜底提示（有 UU 远程时换成正向提示）。
+            if kind_now.map(|kind| !kind.is_virtual()).unwrap_or(false) {
+                ui.add_space(6.0);
+                let tip = if uu_present {
+                    "已检测到 UU远程虚拟音频设备，可直接选它做采集源（它是无声的虚拟设备，不会重复出声）。"
+                        .to_string()
+                } else {
+                    "本机没有虚拟声卡时：① 运行一次 UU远程（免费，会装好一个虚拟音频设备）→ 点「刷新设备」，选『扬声器 (UU远程虚拟音频设备)』；② 安装 StereoLink 虚拟声卡（高级：需测试签名 + 重启一次）；③ 选一个没接音箱的物理输出（可能出声）。"
+                        .to_string()
+                };
+                egui::Frame::default()
+                    .fill(WARN.gamma_multiply(0.10))
+                    .stroke(Stroke::new(1.0_f32, WARN.gamma_multiply(0.45)))
+                    .inner_margin(Margin::symmetric(10, 8))
+                    .corner_radius(CornerRadius::same(8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new(tip).color(WARN).size(12.0));
+                    });
+            }
         });
+
+        if let Some(id) = chosen_id {
+            self.select_capture_endpoint(&id);
+        }
     }
 
     fn diagnostics_card(&mut self, ui: &mut egui::Ui) {
@@ -1538,9 +1653,9 @@ impl StereoLinkApp {
                 help(
                     ui,
                     "这里只列会影响出声的问题：\n\
-                     · 虚拟声卡 / 播放设备是否就绪；\n\
+                     · 采集源 / 播放设备是否就绪；\n\
                      · 路由是否在跑、两条链路有没有错误或欠载；\n\
-                     · Windows 默认输出是不是虚拟声卡。",
+                     · Windows 默认输出是不是采集源。",
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
@@ -1606,7 +1721,7 @@ impl StereoLinkApp {
                 help(
                     ui,
                     "1. 为左、右声道各选一台蓝牙音箱（先在本机蓝牙里连上）。\n\
-                     2. 点「开始路由」，面板会把默认输出切到虚拟声卡。\n\
+                     2. 点「开始路由」，面板会把默认输出切到你选的采集源。\n\
                      3. 用播放器放歌/看视频，声音就被拆成左右两路。\n\
                      4. 退出面板会自动停路由并恢复原来的默认输出。\n\n\
                      软件侧延迟 ≈ 20 ms 采集缓冲 + 抖动缓冲 + 渲染缓冲 / 2；\n\
@@ -2137,6 +2252,7 @@ impl StereoLinkApp {
         let live_default = self.live_default_output.clone();
         let left = self.cfg.split.left_endpoint.clone();
         let right = self.cfg.split.right_endpoint.clone();
+        let capture_id = self.capture_endpoint().map(|ep| ep.id);
 
         let mut set_left: Option<String> = None;
         let mut set_right: Option<String> = None;
@@ -2195,7 +2311,10 @@ impl StereoLinkApp {
             ui.add_space(2.0);
 
             for ep in &devices {
-                let is_virtual = audio_default::is_virtual(ep);
+                let is_capture = capture_id
+                    .as_deref()
+                    .map(|id| id.eq_ignore_ascii_case(&ep.id))
+                    .unwrap_or(false);
                 let is_default = live_default.as_deref() == Some(ep.name.as_str());
                 let is_left = left == ep.name;
                 let is_right = right == ep.name;
@@ -2337,7 +2456,7 @@ impl StereoLinkApp {
                     if is_default {
                         roles.push("默认输出");
                     }
-                    if is_virtual {
+                    if is_capture {
                         roles.push("采集源");
                     }
                     if is_left {
@@ -2357,7 +2476,7 @@ impl StereoLinkApp {
                         ACCENT2
                     } else if is_default {
                         OK
-                    } else if is_virtual {
+                    } else if is_capture {
                         ACCENT
                     } else {
                         MUTED
@@ -2381,12 +2500,12 @@ impl StereoLinkApp {
                         ROUTE_ROW_H,
                         Layout::left_to_right(Align::Center),
                         |ui| {
-                            if is_virtual {
+                            if is_capture {
                                 text_cell(
                                     ui,
                                     (col_action - 8.0).max(120.0),
                                     20.0,
-                                    "虚拟声卡是采集源",
+                                    "当前采集源",
                                     FontId::proportional(12.0),
                                     MUTED,
                                     false,
@@ -2556,5 +2675,36 @@ mod tests {
             channel_color(RouteChannel::Left),
             channel_color(RouteChannel::Right)
         );
+    }
+
+    fn test_endpoint(id: &str, name: &str) -> EndpointInfo {
+        EndpointInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            flow: DataFlow::Render,
+            is_default: false,
+            mix_format: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn duplicate_endpoint_names_fall_back_to_id_selector() {
+        // 同名端点（本机两个 NVIDIA）必须用 id，否则引擎按名字会选错设备。
+        let nvidia_a = test_endpoint(
+            "{0.0.0.00000000}.{aaaaaaaa-1111-2222-3333-444444444444}",
+            "扬声器 (NVIDIA High Definition Audio)",
+        );
+        let nvidia_b = test_endpoint(
+            "{0.0.0.00000000}.{bbbbbbbb-1111-2222-3333-444444444444}",
+            "扬声器 (NVIDIA High Definition Audio)",
+        );
+        let virtual_card = test_endpoint(
+            "{0.0.0.00000000}.{6e6d7f6c-a61a-4fb2-9e4c-0fdef7303832}",
+            "扬声器 (立体声链虚拟声卡)",
+        );
+        let renders = vec![nvidia_a.clone(), nvidia_b.clone(), virtual_card.clone()];
+        assert_eq!(capture_selector_for(&nvidia_a, &renders), nvidia_a.id);
+        assert_eq!(capture_selector_for(&virtual_card, &renders), virtual_card.name);
     }
 }

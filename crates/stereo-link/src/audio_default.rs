@@ -18,12 +18,14 @@ const SWITCH_SCRIPT: &str = include_str!("../../../scripts/switch-audio-default.
 ///
 /// 第一位是自研驱动「立体声链虚拟声卡」（1.0 起的产品形态）；后面是历史安装：
 /// 借用 Steam Streaming Speakers 改名的「立体声链设备」/「小米妙播设备」，
+/// 再往后是零安装 D 模式常用的外部虚拟设备（UU远程），
 /// 最后兜底是没改过名的 Steam 设备本身（过渡期还能用）。
 const VAD_NAME_HINTS: &[&str] = &[
     "立体声链虚拟声卡",
     "立体声链设备",
     "立体声链",
     "StereoLink",
+    "UU远程",
     "小米妙播",
     "妙播设备",
     "Steam Streaming",
@@ -47,14 +49,23 @@ pub fn default_render() -> Option<stereo_audio::EndpointInfo> {
     stereo_audio::default_endpoint().ok()
 }
 
-/// 端点是不是那块 StereoLink 虚拟声卡。
-pub fn is_virtual(ep: &stereo_audio::EndpointInfo) -> bool {
-    is_virtual_name(&ep.name)
-}
-
 /// 按名字判断是不是虚拟声卡。
 pub fn is_virtual_name(name: &str) -> bool {
     VAD_NAME_HINTS.iter().any(|h| name.contains(h))
+}
+
+/// 在一批已枚举的端点里按 [`VAD_NAME_HINTS`] 的优先级挑一块虚拟声卡。
+///
+/// 界面每秒都会解析当前采集源，不能每次都重新枚举设备——先拿列表里现成的。
+pub fn pick_virtual(
+    renders: &[stereo_audio::EndpointInfo],
+) -> Option<stereo_audio::EndpointInfo> {
+    for hint in VAD_NAME_HINTS {
+        if let Some(ep) = renders.iter().find(|e| e.name.contains(hint)) {
+            return Some(ep.clone());
+        }
+    }
+    None
 }
 
 /// 找出虚拟声卡端点（没有就返回 None，比如驱动被卸了）。
@@ -67,12 +78,7 @@ pub fn virtual_endpoint() -> Option<stereo_audio::EndpointInfo> {
         .into_iter()
         .filter(|e| e.flow == stereo_audio::DataFlow::Render)
         .collect();
-    for hint in VAD_NAME_HINTS {
-        if let Some(ep) = renders.iter().find(|e| e.name.contains(hint)) {
-            return Some(ep.clone());
-        }
-    }
-    None
+    pick_virtual(&renders)
 }
 
 /// 按端点 id 找端点（id 形如 `{0.0.0.00000000}.{guid}`）。
@@ -124,31 +130,6 @@ pub fn switch_to_endpoint_id(
     })
 }
 
-
-/// 把默认输出切到虚拟声卡；同时返回切换前的默认输出端点 id 供之后恢复。
-pub fn switch_to_virtual() -> anyhow::Result<SwitchOutcome> {
-    let current = default_render();
-    let previous_id = match &current {
-        Some(ep) if !is_virtual(ep) => Some(ep.id.clone()),
-        _ => None,
-    };
-    if previous_id.is_none() {
-        return Ok(SwitchOutcome {
-            previous_id: None,
-            message: "当前默认输出已经是虚拟声卡".to_string(),
-        });
-    }
-    let vad = virtual_endpoint().ok_or_else(|| {
-        anyhow::anyhow!(
-            "系统里没找到 StereoLink 虚拟声卡端点（虚拟声卡驱动可能被卸了，可运行 scripts\\install-virtual-sound-card.ps1 重建）"
-        )
-    })?;
-    let message = switch_to_id(&vad.id)?;
-    Ok(SwitchOutcome {
-        previous_id,
-        message,
-    })
-}
 
 /// 按端点 id 切默认输出（恢复旧设备也走这里）。
 pub fn switch_to_id(endpoint_id: &str) -> anyhow::Result<String> {
@@ -219,6 +200,8 @@ mod tests {
     fn virtual_name_hints_match_known_names() {
         assert!(is_virtual_name("扬声器 (立体声链设备)"));
         assert!(is_virtual_name("StereoLink Device"));
+        // 零安装 D 模式：借用 UU远程自带的虚拟音频设备当采集源
+        assert!(is_virtual_name("扬声器 (UU远程虚拟音频设备)"));
         // 老安装（重命名前）也要认出来
         assert!(is_virtual_name("扬声器 (小米妙播设备)"));
         assert!(is_virtual_name("妙播设备"));

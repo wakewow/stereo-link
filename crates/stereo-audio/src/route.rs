@@ -48,7 +48,7 @@ use windows::Win32::System::Com::CoTaskMemFree;
 use crate::capture::{AudioCapture, CaptureConfig, CaptureMode};
 use crate::com::{self, ComGuard};
 use crate::convert::{s16_to_f32, SampleFormat, StreamResampler};
-use crate::endpoint::{DataFlow, DeviceSelector, FormatInfo, PcmFormat};
+use crate::endpoint::{DataFlow, FormatInfo, PcmFormat};
 use crate::error::{AudioError, Result};
 
 /// 路由输出的采样率（与采集、HTTP 流一致：44100 Hz / 2 ch / 16 bit）。
@@ -1135,7 +1135,7 @@ fn sink_loop(
 ) -> Result<()> {
     let _com = ComGuard::new()?;
     let enumerator = com::enumerator()?;
-    let selector = DeviceSelector::name_contains(route.endpoint.clone());
+    let selector = crate::sync::selector_for(&route.endpoint);
     let device = com::resolve(&enumerator, &selector, DataFlow::Render)?;
     let mut client = com::activate_client(&device.device)?;
     let _mix = com::mix_format(&client)?;
@@ -1355,7 +1355,7 @@ fn run_capture(shared: Arc<Shared>, config: RouteEngineConfig) {
 
 fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> {
     let mut capture_config = CaptureConfig::default();
-    capture_config.device = DeviceSelector::name_contains(config.source_endpoint.clone());
+    capture_config.device = crate::sync::selector_for(&config.source_endpoint);
     capture_config.mode = CaptureMode::Loopback;
     capture_config.samplerate = ROUTE_SAMPLE_RATE;
     capture_config.channels = 2;
@@ -1432,6 +1432,7 @@ fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::endpoint::DeviceSelector;
 
     fn route(endpoint: &str, channel: RouteChannel) -> RouteConfig {
         RouteConfig::new(endpoint, channel)
@@ -1688,6 +1689,36 @@ mod tests {
         let mut cfg = config();
         cfg.source_endpoint = "   ".to_owned();
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn selector_for_treats_guid_shape_as_exact_endpoint_id() {
+        // 零安装 D 模式：GUI 传端点 id（`{...}` 形状）时必须精确锁定，不能退化成
+        // 名字子串——本机有两个同名 NVIDIA 端点，按名字匹配会撞名被拒。
+        let id = "{0.0.0.00000000}.{fc933984-2634-48ec-855d-f51bbddfdd71}";
+        assert!(
+            matches!(crate::sync::selector_for(id), DeviceSelector::Id(found) if found == id),
+            "id 形状应解析成 DeviceSelector::Id"
+        );
+    }
+
+    #[test]
+    fn selector_for_treats_plain_names_as_substring_match() {
+        let name = "Xiaomi Sound-1695";
+        assert!(
+            matches!(crate::sync::selector_for(name), DeviceSelector::NameContains(found) if found == name),
+            "普通名字应保留 DeviceSelector::NameContains 语义"
+        );
+    }
+
+    #[test]
+    fn validation_accepts_guid_shaped_source_endpoint() {
+        let mut cfg = config();
+        cfg.source_endpoint = "{0.0.0.00000000}.{6e6d7f6c-a61a-4fb2-9e4c-0fdef7303832}".to_owned();
+        assert!(
+            cfg.validate().is_ok(),
+            "id 形状的采集源应通过校验，而不是被当成非法名字"
+        );
     }
 
     #[test]

@@ -17,8 +17,6 @@ pub struct SplitConfig {
     pub left_endpoint: String,
     /// 右声道推给哪个端点。
     pub right_endpoint: String,
-    /// 采集源（默认空 = 自动找虚拟声卡）。
-    pub source_endpoint: String,
     /// 采集增益（1.0 = 原样）。
     pub gain: f32,
     /// 抖动缓冲：每条链路预排队的音频量（毫秒），越大越稳、延迟越高。
@@ -35,7 +33,6 @@ impl Default for SplitConfig {
             enabled: true,
             left_endpoint: "Xiaomi Sound-1695".to_string(),
             right_endpoint: "Xiaomi Sound-5320".to_string(),
-            source_endpoint: String::new(),
             gain: 1.0,
             queue_ms: 40,
             left_delay_ms: 0,
@@ -44,32 +41,37 @@ impl Default for SplitConfig {
     }
 }
 
-/// 虚拟声卡相关设置。
+/// 采集源设置（D 模式：任意播放端点都能当采集源，不再限定虚拟声卡）。
+///
+/// 引擎从「采集端点的 WASAPI 回环流」取声，再把左右声道分别推给两台蓝牙音箱。
+/// 因此采集端点必须同时是 Windows 默认输出（否则播放器的声音不会流进它）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct VirtualCardConfig {
-    /// 用户给虚拟声卡起的名字（用于重命名、匹配端点）。
-    pub name: String,
-    /// 记住的虚拟声卡端点 id（`{0.0.0.00000000}.{guid}`）。
+pub struct CaptureConfig {
+    /// 记住的采集端点 id（`{0.0.0.00000000}.{guid}`）。
     ///
-    /// 名字可以随时改，端点 id 不会变——所以识别虚拟声卡优先认 id，其次才按名字猜。
+    /// 端点名字可以改，id 不会变——所以优先认 id，认不出再回退到按名字提示自动挑。
     pub endpoint_id: Option<String>,
-    /// 开始路由时自动把 Windows 默认输出切到虚拟声卡（停止/退出时切回）。
+    /// 显示用的短名（`扬声器 (X)` → `X`）；只用于界面展示/兜底，不参与匹配。
+    #[serde(alias = "name")]
+    pub endpoint_name: String,
+    /// 开始路由时自动把 Windows 默认输出切到采集端点（停止/退出时切回）。
     pub auto_switch_default: bool,
     /// 自动切换前记录的默认输出端点 id，用于恢复（None = 不需要恢复）。
     pub previous_output: Option<String>,
-    /// 最后一次看到的「真实」默认输出（非虚拟声卡）。
+    /// 最后一次看到的「真实」默认输出（不是采集端点）。
     ///
-    /// 兜底用：如果启动时默认输出已经是虚拟声卡（例如上次被强杀、没来得及恢复），
+    /// 兜底用：如果启动时默认输出已经是采集端点（例如上次被强杀、没来得及恢复），
     /// `previous_output` 会是 None，此时退出就靠它切回去。
     pub last_real_output: Option<String>,
 }
 
-impl Default for VirtualCardConfig {
+impl Default for CaptureConfig {
     fn default() -> Self {
         Self {
-            name: "立体声链虚拟声卡".to_string(),
             endpoint_id: None,
+            // 零安装默认：本机自研虚拟声卡优先（历史上的 Steam 改名设备也能被名字提示认出来）。
+            endpoint_name: "立体声链虚拟声卡".to_string(),
             auto_switch_default: true,
             previous_output: None,
             last_real_output: None,
@@ -83,8 +85,13 @@ impl Default for VirtualCardConfig {
 pub struct AppConfig {
     /// 声道路由参数。
     pub split: SplitConfig,
-    /// 虚拟声卡设置。
-    pub virtual_card: VirtualCardConfig,
+    /// 采集源设置。
+    ///
+    /// `alias = "virtual_card"`：兼容 1.x 的旧配置（那时采集源写死是虚拟声卡），
+    /// 旧字段会按 [`CaptureConfig`] 的 `name`/`endpoint_id` 等字段迁移过来，
+    /// 尤其不能丢 `previous_output`（否则退出时恢复不了默认输出）。
+    #[serde(alias = "virtual_card")]
+    pub capture: CaptureConfig,
     /// 是否展开日志面板。
     pub show_log: bool,
     /// 自检音时长（秒）。
@@ -104,7 +111,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             split: SplitConfig::default(),
-            virtual_card: VirtualCardConfig::default(),
+            capture: CaptureConfig::default(),
             show_log: true,
             tone_seconds: 3.0,
             auto_start: true,
@@ -165,5 +172,47 @@ impl AppConfig {
         if let Err(e) = std::fs::write(&path, text) {
             tracing::warn!("写配置 {} 失败：{e}", path.display());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 1.x 的配置文件里采集源叫 `virtual_card`、名字字段叫 `name`；
+    /// 升级后必须能原样迁移，尤其是 previous_output（否则退出恢复不了默认输出）。
+    #[test]
+    fn legacy_virtual_card_section_migrates_to_capture() {
+        let old = r#"{
+            "split": { "left_endpoint": "扬声器 (Xiaomi Sound-1695)" },
+            "virtual_card": {
+                "name": "我的声卡",
+                "endpoint_id": "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}",
+                "auto_switch_default": false,
+                "previous_output": "{0.0.0.00000000}.{d7dda16f-8446-42dd-ac1f-afa5d9d07e19}",
+                "last_real_output": "{0.0.0.00000000}.{4f24a0b8-7ad0-4c62-8db7-b15fba978b01}"
+            },
+            "show_log": false
+        }"#;
+        let cfg: AppConfig = serde_json::from_str(old).expect("旧配置必须能解析");
+        assert_eq!(cfg.capture.endpoint_name, "我的声卡");
+        assert_eq!(
+            cfg.capture.endpoint_id.as_deref(),
+            Some("{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}")
+        );
+        assert!(!cfg.capture.auto_switch_default);
+        assert_eq!(
+            cfg.capture.previous_output.as_deref(),
+            Some("{0.0.0.00000000}.{d7dda16f-8446-42dd-ac1f-afa5d9d07e19}")
+        );
+        assert_eq!(
+            cfg.capture.last_real_output.as_deref(),
+            Some("{0.0.0.00000000}.{4f24a0b8-7ad0-4c62-8db7-b15fba978b01}")
+        );
+        assert!(!cfg.show_log);
+        // 新配置写回时用新字段名，不再写 virtual_card。
+        let json = serde_json::to_string(&cfg).expect("配置要能序列化");
+        assert!(json.contains("\"capture\""));
+        assert!(!json.contains("\"virtual_card\""));
     }
 }

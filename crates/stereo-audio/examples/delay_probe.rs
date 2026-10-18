@@ -15,8 +15,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use stereo_audio::{
-    build_sine_s16, play_pcm_s16, AudioCapture, CaptureConfig, CaptureMode, DeviceSelector,
-    PcmFormat, RouteChannel, RouteConfig, RouteEngineConfig, RouteEngineHandle,
+    build_sine_s16, play_pcm_s16, selector_for, AudioCapture, CaptureConfig, CaptureMode, PcmFormat,
+    RouteChannel, RouteConfig, RouteEngineConfig, RouteEngineHandle,
 };
 
 const RATE: u32 = 44_100;
@@ -54,12 +54,14 @@ fn peak_s16(bytes: &[u8]) -> f32 {
     peak
 }
 
-fn loopback(dest: &str) -> anyhow::Result<AudioCapture> {
+/// 采集某个端点的回环。`spec` 既可以是名字子串，也可以是 `{...}` 形状的端点 id
+/// （与引擎的采集源解析保持一致）。
+fn loopback(spec: &str) -> anyhow::Result<AudioCapture> {
     let mut config = CaptureConfig::default()
-        .with_device_name(dest)
         .with_mode(CaptureMode::Loopback)
         .with_samplerate(RATE)
         .with_channels(2);
+    config.device = selector_for(spec);
     config.buffer_ms = 20;
     Ok(AudioCapture::new(config)?)
 }
@@ -93,7 +95,7 @@ fn run_once(source: &str, dest: &str, delay_ms: u32) -> anyhow::Result<Option<f6
     let t0 = Instant::now();
     let player = std::thread::spawn(move || {
         let info = play_pcm_s16(
-            &DeviceSelector::name_contains(source_needle),
+            &selector_for(&source_needle),
             PcmFormat::new(RATE, 2, 16),
             &pcm,
         );

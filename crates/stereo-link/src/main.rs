@@ -12,7 +12,6 @@ mod audio_default;
 mod config;
 mod fonts;
 mod logbuf;
-mod virtual_card;
 
 use eframe::egui;
 

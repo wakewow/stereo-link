@@ -82,6 +82,7 @@ pub use ring::{ReadOutcome, RingBuffer};
 pub use sync::{
     calibrate_pair, calibrate_pair_sequential, calibrate_pair_simultaneous, capture_mono,
     delay_ms_for, list_microphones, measure_endpoint_delay, mic_health, play_alignment_clicks,
+    selector_for,
     CapturedAudio, CapturePath, Correlation, MicCandidate, MicHealth, MicKind, MicVerdict,
     PcmStats, SyncConfig, SyncMethod, SyncProbe, SyncResult, EXCLUSIVE_WARMUP_MS,
 };
