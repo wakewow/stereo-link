@@ -1,0 +1,43 @@
+﻿StereoLink 立体声链 —— 许可协议
+================================
+
+本程序（StereoLink / 立体声链，含 stereo-link.exe 与 stereo-audio 库）采用
+**MIT OR Apache-2.0 双许可**（SPDX: MIT OR Apache-2.0）。
+你可以任选 MIT 或 Apache License 2.0 之一来使用、修改和再分发本程序。
+
+    MIT 全文      : 安装目录\LICENSE-MIT
+    Apache-2.0 全文: 安装目录\LICENSE-APACHE
+
+例外部分（详见安装目录\NOTICE 与 LICENSES\README.md）：
+
+  * 自研虚拟声卡驱动（仓库 drivers\scream-derived\ 及其编译产物）派生自
+    Scream（Copyright (c) Tom Kistner 2015）与微软 MSVAD 示例，
+    按 **MS-PL（Microsoft Public License）** 授权。
+    本安装包不包含该驱动。
+  * stereo-link.exe 内嵌了 egui/eframe 的默认字体，随附以下许可全文：
+      LICENSES\OFL-1.1.txt             NotoEmoji 字体（SIL OFL 1.1）
+      LICENSES\Ubuntu-font-1.0.txt     Ubuntu-Light 字体（UFL 1.0）
+      LICENSES\Hack-MIT.txt            Hack 字体（MIT/Expat 风格）
+      LICENSES\emoji-icon-font-MIT.txt emoji-icon-font（MIT）
+
+商标：Microsoft、Windows、Steam、Valve、Xiaomi、MiPlay、妙播、UU远程、VoiceMeeter、
+VB-CABLE、VB-Audio、Realtek、EDIFIER 等名称是各自所有者的商标或注册商标。
+本项目与上述公司/产品没有任何隶属、赞助或背书关系。
+
+免责声明：本程序按「现状」提供，不附带任何明示或暗示的担保。修改系统默认音频设备、
+安装内核驱动等操作存在系统风险，请自行评估。
+
+------------------------------------------------------------------------------
+English summary
+------------------------------------------------------------------------------
+
+StereoLink is licensed under MIT OR Apache-2.0 (SPDX: MIT OR Apache-2.0).
+You may use, modify and redistribute it under either licence; the full texts
+are installed as LICENSE-MIT and LICENSE-APACHE.
+
+The optional virtual sound card driver (not included in this installer) is
+derived from Scream / Microsoft MSVAD and is licensed under the MS-PL.
+Bundled fonts (Ubuntu-Light, NotoEmoji, Hack, emoji-icon-font) are covered by
+the licence texts in the LICENSES folder.
+
+This program is provided "as is", without warranty of any kind.
