@@ -86,9 +86,12 @@ pub use ring::{ReadOutcome, RingBuffer};
 #[cfg(windows)]
 pub use sync::{
     calibrate_pair, calibrate_pair_sequential, calibrate_pair_simultaneous, capture_mono,
-    delay_ms_for, list_microphones, measure_endpoint_delay, mic_health, play_alignment_clicks,
-    selector_for, CapturePath, CapturedAudio, Correlation, MicCandidate, MicHealth, MicKind,
-    MicVerdict, PcmStats, SyncConfig, SyncMethod, SyncProbe, SyncResult, EXCLUSIVE_WARMUP_MS,
+    delay_ms_for, list_microphones, measure_balance, measure_endpoint_delay, mic_health,
+    play_alignment_clicks, selector_for, suggest_balance_percent, taper_db, taper_scalar,
+    taper_scalar_anchored, BalanceReport, BalanceSide, CapturePath, CapturedAudio, Correlation,
+    MicCandidate, MicHealth, MicKind, MicVerdict, PcmStats, SyncConfig, SyncMethod, SyncProbe,
+    SyncResult, BALANCE_DEADBAND_DB, BALANCE_MAX_STEP_DB, BALANCE_MIN_PERCENT, BALANCE_TONE_HZ,
+    EXCLUSIVE_WARMUP_MS, VOLUME_TAPER,
 };
 
 #[cfg(windows)]

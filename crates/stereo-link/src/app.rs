@@ -1,7 +1,10 @@
 //! StereoLink 立体声链 —— 桌面面板。
 //!
-//! 界面按「一屏看懂」组织：顶栏是身份与总状态，中间左侧是声道路由与设备表，
-//! 右侧是采集源、诊断与说明。所有动作（开始/停止/自检音/切默认输出）都在一屏内。
+//! 界面按「左侧可收起侧边栏 + 四个页面」组织：
+//! - 顶栏：身份、运行状态、开始 / 停止路由；
+//! - 顶栏下方诊断条：只有「采集源就绪 / 链路正常 / 系统默认输出」三个状态徽章；
+//! - 左侧导航：声道路由 / 采集源 / 本机播放设备 / 日志（可收起成图标条）；
+//! - 页面内容：路由表（每路音量条 + 反相开关）、采集源设置、设备表、日志。
 //!
 //! 设计要点：
 //! - 面板只做两件事：把「采集源」的 WASAPI 回环流拆成左右两路推给两台蓝牙音箱；
@@ -9,9 +12,12 @@
 //! - 采集源不再限定虚拟声卡：任意播放端点都能选（自研虚拟声卡、UU远程虚拟设备、
 //!   没接音箱的物理输出都行），只要它同时是 Windows 默认输出就能采到声音。
 //! - 引擎跑在自己的线程里（见 `stereo_audio::route`），UI 线程只读快照 + 发命令。
-//! - 状态用少量自定义绘制（电平条、胶囊、卡片）代替默认控件外观，避免糊成一团。
+//! - 已发流 / 欠载这类运行数据只写日志，界面上不再常驻显示，避免表格越来越宽。
+//! - 状态用少量自定义绘制（电平条、胶囊、徽章、卡片）代替默认控件外观。
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -19,16 +25,18 @@ use eframe::egui::{
     Align, Color32, CornerRadius, FontId, Layout, Margin, Rect, RichText, Sense, Stroke, Vec2,
 };
 use stereo_audio::{
-    get_endpoint_volume, set_endpoint_mute, set_endpoint_volume, DataFlow, EndpointFormat,
-    EndpointInfo, EndpointVolume, MicCandidate, MicHealth, PcmFormat, RouteChannel, RouteConfig,
-    RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats, SyncConfig, SyncMethod,
-    SyncResult,
+    get_endpoint_volume, set_endpoint_mute, set_endpoint_volume, BalanceReport, DataFlow,
+    EndpointFormat, EndpointInfo, EndpointVolume, MicCandidate, MicHealth, PcmFormat, RouteChannel,
+    RouteConfig, RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats, SyncConfig,
+    SyncMethod, SyncResult, BALANCE_DEADBAND_DB,
 };
 
 use crate::audio_default;
+use crate::close_flow::{self, CloseOutcome, CloseState};
 use crate::config::{AppConfig, VolumeFollow};
 use crate::fonts;
 use crate::logbuf::{LogBuffer, LogLine};
+use crate::tray::{Tray, TrayEvent};
 
 // ---------------------------------------------------------------------------
 // 主题：深色 + 青/紫双声道配色
@@ -177,23 +185,20 @@ fn clip_text(text: &str, max_chars: usize) -> String {
 // ---- 声道路由表：列宽写死，数值列右对齐 ----
 const ROUTE_COL_CH: f32 = 52.0;
 const ROUTE_COL_LEVEL: f32 = 84.0;
-const ROUTE_COL_SENT: f32 = 92.0;
+/// 每路音量条：占用原先「已发流 / 欠载」两列的位置。
+const ROUTE_COL_VOL: f32 = 150.0;
 const ROUTE_COL_BUF: f32 = 72.0;
-const ROUTE_COL_UNDER: f32 = 52.0;
 const ROUTE_COL_PATH: f32 = 44.0;
+/// 反相开关列：从「高级」里移出来，每路都直接可见。
+const ROUTE_COL_INV: f32 = 96.0;
 const ROUTE_ROW_H: f32 = 28.0;
-/// 诊断卡固定槽位数：条数变化不改变卡片高度。
-const DIAG_SLOTS: usize = 5;
 
-/// 「欠载」的悬停说明：表头与数据行共用同一段话。
-const UNDERRUN_HELP: &str = "\
-欠载（underrun）= 这一路要往音箱写数据时，抖动缓冲里已经没数据了，\
-只能补静音凑够这一轮（约 10 ms），每补一次记 1 次。\n\
-· 0～几次：正常 —— 刚开始路由时队列还没攒满，头一两轮必然补静音；\n\
-· 几十次：偶发轻微咔哒，多半听不出来；\n\
-· 几百次以上：会听到断音/爆音，把「抖动缓冲」调大（40 → 80～120 ms，代价是延迟增加），\
-并确认采集源就是 Windows 默认输出、播放器确实在放声音。\n\
-反方向的问题是丢帧：缓冲满了就丢掉最旧的采样，用来吸收两条链路的时钟漂移。";
+/// 左侧导航栏展开 / 收起宽度。
+const SIDEBAR_W: f32 = 176.0;
+const SIDEBAR_W_COLLAPSED: f32 = 48.0;
+
+/// 运行数据（已发流 / 欠载 / 缓冲）写日志的周期：界面上不再显示，只进日志。
+const STATS_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
 /// 「系统音量」联动的悬停说明。
 const VOLUME_FOLLOW_HELP: &str = "\
@@ -208,11 +213,11 @@ const VOLUME_FOLLOW_HELP: &str = "\
 fn route_device_width(available: f32, spacing: f32) -> f32 {
     let fixed = ROUTE_COL_CH
         + ROUTE_COL_LEVEL
-        + ROUTE_COL_SENT
+        + ROUTE_COL_VOL
         + ROUTE_COL_BUF
-        + ROUTE_COL_UNDER
-        + ROUTE_COL_PATH;
-    (available - fixed - spacing * 6.0).max(150.0)
+        + ROUTE_COL_PATH
+        + ROUTE_COL_INV;
+    (available - fixed - spacing * 7.0).max(150.0)
 }
 
 /// 描边小徽标。
@@ -270,6 +275,18 @@ fn level_bar(ui: &mut egui::Ui, width: f32, level: f32, color: Color32) {
 
 fn muted(text: impl Into<String>) -> RichText {
     RichText::new(text).size(12.0).color(MUTED)
+}
+
+/// 诊断条里的小状态点：绿 = 正常，黄 = 注意。
+fn status_dot(ui: &mut egui::Ui, ok: bool, ok_text: &str, bad_text: &str, tip: &str) {
+    let (text, color) = if ok { (ok_text, OK) } else { (bad_text, WARN) };
+    ui.add_space(6.0);
+    ui.add(
+        egui::Label::new(RichText::new(format!("● {text}")).size(12.0).color(color))
+            .selectable(false),
+    )
+    .on_hover_text(tip);
+    ui.add_space(10.0);
 }
 
 /// `扬声器 (Living Room Speaker)` → `Living Room Speaker`。
@@ -401,13 +418,6 @@ struct Hint {
 }
 
 impl Hint {
-    fn color(&self) -> Color32 {
-        match self.tone {
-            Tone::Ok => OK,
-            Tone::Warn => WARN,
-            Tone::Err => ERR,
-        }
-    }
     fn icon(&self) -> &'static str {
         match self.tone {
             Tone::Ok => "√",
@@ -420,6 +430,50 @@ impl Hint {
 // ---------------------------------------------------------------------------
 // 应用
 // ---------------------------------------------------------------------------
+
+/// 左侧导航的四个页面。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Page {
+    /// 声道路由（主页）：左右设备、每路音量、反相、校准与音量平衡、高级。
+    Routing,
+    /// 采集源：端点选择、默认输出切换、系统音量联动、采集源音量诊断、测试音。
+    Capture,
+    /// 本机播放设备：格式 / 角色 / 设为左 / 设为右。
+    Devices,
+    /// 日志：运行日志（默认关闭，只在点进来时渲染）。
+    Log,
+}
+
+impl Page {
+    /// 导航栏里的全部页面（顺序即显示顺序）。
+    const ALL: [Page; 4] = [Page::Routing, Page::Capture, Page::Devices, Page::Log];
+
+    /// 导航栏里的中文标题。
+    fn label(self) -> &'static str {
+        match self {
+            Page::Routing => "声道路由",
+            Page::Capture => "采集源",
+            Page::Devices => "本机播放设备",
+            Page::Log => "日志",
+        }
+    }
+
+    /// 收起侧边栏时显示的单字图标（用中文字，避免符号字体缺字）。
+    fn icon(self) -> &'static str {
+        match self {
+            Page::Routing => "路",
+            Page::Capture => "源",
+            Page::Devices => "设",
+            Page::Log => "志",
+        }
+    }
+}
+
+/// 后台校准线程的返回值：延迟对齐 + 音量平衡（平衡失败不拖累对齐结果）。
+struct CalibrateOutcome {
+    sync: Result<SyncResult, String>,
+    balance: Result<BalanceReport, String>,
+}
 
 pub struct StereoLinkApp {
     cfg: AppConfig,
@@ -459,8 +513,8 @@ pub struct StereoLinkApp {
     sync_status: String,
     /// 自校验（测量）进行中。
     sync_busy: bool,
-    /// 后台自校验线程的结果通道。
-    sync_rx: Option<std::sync::mpsc::Receiver<Result<SyncResult, String>>>,
+    /// 后台自校验线程的结果通道（延迟对齐 + 音量平衡一起返回）。
+    sync_rx: Option<std::sync::mpsc::Receiver<CalibrateOutcome>>,
     /// 最近一次自校验结果。
     sync_result: Option<SyncResult>,
     /// 手动对齐点击串正在播。
@@ -479,6 +533,44 @@ pub struct StereoLinkApp {
     volume_source: Option<EndpointVolume>,
     /// 上次读采集源音量的时间。
     volume_source_at: Option<Instant>,
+    /// 当前页面。
+    page: Page,
+    /// 左侧侧边栏是否展开（收起后只剩图标条）。
+    sidebar_open: bool,
+    /// 关闭流程（缩小至托盘 / 直接关闭 / 先问一句）的跨帧状态。
+    close_state: CloseState,
+    /// 系统托盘（装不上时为 None：此时「缩小至托盘」退化为普通最小化）。
+    tray: Option<Tray>,
+    /// 是否已经尝试装过托盘（只尝试一次，失败写日志）。
+    tray_attempted: bool,
+    /// 窗口当前是否隐藏到托盘（或退化为普通最小化）。
+    ///
+    /// 隐藏期间**不能**再周期性请求重绘：窗口不可见时重绘请求无法真正呈现，
+    /// eframe 的 `ControlFlow::WaitUntil` 一到点就立刻返回，会把一个核跑满
+    /// （实测隐藏后 97–99% 单核，可见时 1.35%）。唤醒改由托盘事件驱动
+    /// （`Tray` 持有 `egui::Context`，事件入队后 `request_repaint()`）。
+    window_hidden: bool,
+    /// 隐藏期间的第二个唤醒源：轮询采集源音量，变化时唤醒主循环。
+    volume_waker: Option<VolumeWaker>,
+    /// 每路输出设备音量（0.0..=1.0），拖音量条时实时改这里，节流后写回设备。
+    /// 用 HashMap：RouteChannel 只有 Hash 没有 Ord（引擎侧不给它排全序）。
+    route_volumes: std::collections::HashMap<RouteChannel, f32>,
+    /// 上次把某路音量写回设备的时间（节流，避免拖动时每帧都走 COM）。
+    route_volume_at: std::collections::HashMap<RouteChannel, Instant>,
+    /// 上次周期性写运行统计日志的时间。
+    last_stats_log: Option<Instant>,
+    /// 每路最后一次记录的（欠载数, 是否处于错误/重试中），用于变化时立刻写日志。
+    last_stats_marks: Vec<(u64, bool)>,
+    /// 最近一次音量平衡测量结果。
+    balance_result: Option<BalanceReport>,
+    /// 音量平衡失败原因（延迟对齐仍可能成功）。
+    balance_error: Option<String>,
+    /// 音量平衡的状态说明。
+    balance_status: String,
+    /// 日志页是否自动滚动到最新一行。
+    log_autoscroll: bool,
+    /// 上次刷新每路输出设备音量的时间（从设备读回，覆盖拖动之外的显示值）。
+    route_volume_refresh_at: Option<Instant>,
 }
 
 impl StereoLinkApp {
@@ -527,6 +619,22 @@ impl StereoLinkApp {
             volume_error: None,
             volume_source: None,
             volume_source_at: None,
+            page: Page::Routing,
+            sidebar_open: true,
+            close_state: CloseState::default(),
+            tray: None,
+            tray_attempted: false,
+            window_hidden: false,
+            volume_waker: None,
+            route_volumes: std::collections::HashMap::new(),
+            route_volume_at: std::collections::HashMap::new(),
+            last_stats_log: None,
+            last_stats_marks: Vec::new(),
+            balance_result: None,
+            balance_error: None,
+            balance_status: String::new(),
+            log_autoscroll: true,
+            route_volume_refresh_at: None,
         };
         app.refresh_endpoints();
         app.refresh_formats();
@@ -632,6 +740,9 @@ impl StereoLinkApp {
             }
         }
 
+        // 已发流 / 欠载 / 缓冲不再显示在界面上：定期（或状态变化时）写进日志。
+        self.log_runtime_stats();
+
         // 启动后自动开始一次。放在 tick 里而不是 new()，让首帧先把界面画出来。
         if !self.auto_started {
             self.auto_started = true;
@@ -644,6 +755,50 @@ impl StereoLinkApp {
             if at.elapsed() > Duration::from_secs(8) {
                 self.notice = None;
             }
+        }
+    }
+
+    /// 把运行统计（已发流 / 欠载 / 缓冲）写进日志：每 30 秒一次，
+    /// 欠载数或错误/重试状态发生变化时立即写一条。（界面表格里不再显示这些数字。）
+    fn log_runtime_stats(&mut self) {
+        let Some(stats) = self.stats.clone() else {
+            return;
+        };
+        let due = self
+            .last_stats_log
+            .map(|t| t.elapsed() >= STATS_LOG_INTERVAL)
+            .unwrap_or(true);
+        let marks: Vec<(u64, bool)> = stats
+            .routes
+            .iter()
+            .map(|r| (r.underruns, r.error.is_some() || r.retry_in_ms > 0))
+            .collect();
+        let changed = marks != self.last_stats_marks;
+        if !due && !changed {
+            return;
+        }
+        self.last_stats_log = Some(Instant::now());
+        self.last_stats_marks = marks;
+        for route in &stats.routes {
+            let extra = if route.retry_in_ms > 0 {
+                format!(" | 重连中（第 {} 次）", route.retry_count)
+            } else if let Some(err) = &route.error {
+                format!(" | 错误：{err}")
+            } else {
+                String::new()
+            };
+            tracing::info!(
+                "[统计] {} → {} | 已发 {:.2} MB | 欠载 {} | 缓冲 {:.0} ms{}",
+                route.channel.as_str(),
+                short_endpoint(&route.endpoint),
+                route.sent_bytes as f64 / 1_048_576.0,
+                route.underruns,
+                route.queued_ms,
+                extra
+            );
+        }
+        if let Some(err) = &stats.source_error {
+            tracing::warn!("[统计] 采集源错误：{err}");
         }
     }
 
@@ -1221,7 +1376,7 @@ impl StereoLinkApp {
         }
     }
 
-    /// 后台跑一次双路标定（同时法优先，失败退回依次法）。
+    /// 后台跑一次「延迟对齐 + 音量平衡」：先量两台箱的到达时差，再分别量左右电平。
     fn start_sync(&mut self) {
         if self.sync_busy {
             return;
@@ -1237,26 +1392,37 @@ impl StereoLinkApp {
             self.sync_status = "先选好左右两台音箱。".to_string();
             return;
         }
+        let Some(mic_candidate) = self.sync_mics.iter().find(|m| m.id() == mic).cloned() else {
+            self.sync_status = "麦克风列表里找不到这个设备，先点「刷新」。".to_string();
+            return;
+        };
         let (tx, rx) = std::sync::mpsc::channel();
         let mic_t = mic.clone();
         let (left_t, right_t) = (left.clone(), right.clone());
         std::thread::spawn(move || {
             let cfg = SyncConfig::new(mic_t.clone(), left_t.clone());
-            let out = stereo_audio::calibrate_pair(&mic_t, &left_t, &right_t, &cfg)
+            let sync = stereo_audio::calibrate_pair(&mic_t, &left_t, &right_t, &cfg)
                 .map_err(|e| e.to_string());
-            let _ = tx.send(out);
+            // 延迟对齐之后，接着用同一个麦克风量左右两路的电平，算音量平衡建议。
+            let balance =
+                stereo_audio::sync::measure_balance(&mic_candidate, &left_t, &right_t, &cfg)
+                    .map_err(|e| e.to_string());
+            let _ = tx.send(CalibrateOutcome { sync, balance });
         });
         self.sync_rx = Some(rx);
         self.sync_busy = true;
+        self.balance_result = None;
+        self.balance_error = None;
+        self.balance_status = String::new();
         self.sync_status = if self.engine.is_some() {
-            "正在测量（先试同时法、失败退回依次法，约 5 秒）… 提示：路由正在运行，若此刻正在放音乐请先「停止」，否则麦克风会同时收到音乐、测量会不准。".to_string()
+            "正在测量延迟并平衡音量（约 8 秒）… 提示：路由正在运行，若此刻正在放音乐请先「停止」，否则麦克风会同时收到音乐、测量会不准。".to_string()
         } else {
-            "正在测量（先试同时法、失败退回依次法，约 5 秒）… 请保持环境安静。".to_string()
+            "正在测量延迟并平衡音量（约 8 秒）… 请保持环境安静。".to_string()
         };
-        tracing::info!("[自校验] 开始标定：mic={mic} left={left} right={right}");
+        tracing::info!("[自校验] 开始标定 + 平衡：mic={mic} left={left} right={right}");
     }
 
-    /// 收后台标定结果；成功后把建议延迟写进两条路由（运行中实时生效）。
+    /// 收后台结果：延迟写进两条路由（运行中实时生效），音量平衡结果留待用户确认。
     fn poll_sync(&mut self) {
         let Some(rx) = self.sync_rx.as_ref() else {
             return;
@@ -1269,35 +1435,101 @@ impl StereoLinkApp {
                 self.sync_busy = false;
                 self.sync_status = "标定线程异常退出。".to_string();
             }
-            Ok(Ok(result)) => {
+            Ok(CalibrateOutcome { sync, balance }) => {
                 self.sync_rx = None;
                 self.sync_busy = false;
-                let (l, r) = result.delays();
-                self.cfg.split.left_delay_ms = l;
-                self.cfg.split.right_delay_ms = r;
-                self.save();
-                if let Some(engine) = self.engine.as_ref() {
-                    engine.set_delays_ms(&[l, r]);
-                }
-                self.sync_status = format!(
-                    "{}  → 已应用左垫 {l} ms、右垫 {r} ms{}",
-                    result.describe(),
-                    if result.method == SyncMethod::Sequential {
-                        "（依次法精度只有 ±4 ms，建议再用手动点击串微调）"
-                    } else {
-                        ""
+                match sync {
+                    Ok(result) => {
+                        let (l, r) = result.delays();
+                        self.cfg.split.left_delay_ms = l;
+                        self.cfg.split.right_delay_ms = r;
+                        self.save();
+                        if let Some(engine) = self.engine.as_ref() {
+                            engine.set_delays_ms(&[l, r]);
+                        }
+                        self.sync_status = format!(
+                            "{}  → 已应用左垫 {l} ms、右垫 {r} ms{}",
+                            result.describe(),
+                            if result.method == SyncMethod::Sequential {
+                                "（依次法精度只有 ±4 ms，建议再用手动点击串微调）"
+                            } else {
+                                ""
+                            }
+                        );
+                        tracing::info!("[自校验] {}", self.sync_status);
+                        self.sync_result = Some(result);
+                        self.toast("已按测量结果自动对齐左右延迟");
                     }
-                );
-                tracing::info!("[自校验] {}", self.sync_status);
-                self.sync_result = Some(result);
-                self.toast("已按测量结果自动对齐左右延迟");
+                    Err(e) => {
+                        self.sync_status = format!("延迟测量失败：{e}");
+                        tracing::warn!("[自校验] 测量失败：{e}");
+                    }
+                }
+                match balance {
+                    Ok(report) => {
+                        self.balance_status = format!(
+                            "音量平衡：{}  → 点「应用建议」按建议百分比写回左右端点音量",
+                            report.describe()
+                        );
+                        tracing::info!("[音量平衡] {}", report.describe());
+                        self.balance_result = Some(report);
+                        self.balance_error = None;
+                    }
+                    Err(e) => {
+                        self.balance_status = format!("音量平衡测量失败（延迟对齐不受影响）：{e}");
+                        tracing::warn!("[音量平衡] 测量失败：{e}");
+                        self.balance_result = None;
+                        self.balance_error = Some(e);
+                    }
+                }
             }
-            Ok(Err(e)) => {
-                self.sync_rx = None;
-                self.sync_busy = false;
-                self.sync_status = format!("测量失败：{e}");
-                tracing::warn!("[自校验] 测量失败：{e}");
+        }
+    }
+
+    /// 把音量平衡建议写回左右端点音量（不改延迟；可反复应用）。
+    fn apply_balance(&mut self) {
+        let Some(report) = self.balance_result else {
+            return;
+        };
+        let left = self.cfg.split.left_endpoint.clone();
+        let right = self.cfg.split.right_endpoint.clone();
+        let targets = [
+            (
+                RouteChannel::Left,
+                left.as_str(),
+                report.suggested_left_percent,
+            ),
+            (
+                RouteChannel::Right,
+                right.as_str(),
+                report.suggested_right_percent,
+            ),
+        ];
+        let mut errors: Vec<String> = Vec::new();
+        for (channel, endpoint, percent) in targets {
+            if endpoint.is_empty() {
+                continue;
             }
+            match set_endpoint_volume(endpoint, percent as f32 / 100.0) {
+                Ok(volume) => {
+                    self.route_volumes.insert(channel, volume.scalar);
+                    self.route_volume_at.insert(channel, Instant::now());
+                }
+                Err(e) => errors.push(format!("{}：{e}", short_endpoint(endpoint))),
+            }
+        }
+        if errors.is_empty() {
+            self.toast(format!(
+                "已应用音量平衡：左 {}% / 右 {}%",
+                report.suggested_left_percent, report.suggested_right_percent
+            ));
+            self.balance_status = format!(
+                "已应用：左 {}% / 右 {}%（可再点「测量并对齐」复测）",
+                report.suggested_left_percent, report.suggested_right_percent
+            );
+        } else {
+            self.toast(format!("应用音量平衡部分失败：{}", errors.join("；")));
+            self.balance_status = format!("应用失败：{}", errors.join("；"));
         }
     }
 
@@ -1357,6 +1589,27 @@ impl StereoLinkApp {
             }
         }
         out
+    }
+
+    /// 按需维持「音量跟随」唤醒线程：仅在引擎运行且跟随开启时存在。
+    ///
+    /// 线程只负责在采集源音量变化时唤醒主循环；写入逻辑仍在 `tick_volume_follow()`。
+    fn tick_volume_waker(&mut self, ctx: &egui::Context) {
+        let wanted = self.engine.is_some() && self.volume_follow_active();
+        if !wanted {
+            if self.volume_waker.take().is_some() {
+                tracing::debug!("音量跟随唤醒线程已停止");
+            }
+            return;
+        }
+        if self.volume_waker.is_some() {
+            return;
+        }
+        let Some(source) = self.capture_selector() else {
+            return;
+        };
+        self.volume_waker = Some(VolumeWaker::spawn(ctx.clone(), source));
+        tracing::debug!("音量跟随唤醒线程已启动（隐藏到托盘后仍会跟随系统音量）");
     }
 
     /// 每 ~400 ms 把采集源的音量与静音镜像到目标设备（虚拟声卡场景）。
@@ -1703,12 +1956,35 @@ impl StereoLinkApp {
                     } else {
                         pill(ui, "已停止", Color32::from_rgb(120, 128, 142), 76.0);
                     }
-                    ui.add_space(4.0);
 
-                    if self.live_default_is_capture {
-                        pill(ui, "默认输出 = 采集源", ACCENT, 160.0);
-                    } else {
-                        pill(ui, "默认输出未切换", WARN, 160.0);
+                    // 开始 / 停止 / 重启放在顶栏，主页面只放路由表。
+                    ui.add_space(10.0);
+                    if self.engine.is_some() {
+                        if ui.button("停止路由").clicked() {
+                            self.stop_routing(true);
+                            self.toast("已停止路由并恢复默认输出");
+                        }
+                        if ui.button("重启路由").clicked() {
+                            self.restart_routing();
+                            self.toast("路由已重启");
+                        }
+                    } else if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("开始路由").color(Color32::BLACK).strong(),
+                            )
+                            .fill(ACCENT),
+                        )
+                        .clicked()
+                    {
+                        self.start_routing(true);
+                    }
+                    if ui
+                        .button("左右自检音")
+                        .on_hover_text("向两台音箱分别放一声测试音，快速确认左右没接反")
+                        .clicked()
+                    {
+                        self.play_test_tone();
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1750,27 +2026,160 @@ impl StereoLinkApp {
             });
     }
 
-    fn side_panel(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::right("side")
-            .exact_width(384.0)
+    /// 顶部诊断条：只显示三项状态，不带任何解释文字（细节都在日志里）。
+    fn diagnostic_bar(&mut self, ctx: &egui::Context) {
+        let capture_ready = self.capture_endpoint().is_some();
+        let (link_ok, link_text, link_tip) = self.link_status();
+        let default_ready = self.live_default_is_capture;
+        egui::TopBottomPanel::top("diagnostics")
+            .frame(
+                egui::Frame::default()
+                    .fill(PANEL)
+                    .inner_margin(Margin::symmetric(18, 6))
+                    .stroke(Stroke::new(1.0_f32, BORDER)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    status_dot(
+                        ui,
+                        capture_ready,
+                        "采集源就绪",
+                        "未选采集源",
+                        "在「采集源」页选择作为声音来源的端点",
+                    );
+                    status_dot(ui, link_ok, link_text, link_text, link_tip);
+                    status_dot(
+                        ui,
+                        default_ready,
+                        "默认输出 = 采集源",
+                        "默认输出未切到采集源",
+                        "把 Windows 默认播放设备切到采集源端点，否则回环采不到声音",
+                    );
+                });
+            });
+    }
+
+    /// 链路状态：`(是否正常, 文案, 悬停说明)`，只给顶部诊断条用。
+    fn link_status(&self) -> (bool, &'static str, &'static str) {
+        let Some(stats) = self.stats.as_ref() else {
+            return (false, "链路未运行", "点顶栏「开始路由」启动");
+        };
+        if stats.degraded {
+            return (false, "链路等待设备", "没有路由开流成功，正在后台重试");
+        }
+        if stats.source_retrying > 0 {
+            return (false, "采集源重连中", "采集源暂时不可用，正在后台重试");
+        }
+        let route_bad = stats
+            .routes
+            .iter()
+            .any(|r| r.error.is_some() || r.retry_in_ms > 0);
+        if route_bad {
+            return (
+                false,
+                "链路部分异常",
+                "有路由正在重连或未能开流，详情见日志",
+            );
+        }
+        if stats.source_error.is_some() {
+            return (false, "采集源异常", "采集线程报错，详情见日志");
+        }
+        (true, "链路正常", "左右两路都在正常输出")
+    }
+
+    /// 左侧导航栏：四个页面入口，可收起成图标条（收起状态记忆在内存里）。
+    fn sidebar(&mut self, ctx: &egui::Context) {
+        let width = if self.sidebar_open {
+            SIDEBAR_W
+        } else {
+            SIDEBAR_W_COLLAPSED
+        };
+        let margin_x = if self.sidebar_open { 10 } else { 6 };
+        egui::SidePanel::left("sidebar")
+            .exact_width(width)
             .resizable(false)
             .frame(
                 egui::Frame::default()
                     .fill(PANEL)
-                    .inner_margin(Margin::symmetric(16, 14))
+                    .inner_margin(Margin::symmetric(margin_x, 12))
                     .stroke(Stroke::new(1.0_f32, BORDER)),
             )
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("side_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        self.capture_card(ui);
-                        ui.add_space(12.0);
-                        self.diagnostics_card(ui);
-                        ui.add_space(12.0);
-                        self.about_card(ui);
+                ui.horizontal(|ui| {
+                    if self.sidebar_open {
+                        ui.label(RichText::new("导航").size(12.0).color(MUTED).strong());
+                    }
+                    let (collapsed_icon, tip) = if self.sidebar_open {
+                        ("«", "收起侧边栏")
+                    } else {
+                        ("»", "展开侧边栏")
+                    };
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(collapsed_icon).size(15.0).color(MUTED),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text(tip)
+                            .clicked()
+                        {
+                            self.sidebar_open = !self.sidebar_open;
+                            self.cfg.save();
+                        }
                     });
+                });
+                ui.add_space(8.0);
+                let mut target: Option<Page> = None;
+                for page in Page::ALL {
+                    let selected = self.page == page;
+                    let text = if self.sidebar_open {
+                        page.label().to_string()
+                    } else {
+                        page.icon().to_string()
+                    };
+                    let fill = if selected { CARD_SOFT } else { PANEL };
+                    let color = if selected { ACCENT } else { MUTED };
+                    let (rect, response) = ui
+                        .allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click());
+                    let hovered = response.hovered();
+                    let painter = ui.painter();
+                    painter.rect_filled(
+                        rect,
+                        CornerRadius::same(8),
+                        if hovered {
+                            Color32::from_rgb(26, 31, 39)
+                        } else {
+                            fill
+                        },
+                    );
+                    if selected {
+                        painter.rect_filled(
+                            Rect::from_min_size(
+                                rect.min + Vec2::new(0.0, 7.0),
+                                Vec2::new(3.0, 20.0),
+                            ),
+                            CornerRadius::same(2),
+                            ACCENT,
+                        );
+                    }
+                    painter.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        text,
+                        FontId::proportional(13.0),
+                        color,
+                    );
+                    let response = response.on_hover_text(page.label());
+                    if response.clicked() {
+                        target = Some(page);
+                    }
+                    ui.add_space(4.0);
+                }
+                if let Some(page) = target {
+                    self.page = page;
+                }
             });
     }
 
@@ -1926,359 +2335,22 @@ impl StereoLinkApp {
                 }
             });
 
-            // 非虚拟类采集源：琥珀色兜底提示（有 UU 远程时换成正向提示）。
-            if kind_now.map(|kind| !kind.is_virtual()).unwrap_or(false) {
-                ui.add_space(6.0);
-                let tip = if uu_present {
-                    "已检测到 UU远程虚拟音频设备，可直接选它做采集源（它是无声的虚拟设备，不会重复出声）。"
-                        .to_string()
-                } else {
-                    "本机没有虚拟声卡时：① 运行一次 UU远程（免费，会装好一个虚拟音频设备）→ 点「刷新设备」，选『扬声器 (UU远程虚拟音频设备)』；② 安装 StereoLink 虚拟声卡（高级：需测试签名 + 重启一次）；③ 选一个没接音箱的物理输出（可能出声）。"
-                        .to_string()
-                };
-                egui::Frame::default()
-                    .fill(WARN.gamma_multiply(0.10))
-                    .stroke(Stroke::new(1.0_f32, WARN.gamma_multiply(0.45)))
-                    .inner_margin(Margin::symmetric(10, 8))
-                    .corner_radius(CornerRadius::same(8))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.label(RichText::new(tip).color(WARN).size(12.0));
-                    });
-            }
-        });
-
-        if let Some(id) = chosen_id {
-            self.select_capture_endpoint(&id);
-        }
-    }
-
-    fn diagnostics_card(&mut self, ui: &mut egui::Ui) {
-        let hints = self.hints();
-        card_frame().show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.set_min_height(178.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("诊断").size(15.0).strong());
-                help(
-                    ui,
-                    "这里只列会影响出声的问题：\n\
-                     · 采集源 / 播放设备是否就绪；\n\
-                     · 路由是否在跑、两条链路有没有错误或欠载；\n\
-                     · Windows 默认输出是不是采集源。",
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .small_button("复制")
-                        .on_hover_text("复制全部诊断信息到剪贴板")
-                        .clicked()
-                    {
-                        let text = hints
-                            .iter()
-                            .map(|h| format!("{} {}", h.icon(), h.text))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        ui.ctx().copy_text(text);
-                        self.toast("诊断信息已复制");
-                    }
-                });
-            });
-            ui.add_space(4.0);
-            // 固定槽位：诊断条数变化不改变卡片高度。
-            let width = ui.available_width().max(120.0);
-            for i in 0..DIAG_SLOTS {
-                let (rect, response) =
-                    ui.allocate_exact_size(Vec2::new(width, 20.0), Sense::hover());
-                let Some(hint) = hints.get(i) else {
-                    continue;
-                };
-                if !ui.is_rect_visible(rect) {
-                    continue;
-                }
-                {
-                    let painter = ui.painter();
-                    painter.text(
-                        rect.left_center(),
-                        egui::Align2::LEFT_CENTER,
-                        hint.icon(),
-                        FontId::monospace(11.5),
-                        hint.color(),
-                    );
-                    let galley = fit_one_line(
-                        ui,
-                        &hint.text,
-                        &FontId::proportional(12.5),
-                        TEXT,
-                        (rect.width() - 18.0).max(40.0),
-                    );
-                    painter.galley(
-                        egui::pos2(rect.left() + 18.0, rect.center().y - galley.size().y * 0.5),
-                        galley,
-                        TEXT,
-                    );
-                }
-                response.on_hover_text(hint.text.clone());
-            }
-        });
-    }
-
-    fn about_card(&mut self, ui: &mut egui::Ui) {
-        card_frame().show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.set_min_height(118.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("怎么用").size(15.0).strong());
-                help(
-                    ui,
-                    "1. 为左、右声道各选一台蓝牙音箱（先在本机蓝牙里连上）。\n\
-                     2. 点「开始路由」，面板会把默认输出切到你选的采集源。\n\
-                     3. 用播放器放歌/看视频，声音就被拆成左右两路。\n\
-                     4. 退出面板会自动停路由并恢复原来的默认输出。\n\n\
-                     软件侧延迟 ≈ 20 ms 采集缓冲 + 抖动缓冲 + 渲染缓冲 / 2；\n\
-                     蓝牙链路本身的延迟另外算（约 100–200 ms）。",
-                );
-            });
+            // 端点格式：引擎采样率跟随采集源混音格式（零重采样），这里只做展示。
             ui.add_space(6.0);
-            let latency = self
-                .route_engine_config()
-                .map(|c| c.software_latency_ms())
-                .unwrap_or(0);
-            let line = format!(
-                "软件侧延迟约 {latency} ms（抖动缓冲 {} ms + 渲染缓冲 40 ms）",
-                self.cfg.split.queue_ms
-            );
-            let width = ui.available_width().max(120.0);
-            let tip = line.clone();
-            text_cell(
-                ui,
-                width,
-                18.0,
-                &line,
-                FontId::proportional(12.0),
-                MUTED,
-                false,
-            )
-            .on_hover_text(tip);
-            ui.add_space(4.0);
-            if ui
-                .checkbox(&mut self.cfg.show_log, "显示日志面板")
-                .changed()
-            {
-                self.cfg.save();
-            }
-            let (font_line, font_tip, font_color) = match &self.font {
-                Some(path) => {
-                    let file = std::path::Path::new(path)
-                        .file_name()
-                        .map(|name| name.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path.clone());
-                    let present = fonts::candidates_present();
-                    (
-                        format!("字体：{file}"),
-                        format!("{path}\n\n候选字体：\n{}", present.join("\n")),
-                        MUTED,
-                    )
-                }
-                None => (
-                    "没找到中文字体：中文可能显示为方块".to_string(),
-                    "系统字体目录里没有候选字体，可用 STEREOLINK_FONT 指定".to_string(),
-                    WARN,
-                ),
-            };
-            let width = ui.available_width().max(120.0);
-            text_cell(
-                ui,
-                width,
-                18.0,
-                &font_line,
-                FontId::proportional(12.0),
-                font_color,
-                false,
-            )
-            .on_hover_text(font_tip);
-        });
-    }
-
-    fn main_panel(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::default()
-                    .fill(BG)
-                    .inner_margin(Margin::symmetric(16, 14)),
-            )
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("main_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        self.routing_card(ui);
-                        ui.add_space(12.0);
-                        self.devices_card(ui);
-                        if self.cfg.show_log {
-                            ui.add_space(12.0);
-                            self.log_card(ui);
-                        }
-                        ui.add_space(10.0);
-                    });
-            });
-    }
-
-    fn routing_card(&mut self, ui: &mut egui::Ui) {
-        card_frame().show(ui, |ui| {
-            ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new("声道路由").size(16.0).strong());
-                ui.add_space(6.0);
-                if self.engine.is_some() {
-                    pill(ui, "分离运行中", OK, 96.0);
-                    if let Some(stats) = &self.stats {
-                        if stats.degraded {
-                            pill(ui, "等待设备", WARN, 84.0);
-                        } else if stats.routes.iter().any(|r| r.retry_in_ms > 0) {
-                            pill(ui, "重连中", WARN, 72.0);
-                        }
-                    }
-                } else {
-                    pill(ui, "未运行", Color32::from_rgb(120, 128, 142), 96.0);
-                }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if self.engine.is_some() {
-                        if ui.button("停止").clicked() {
-                            self.stop_routing(true);
-                            self.toast("已停止路由并恢复默认输出");
-                        }
-                        if ui.button("重启").clicked() {
-                            self.restart_routing();
-                            self.toast("路由已重启");
-                        }
-                    } else if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("开始路由").color(Color32::BLACK).strong(),
-                            )
-                            .fill(ACCENT),
-                        )
-                        .clicked()
-                    {
-                        self.start_routing(true);
-                    }
-                    if ui.button("左右自检音").clicked() {
-                        self.play_test_tone();
-                    }
-                });
-            });
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(8.0);
-
-            let spacing = ui.spacing().item_spacing.x;
-            let available = ui.available_width();
-            let device_w = route_device_width(available, spacing);
-            // 固定列表头：字段名常驻在数字上方（用户要求「像表格那样」）。
-            {
-                let header_font = FontId::proportional(12.0);
-                ui.horizontal(|ui| {
-                    text_cell(
-                        ui,
-                        ROUTE_COL_CH,
-                        18.0,
-                        "声道",
-                        header_font.clone(),
-                        MUTED,
-                        false,
-                    );
-                    text_cell(
-                        ui,
-                        device_w,
-                        18.0,
-                        "设备",
-                        header_font.clone(),
-                        MUTED,
-                        false,
-                    );
-                    text_cell(
-                        ui,
-                        ROUTE_COL_LEVEL,
-                        18.0,
-                        "电平",
-                        header_font.clone(),
-                        MUTED,
-                        false,
-                    );
-                    text_cell(
-                        ui,
-                        ROUTE_COL_SENT,
-                        18.0,
-                        "已发流",
-                        header_font.clone(),
-                        MUTED,
-                        true,
-                    );
-                    text_cell(
-                        ui,
-                        ROUTE_COL_BUF,
-                        18.0,
-                        "缓冲",
-                        header_font.clone(),
-                        MUTED,
-                        true,
-                    );
-                    text_cell(
-                        ui,
-                        ROUTE_COL_UNDER,
-                        18.0,
-                        "欠载",
-                        header_font.clone(),
-                        MUTED,
-                        true,
-                    )
-                    .on_hover_text(UNDERRUN_HELP);
-                    text_cell(ui, ROUTE_COL_PATH, 18.0, "路径", header_font, MUTED, false);
-                });
-            }
-            ui.add_space(2.0);
-            for channel in [RouteChannel::Left, RouteChannel::Right] {
-                self.route_row(ui, channel, device_w);
-            }
-
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(8.0);
-
-            ui.horizontal(|ui| {
-                ui.label(muted("增益"));
-                if ui
-                    .add(egui::Slider::new(&mut self.cfg.split.gain, 0.0..=2.0).step_by(0.05))
+                ui.label(muted("端点格式"));
+                let fmt = capture
+                    .as_ref()
+                    .and_then(|ep| ep.mix_format.as_ref())
+                    .map(|f| f.describe())
+                    .unwrap_or_else(|| "未知".to_string());
+                ui.label(RichText::new(format!("混音 {fmt}")).size(12.0).color(TEXT))
                     .on_hover_text(
-                        "数字增益：1.0 = 原样不放大；大于 1 会在数字域放大，\
-                         超过设备余量就会削顶（听感上是破音）。",
-                    )
-                    .changed()
-                {
-                    self.cfg.save();
-                }
-                ui.add_space(10.0);
-                ui.label(muted("抖动缓冲"));
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.cfg.split.queue_ms, 10..=200)
-                            .suffix(" ms")
-                            .step_by(5.0),
-                    )
-                    .on_hover_text(
-                        "每路独立队列，用来吸收两条蓝牙链路各自的时钟漂移与调度抖动：\
-                         数值越大越抗卡顿，但软件侧延迟会随之增加\
-                         （软件延迟 ≈ 20 ms 采集 + 这个值 + 渲染缓冲/2）。",
-                    )
-                    .changed()
-                {
-                    self.cfg.save();
-                    if self.engine.is_some() {
-                        self.restart_routing();
-                    }
-                }
+                        "采集端点的混音格式：路由引擎的采样率跟随它（零重采样）。",
+                    );
             });
 
+            // 系统音量联动（从声道路由页挪过来：它只和采集源有关）。
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label(muted("系统音量"));
@@ -2362,7 +2434,212 @@ impl StereoLinkApp {
                 });
             }
 
-            ui.collapsing("高级：左右微调延迟", |ui| {
+            // 测试音：直接往采集源端点播一段正弦，验证「采集→路由→两台音箱」整条链路。
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .button("播放测试音")
+                    .on_hover_text("往采集源端点播放几秒 440 Hz 正弦音（声音会从两台音箱出来）")
+                    .clicked()
+                {
+                    self.play_test_tone();
+                }
+                ui.label(muted("验证采集源与左右两路是否正常。"));
+            });
+
+            // 非虚拟类采集源：琥珀色兜底提示（有 UU 远程时换成正向提示）。
+            if kind_now.map(|kind| !kind.is_virtual()).unwrap_or(false) {
+                ui.add_space(6.0);
+                let tip = if uu_present {
+                    "已检测到 UU远程虚拟音频设备，可直接选它做采集源（它是无声的虚拟设备，不会重复出声）。"
+                        .to_string()
+                } else {
+                    "本机没有虚拟声卡时：① 运行一次 UU远程（免费，会装好一个虚拟音频设备）→ 点「刷新设备」，选『扬声器 (UU远程虚拟音频设备)』；② 安装 StereoLink 虚拟声卡（高级：需测试签名 + 重启一次）；③ 选一个没接音箱的物理输出（可能出声）。"
+                        .to_string()
+                };
+                egui::Frame::default()
+                    .fill(WARN.gamma_multiply(0.10))
+                    .stroke(Stroke::new(1.0_f32, WARN.gamma_multiply(0.45)))
+                    .inner_margin(Margin::symmetric(10, 8))
+                    .corner_radius(CornerRadius::same(8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new(tip).color(WARN).size(12.0));
+                    });
+            }
+        });
+
+        if let Some(id) = chosen_id {
+            self.select_capture_endpoint(&id);
+        }
+    }
+
+    fn main_panel(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::default()
+                    .fill(BG)
+                    .inner_margin(Margin::symmetric(16, 14)),
+            )
+            .show(ctx, |ui| {
+                // 日志页自己带滚动区域，不再套外层 ScrollArea（否则贴底滚动会打架）。
+                if self.page == Page::Log {
+                    self.log_card(ui);
+                    return;
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("main_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.page {
+                        Page::Routing => self.routing_card(ui),
+                        Page::Capture => self.capture_card(ui),
+                        Page::Devices => self.devices_card(ui),
+                        Page::Log => {}
+                    });
+                ui.add_space(10.0);
+            });
+    }
+
+    fn routing_card(&mut self, ui: &mut egui::Ui) {
+        card_frame().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("声道路由").size(16.0).strong());
+                ui.add_space(6.0);
+                if self.engine.is_some() {
+                    pill(ui, "分离运行中", OK, 96.0);
+                    if let Some(stats) = &self.stats {
+                        if stats.degraded {
+                            pill(ui, "等待设备", WARN, 84.0);
+                        } else if stats.routes.iter().any(|r| r.retry_in_ms > 0) {
+                            pill(ui, "重连中", WARN, 72.0);
+                        }
+                    }
+                } else {
+                    pill(ui, "未运行", Color32::from_rgb(120, 128, 142), 96.0);
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let latency = self
+                        .route_engine_config()
+                        .map(|c| c.software_latency_ms())
+                        .unwrap_or(0);
+                    ui.label(muted(format!("软件侧延迟约 {latency} ms")));
+                });
+            });
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            let spacing = ui.spacing().item_spacing.x;
+            let available = ui.available_width();
+            let device_w = route_device_width(available, spacing);
+            // 固定列表头：字段名常驻在数字上方（用户要求「像表格那样」）。
+            {
+                let header_font = FontId::proportional(12.0);
+                ui.horizontal(|ui| {
+                    text_cell(
+                        ui,
+                        ROUTE_COL_CH,
+                        18.0,
+                        "声道",
+                        header_font.clone(),
+                        MUTED,
+                        false,
+                    );
+                    text_cell(
+                        ui,
+                        device_w,
+                        18.0,
+                        "设备",
+                        header_font.clone(),
+                        MUTED,
+                        false,
+                    );
+                    text_cell(
+                        ui,
+                        ROUTE_COL_LEVEL,
+                        18.0,
+                        "电平",
+                        header_font.clone(),
+                        MUTED,
+                        false,
+                    );
+                    text_cell(
+                        ui,
+                        ROUTE_COL_VOL,
+                        18.0,
+                        "音量",
+                        header_font.clone(),
+                        MUTED,
+                        false,
+                    );
+                    text_cell(
+                        ui,
+                        ROUTE_COL_BUF,
+                        18.0,
+                        "缓冲",
+                        header_font.clone(),
+                        MUTED,
+                        true,
+                    );
+                    text_cell(
+                        ui,
+                        ROUTE_COL_PATH,
+                        18.0,
+                        "路径",
+                        header_font.clone(),
+                        MUTED,
+                        false,
+                    );
+                    text_cell(ui, ROUTE_COL_INV, 18.0, "反相", header_font, MUTED, false);
+                });
+            }
+            ui.add_space(2.0);
+            for channel in [RouteChannel::Left, RouteChannel::Right] {
+                self.route_row(ui, channel, device_w);
+            }
+            ui.label(muted(
+                "反相：两台音箱接线/极性相反时，勾选任一路 180°，居中人声与低音就不会互相抵消。",
+            ));
+
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.collapsing("高级：增益 / 抖动缓冲 / 左右微调延迟", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(muted("增益"));
+                    if ui
+                        .add(egui::Slider::new(&mut self.cfg.split.gain, 0.0..=2.0).step_by(0.05))
+                        .on_hover_text(
+                            "数字增益：1.0 = 原样不放大；大于 1 会在数字域放大，\
+                             超过设备余量就会削顶（听感上是破音）。",
+                        )
+                        .changed()
+                    {
+                        self.cfg.save();
+                    }
+                    ui.add_space(10.0);
+                    ui.label(muted("抖动缓冲"));
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut self.cfg.split.queue_ms, 10..=200)
+                                .suffix(" ms")
+                                .step_by(5.0),
+                        )
+                        .on_hover_text(
+                            "每路独立队列，用来吸收两条蓝牙链路各自的时钟漂移与调度抖动：\
+                             数值越大越抗卡顿，但软件侧延迟会随之增加\
+                             （软件延迟 ≈ 20 ms 采集 + 这个值 + 渲染缓冲/2）。",
+                        )
+                        .changed()
+                    {
+                        self.cfg.save();
+                        if self.engine.is_some() {
+                            self.restart_routing();
+                        }
+                    }
+                });
                 ui.horizontal(|ui| {
                     ui.label(muted("左额外延迟"));
                     let changed_left = ui
@@ -2387,27 +2664,6 @@ impl StereoLinkApp {
                     }
                 });
                 ui.label(muted("两箱固定时差（比如左箱偏慢）可以在这里补齐。"));
-
-                ui.add_space(6.0);
-                let mut inv_l = self.cfg.split.invert_left;
-                let mut inv_r = self.cfg.split.invert_right;
-                let a = ui
-                    .checkbox(&mut inv_l, "左声道反相 180°")
-                    .on_hover_text(
-                        "两台音箱极性相反时，居中的人声与低音在房间里会互相抵消\
-                         （听感：人声小、发虚、低音没劲），勾上任一路反相即可修好。",
-                    )
-                    .changed();
-                let b = ui
-                    .checkbox(&mut inv_r, "右声道反相 180°")
-                    .on_hover_text("同上；只勾一路即可，两路都勾等于没勾。")
-                    .changed();
-                if a || b {
-                    self.cfg.split.invert_left = inv_l;
-                    self.cfg.split.invert_right = inv_r;
-                    self.cfg.save();
-                    self.restart_routing();
-                }
             });
 
             // ---- 声学自校验 ----
@@ -2417,9 +2673,11 @@ impl StereoLinkApp {
                 ui.label(RichText::new("声学自校验").size(14.0).strong());
                 help(
                     ui,
-                    "用麦克风量出两台音箱的真实到达时间差，自动给较慢的一路垫延迟。\n\
+                    "用麦克风量出两台音箱的真实到达时间差，自动给较慢的一路垫延迟；\n\
+                     同一次测量还会量左右音量并给出平衡建议。\n\
                      · 先选一个麦克风，「体检」确认它真能采到声音；\n\
-                     · 「测量并对齐」：先试同时法（精度约 ±1 ms），失败退回依次法（约 ±4 ms）；\n\
+                     · 「测量并对齐」：先试同时法（精度约 ±1 ms），失败退回依次法（约 ±4 ms），\
+                     随后量左右电平、给出音量平衡建议；\n\
                      · 没有麦克风也能用「点击串试听」靠人耳手动微调。",
                 );
             });
@@ -2478,12 +2736,14 @@ impl StereoLinkApp {
                     .add_enabled(
                         !self.sync_busy && !self.sync_mic.is_empty(),
                         egui::Button::new(if self.sync_busy {
-                            "测量中…"
+                            "校准中…"
                         } else {
-                            "测量并对齐"
+                            "校准延迟并平衡音量"
                         }),
                     )
-                    .on_hover_text("向两台音箱依次放扫频声，用麦克风算出真实时差，自动垫延迟")
+                    .on_hover_text(
+                        "一次完成：量两台音箱的真实时差并自动垫延迟，再分别量左右电平、给出音量平衡建议（约 8 秒）",
+                    )
                     .clicked()
                 {
                     action = Some("sync");
@@ -2528,6 +2788,103 @@ impl StereoLinkApp {
                 false,
             )
             .on_hover_text(status);
+
+            // 音量平衡：与延迟对齐同一次测量完成；结果展示测量值 + 建议值，可反复迭代复测。
+            if self.balance_result.is_some()
+                || self.balance_error.is_some()
+                || !self.balance_status.is_empty()
+            {
+                ui.add_space(2.0);
+                let mut apply_and_retest = false;
+                ui.horizontal(|ui| {
+                    ui.label(muted("音量平衡"));
+                    let (text, color) = if let Some(report) = &self.balance_result {
+                        let within = report.delta_db.abs() <= BALANCE_DEADBAND_DB;
+                        let text = if within {
+                            format!(
+                                "左 {:.1} dB / 右 {:.1} dB → 已平衡（差 {:.1} dB 在 ±{:.0} dB 内）",
+                                report.left_db,
+                                report.right_db,
+                                report.delta_db.abs(),
+                                BALANCE_DEADBAND_DB
+                            )
+                        } else if report.delta_db < 0.0 {
+                            format!(
+                                "左 {:.1} dB / 右 {:.1} dB → 右边轻了 {:.1} dB",
+                                report.left_db,
+                                report.right_db,
+                                report.delta_db.abs()
+                            )
+                        } else {
+                            format!(
+                                "左 {:.1} dB / 右 {:.1} dB → 左边轻了 {:.1} dB",
+                                report.left_db,
+                                report.right_db,
+                                report.delta_db.abs()
+                            )
+                        };
+                        (text, if within { OK } else { ACCENT })
+                    } else if let Some(err) = &self.balance_error {
+                        (format!("测量失败：{err}"), WARN)
+                    } else {
+                        (self.balance_status.clone(), MUTED)
+                    };
+                    let tip = text.clone();
+                    text_cell(
+                        ui,
+                        (ui.available_width() - 190.0).max(120.0),
+                        20.0,
+                        &text,
+                        FontId::proportional(12.0),
+                        color,
+                        false,
+                    )
+                    .on_hover_text(tip);
+                    if let Some(report) = &self.balance_result {
+                        let within = report.delta_db.abs() <= BALANCE_DEADBAND_DB;
+                        if !within {
+                            let low_confidence = report.confidence < 0.5;
+                            let button = egui::Button::new(RichText::new("应用并复测").color(
+                                if low_confidence {
+                                    Color32::BLACK
+                                } else {
+                                    TEXT
+                                },
+                            ));
+                            let button = if low_confidence { button.fill(WARN) } else { button };
+                            if ui
+                                .add(button)
+                                .on_hover_text(if low_confidence {
+                                    "置信度偏低：把麦克风放到两箱之间的听音位置、关掉音乐并保持安静后再测。\n点一次会按建议值调音量并自动复测（蓝牙音箱通常 2～3 轮收敛）"
+                                } else {
+                                    "按建议值调两台音箱的音量，然后自动复测一轮；蓝牙音箱自报音量与实际声学衰减有偏差，迭代 2～3 轮更准"
+                                })
+                                .clicked()
+                            {
+                                apply_and_retest = true;
+                            }
+                        }
+                    }
+                });
+                if let Some(report) = &self.balance_result {
+                    ui.horizontal(|ui| {
+                        ui.label(muted("建议音量"));
+                        let text = format!(
+                            "左 {}% / 右 {}%（置信度 {:.0}%）",
+                            report.suggested_left_percent,
+                            report.suggested_right_percent,
+                            report.confidence * 100.0
+                        );
+                        ui.label(RichText::new(text).size(12.0).color(
+                            if report.confidence < 0.5 { WARN } else { TEXT },
+                        ));
+                    });
+                }
+                if apply_and_retest {
+                    self.apply_balance();
+                    self.start_sync();
+                }
+            }
 
             // 采集统计行常驻（未运行时显示占位），避免行出现/消失导致卡片高度跳。
             ui.add_space(4.0);
@@ -2574,6 +2931,14 @@ impl StereoLinkApp {
         let mut chosen = current.clone();
         let label = channel_label(channel);
         let route = self.route_of(channel).cloned();
+        let current_volume = self.route_volumes.get(&channel).copied().unwrap_or(1.0);
+        let current_invert = match channel {
+            RouteChannel::Left => self.cfg.split.invert_left,
+            RouteChannel::Right => self.cfg.split.invert_right,
+            RouteChannel::Both => false,
+        };
+        let mut commit_volume: Option<f32> = None;
+        let mut commit_invert: Option<bool> = None;
 
         ui.horizontal(|ui| {
             // 声道：固定宽度小标签，不随内容伸缩。
@@ -2680,20 +3045,43 @@ impl StereoLinkApp {
                 },
             );
 
-            // 数值列：列宽写死 + 右对齐 + monospace，数值跳动不会改变列宽。
-            let sent = route
-                .as_ref()
-                .map(|route| format!("{:>7.2} MB", route.sent_bytes as f64 / 1_048_576.0))
-                .unwrap_or_else(|| "      —".to_string());
-            text_cell(
+            // 音量列：每路输出设备的音量条（替代原先的「已发流」列）。
+            // 拖动时即时更新内存值；节流写回端点音量，避免拖动中频繁调用 WASAPI。
+            let mut volume = current_volume;
+            let volume_ready = self
+                .route_volume_at
+                .get(&channel)
+                .map(|at| at.elapsed() >= Duration::from_millis(250))
+                .unwrap_or(true);
+            cell(
                 ui,
-                ROUTE_COL_SENT,
+                ROUTE_COL_VOL,
                 ROUTE_ROW_H,
-                &sent,
-                FontId::monospace(12.0),
-                TEXT,
-                true,
-            );
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    let slider = ui.add_sized(
+                        [96.0, 16.0],
+                        egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false),
+                    );
+                    text_cell(
+                        ui,
+                        40.0,
+                        ROUTE_ROW_H,
+                        &format!("{:>3.0}%", volume * 100.0),
+                        FontId::monospace(11.0),
+                        TEXT,
+                        true,
+                    );
+                    if slider.changed() {
+                        self.route_volumes.insert(channel, volume);
+                        if (volume_ready || slider.drag_stopped()) && !current.is_empty() {
+                            commit_volume = Some(volume);
+                        }
+                    }
+                    slider
+                },
+            )
+            .on_hover_text("这台音箱的输出音量（直接写回它的音量端点）；拖动结束自动生效。");
 
             let buffered = route
                 .as_ref()
@@ -2708,34 +3096,6 @@ impl StereoLinkApp {
                 TEXT,
                 true,
             );
-
-            let underruns = route.as_ref().map(|route| route.underruns).unwrap_or(0);
-            let under_text = route
-                .as_ref()
-                .map(|route| format!("{:>4}", route.underruns))
-                .unwrap_or_else(|| "   —".to_string());
-            let under_tip = match route.as_ref() {
-                Some(route) if route.underruns > 0 => format!(
-                    "这一路已欠载 {} 次。\n{}",
-                    route.underruns,
-                    if route.underruns > 200 {
-                        "次数偏多：建议把「抖动缓冲」调到 80～120 ms（代价是延迟增加）。"
-                    } else {
-                        "少量欠载（尤其刚开始路由时的头几次）属正常。"
-                    }
-                ),
-                _ => UNDERRUN_HELP.to_string(),
-            };
-            text_cell(
-                ui,
-                ROUTE_COL_UNDER,
-                ROUTE_ROW_H,
-                &under_text,
-                FontId::monospace(12.0),
-                if underruns > 0 { WARN } else { TEXT },
-                true,
-            )
-            .on_hover_text(under_tip);
 
             let (path_short, path_tip, path_color) = match route.as_ref() {
                 Some(route) if route.retry_in_ms > 0 => (
@@ -2775,7 +3135,51 @@ impl StereoLinkApp {
                 false,
             )
             .on_hover_text(path_tip);
+
+            // 反相列：勾选后这一路输出反相 180°（两台音箱极性/接线相反时用）。
+            let mut invert = current_invert;
+            cell(
+                ui,
+                ROUTE_COL_INV,
+                ROUTE_ROW_H,
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    if ui
+                        .checkbox(&mut invert, "180°")
+                        .on_hover_text(
+                            "勾选后这一路输出反相 180°：两台音箱极性相反时，可避免人声与低音互相抵消。",
+                        )
+                        .changed()
+                    {
+                        commit_invert = Some(invert);
+                    }
+                },
+            );
         });
+
+        // 音量写回端点（节流：拖动中不频繁调 WASAPI，松手或间隔够了再写）。
+        if let Some(volume) = commit_volume {
+            if !current.is_empty() {
+                match set_endpoint_volume(&current, volume) {
+                    Ok(_) => {
+                        self.route_volume_at.insert(channel, Instant::now());
+                    }
+                    Err(err) => {
+                        self.toast(format!("写回音量失败：{err}"));
+                    }
+                }
+            }
+        }
+        // 反相立即生效：存配置并重启路由（sink 线程按新配置重开，延迟线会重建）。
+        if let Some(invert) = commit_invert {
+            match channel {
+                RouteChannel::Left => self.cfg.split.invert_left = invert,
+                RouteChannel::Right => self.cfg.split.invert_right = invert,
+                RouteChannel::Both => {}
+            }
+            self.save();
+            self.restart_routing();
+        }
 
         if chosen != current {
             self.set_route_endpoint(channel, chosen);
@@ -3105,7 +3509,10 @@ impl StereoLinkApp {
     fn log_card(&mut self, ui: &mut egui::Ui) {
         let count = self.log.len();
         let lines = self.log.lines();
+        let font = self.font.clone();
         let mut clear = false;
+        let mut copy_diag = false;
+        let mut copy_log = false;
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -3123,9 +3530,23 @@ impl StereoLinkApp {
                     if ui.small_button("清空").clicked() {
                         clear = true;
                     }
+                    if ui.small_button("复制全部").clicked() {
+                        copy_log = true;
+                    }
+                    if ui.small_button("复制诊断").clicked() {
+                        copy_diag = true;
+                    }
                 });
             });
-            ui.add_space(4.0);
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.log_autoscroll, "自动滚动");
+                ui.label(muted(
+                    "运行统计每 30 秒写入一次（每路已发流 / 欠载 / 缓冲 / 重连状态）；故障与重连会立即记录。",
+                ));
+            });
+            ui.add_space(6.0);
+            let height = (ui.available_height() - 52.0).max(180.0);
             egui::Frame::default()
                 .fill(Color32::from_rgb(13, 16, 21))
                 .inner_margin(Margin::symmetric(10, 8))
@@ -3134,8 +3555,8 @@ impl StereoLinkApp {
                     ui.set_width(ui.available_width());
                     egui::ScrollArea::vertical()
                         .id_salt("log_scroll")
-                        .max_height(230.0)
-                        .stick_to_bottom(true)
+                        .max_height(height)
+                        .stick_to_bottom(self.log_autoscroll)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             for line in &lines {
@@ -3143,10 +3564,149 @@ impl StereoLinkApp {
                             }
                         });
                 });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(muted("界面字体："));
+                let candidates = fonts::candidates_present();
+                let tip = if candidates.is_empty() {
+                    "本机没有找到候选中文字体；界面会退回默认字体，中文可能显示为方块".to_string()
+                } else {
+                    format!("本机可用的候选字体：{}", candidates.join("、"))
+                };
+                match &font {
+                    Some(path) => {
+                        ui.label(muted(path.clone())).on_hover_text(tip);
+                    }
+                    None => {
+                        ui.label(
+                            RichText::new("未找到中文字体，界面可能显示为方块（详见启动日志）")
+                                .size(12.0)
+                                .color(WARN),
+                        )
+                        .on_hover_text(tip);
+                    }
+                };
+            });
         });
         if clear {
             self.log.clear();
             self.toast("日志已清空");
+        }
+        if copy_diag {
+            let text = self
+                .hints()
+                .iter()
+                .map(|hint| format!("{} {}", hint.icon(), hint.text))
+                .collect::<Vec<_>>()
+                .join("\n");
+            ui.ctx().copy_text(text);
+            self.toast("诊断信息已复制");
+        }
+        if copy_log {
+            let text = lines
+                .iter()
+                .map(|line| format!("{:>6.1}s  {}", line.at.as_secs_f64(), line.text.trim_end()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            ui.ctx().copy_text(text);
+            self.toast("日志已复制");
+        }
+    }
+
+    /// 首次需要时安装系统托盘；失败只用日志警告，绝不阻塞主界面。
+    fn ensure_tray(&mut self, ctx: &egui::Context) {
+        if self.tray.is_some() || self.tray_attempted {
+            return;
+        }
+        self.tray_attempted = true;
+        let icon = crate::app_icon();
+        match Tray::install("StereoLink 立体声链", &icon.rgba, icon.width, ctx.clone()) {
+            Ok(tray) => {
+                self.tray = Some(tray);
+                tracing::info!("系统托盘图标已创建");
+            }
+            Err(err) => {
+                tracing::warn!("系统托盘不可用：{err}");
+            }
+        }
+    }
+
+    /// 处理托盘事件：左键/「显示主界面」唤回窗口，「退出」走正常关闭流程。
+    fn poll_tray(&mut self, ctx: &egui::Context) {
+        loop {
+            let event = self.tray.as_ref().and_then(|tray| tray.poll());
+            match event {
+                Some(TrayEvent::Show) => {
+                    self.window_hidden = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                Some(TrayEvent::Quit) => {
+                    self.cfg.save();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+                None => return,
+            }
+        }
+    }
+
+    /// 关闭窗口：按「先问 / 缩小至托盘 / 直接关闭」三态处理。
+    fn handle_close(&mut self, ctx: &egui::Context) {
+        let outcome = close_flow::on_close_requested(ctx, &mut self.cfg, &mut self.close_state);
+        match outcome {
+            CloseOutcome::None => {}
+            CloseOutcome::MinimizeToTray => {
+                self.window_hidden = true;
+                if self.tray.is_some() {
+                    // 用「最小化」而不是 `Visible(false)`：窗口一旦不可见，winit 就不再派发
+                    // `RedrawRequested`，eframe 的重绘队列清空后 `ControlFlow` 会永远停在
+                    // `Poll`（eframe-0.31.1 `native/run.rs:170-193` 的 check_redraw_requests），
+                    // 表现为隐藏期间忙等跑满一个核（实测 97–100% 单核）。最小化窗口仍会收到
+                    // 重绘，CPU 回到个位数；窗口本身创建时已 `with_taskbar(false)`，
+                    // 所以最小化后任务栏也不留按钮，观感与「收进托盘」一致。
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                } else {
+                    // 托盘不可用：退化为普通最小化，避免窗口「凭空消失」。
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    self.toast("系统托盘不可用，已最小化为普通窗口（请查看日志）");
+                }
+                self.cfg.save();
+            }
+            CloseOutcome::Quit => {
+                self.cfg.save();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    /// 定期从设备读回两路音量，保证首次显示就是设备当前音量（拖动中不覆盖）。
+    fn refresh_route_volumes(&mut self) {
+        if let Some(at) = self.route_volume_refresh_at {
+            if at.elapsed() < Duration::from_millis(1_000) {
+                return;
+            }
+        }
+        self.route_volume_refresh_at = Some(Instant::now());
+        for channel in [RouteChannel::Left, RouteChannel::Right] {
+            let endpoint = self.configured_endpoint(channel).to_string();
+            if endpoint.is_empty() {
+                continue;
+            }
+            // 刚写过音量（拖动中）就别读回，避免条跳。
+            let recently_written = self
+                .route_volume_at
+                .get(&channel)
+                .map(|at| at.elapsed() < Duration::from_millis(600))
+                .unwrap_or(false);
+            if recently_written {
+                continue;
+            }
+            if let Ok(volume) = get_endpoint_volume(&endpoint) {
+                self.route_volumes
+                    .insert(channel, volume.scalar.clamp(0.0, 1.0));
+            }
         }
     }
 }
@@ -3172,11 +3732,23 @@ fn log_line(ui: &mut egui::Ui, line: &LogLine) {
 
 impl eframe::App for StereoLinkApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 隐藏（最小化到托盘）期间把心跳降到 1s：既省 CPU，又给托盘事件与音量跟随
+        // 留一层兜底刷新。窗口不可见时**不能**用 250ms 心跳（见 handle_close 的注释）。
+        ctx.request_repaint_after(if self.window_hidden {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_millis(250)
+        });
+        self.tick_volume_waker(ctx);
+        self.ensure_tray(ctx);
+        self.handle_close(ctx);
+        self.poll_tray(ctx);
         self.tick();
+        self.refresh_route_volumes();
         self.header(ctx);
-        self.side_panel(ctx);
+        self.diagnostic_bar(ctx);
+        self.sidebar(ctx);
         self.main_panel(ctx);
-        ctx.request_repaint_after(Duration::from_millis(200));
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -3187,6 +3759,58 @@ impl eframe::App for StereoLinkApp {
         self.stop_routing(true);
         self.cfg.save();
         tracing::info!("面板退出：已停止路由并保存配置");
+    }
+}
+
+/// 隐藏到托盘期间的「音量跟随」唤醒源。
+///
+/// 隐藏后不能请求周期重绘（不可见窗口上 `ControlFlow::WaitUntil` 会忙等，实测跑满
+/// 一个核），但「系统音量跟随」必须在隐藏时继续生效 —— 否则用户缩小到托盘后调音量
+/// 就失灵了。所以这条后台线程只做廉价轮询（4 Hz 读一次采集源端点音量），检测到变化
+/// 才 `request_repaint()` 唤醒主循环；真正的写入仍由
+/// `update()` → `tick_volume_follow()` 完成（复用同一份节流/还原逻辑）。
+struct VolumeWaker {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl VolumeWaker {
+    /// 起一条轮询线程；线程名固定便于排查。
+    fn spawn(ctx: egui::Context, source: String) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let handle = std::thread::Builder::new()
+            .name("stereo-link-volume-wake".to_string())
+            .spawn(move || {
+                let mut last: Option<f32> = None;
+                while !flag.load(Ordering::Relaxed) {
+                    if let Ok(volume) = get_endpoint_volume(&source) {
+                        let changed = last
+                            .map(|prev| (prev - volume.scalar).abs() >= 0.005)
+                            .unwrap_or(true);
+                        if changed {
+                            last = Some(volume.scalar);
+                            ctx.request_repaint();
+                            // 窗口收进托盘（最小化）时 `update()` 不会因为重绘请求而跑：
+                            // winit 的 `request_redraw` 在窗口不可见/最小化时不产生 WM_PAINT。
+                            // 这里补一次和托盘事件相同的唤醒，保证托盘期间调系统音量也能跟随。
+                            unsafe { crate::tray::wake_hidden_main_window() };
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+            })
+            .ok();
+        Self { stop, handle }
+    }
+}
+
+impl Drop for VolumeWaker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 

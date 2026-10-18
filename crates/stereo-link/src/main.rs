@@ -9,9 +9,15 @@
 
 mod app;
 mod audio_default;
+// 关闭行为模块：接口已冻结，由 app.rs 接线（接线前先允许未使用，避免警告）。
+#[allow(dead_code)]
+mod close_flow;
 mod config;
 mod fonts;
 mod logbuf;
+// 托盘模块同上：app.rs 接线前只有 tray_probe 示例会用到。
+#[allow(dead_code)]
+mod tray;
 
 use eframe::egui;
 
@@ -36,6 +42,9 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1240.0, 820.0])
             .with_min_inner_size([1040.0, 660.0])
             .with_app_id("stereo-link")
+            // 托盘应用：不在任务栏留按钮，这样「关闭 → 缩小至托盘」时窗口彻底从任务栏消失
+            // （egui 0.31 没有运行期切换任务栏按钮的命令，只能在建窗时定死）。
+            .with_taskbar(false)
             .with_icon(std::sync::Arc::new(app_icon())),
         ..Default::default()
     };
@@ -48,7 +57,9 @@ fn main() -> eframe::Result<()> {
 }
 
 /// 程序图标：深色圆角底 + 青/紫两道声道条（64×64，纯代码画，不依赖图片资源）。
-fn app_icon() -> egui::IconData {
+///
+/// 托盘图标也复用它（`crate::tray::Tray::install` 吃 RGBA + 边长）。
+pub(crate) fn app_icon() -> egui::IconData {
     const N: usize = 64;
     const SS: usize = 3; // 每像素 3×3 超采样，边缘抗锯齿
     let mut rgba = vec![0u8; N * N * 4];

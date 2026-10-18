@@ -1,4 +1,4 @@
-﻿; StereoLink 立体声链 —— Inno Setup 6 安装脚本
+; StereoLink 立体声链 —— Inno Setup 6 安装脚本
 ;
 ; 构建：
 ;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\stereo-link.iss
@@ -17,7 +17,7 @@
 
 #define AppName        "StereoLink 立体声链"
 #define AppNameShort   "StereoLink"
-#define AppVersion     "0.2.0"
+#define AppVersion     "0.3.0"
 #define AppExe         "stereo-link.exe"
 #define AppPublisher   "StereoLink contributors"
 #define AppURL         "https://github.com/wakewow/stereo-link"

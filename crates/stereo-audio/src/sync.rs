@@ -3091,6 +3091,385 @@ pub fn play_alignment_clicks(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// 左右音量平衡（task-22）
+// ---------------------------------------------------------------------------
+
+/// 实测的 Windows 端点音量曲线（标量 → dB），14 个采样点，按标量降序排列。
+///
+/// 数据是在一台蓝牙 A2DP 端点（端点 dB 范围 −63.5..0）上用 `volume_probe --set`
+/// 逐点写、再用 `--get` 读回来的：
+///
+/// | 标量 | dB | 标量 | dB |
+/// |---|---|---|---|
+/// | 1.00 | 0.0 | 0.20 | −23.6 |
+/// | 0.90 | −1.6 | 0.15 | −27.6 |
+/// | 0.80 | −3.3 | 0.10 | −33.0 |
+/// | 0.70 | −5.3 | 0.05 | −41.6 |
+/// | 0.60 | −7.6 | 0.02 | −50.9 |
+/// | 0.50 | −10.3 | 0.00 | −63.5（且端点报告 muted） |
+/// | 0.40 | −13.6 | | |
+/// | 0.30 | −17.8 | | |
+///
+/// 对照组：`Realtek High Definition Audio` 在 0.3~1.0 段与本表一致到 0.4 dB 以内，
+/// `Steam Streaming Microphone` 在 0.05 处差 3.4 dB。所以这条曲线**近似端点无关
+/// 但不精确**——换算时要用端点自己当前的 `(scalar, db)` 做锚点校正，见
+/// [`taper_scalar_anchored`]。
+///
+/// **绝对不要用 `20*log10(scalar)`**：0.5 时它给 −6.0 dB，实测是 −10.3 dB。
+pub const VOLUME_TAPER: [(f32, f64); 14] = [
+    (1.00, 0.0),
+    (0.90, -1.6),
+    (0.80, -3.3),
+    (0.70, -5.3),
+    (0.60, -7.6),
+    (0.50, -10.3),
+    (0.40, -13.6),
+    (0.30, -17.8),
+    (0.20, -23.6),
+    (0.15, -27.6),
+    (0.10, -33.0),
+    (0.05, -41.6),
+    (0.02, -50.9),
+    (0.00, -63.5),
+];
+
+/// 标量 → dB，在 [`VOLUME_TAPER`] 上分段线性插值；标量先夹到 `0.0..=1.0`。
+pub fn taper_db(scalar: f32) -> f64 {
+    if !scalar.is_finite() {
+        return VOLUME_TAPER[VOLUME_TAPER.len() - 1].1;
+    }
+    let s = scalar.clamp(0.0, 1.0) as f64;
+    let t = VOLUME_TAPER;
+    if s >= t[0].0 as f64 {
+        return t[0].1;
+    }
+    for w in t.windows(2) {
+        let (s_hi, db_hi) = (w[0].0 as f64, w[0].1);
+        let (s_lo, db_lo) = (w[1].0 as f64, w[1].1);
+        if s <= s_hi && s >= s_lo {
+            let span = s_hi - s_lo;
+            if span.abs() < 1e-9 {
+                return db_hi;
+            }
+            return db_lo + (s - s_lo) / span * (db_hi - db_lo);
+        }
+    }
+    t[t.len() - 1].1
+}
+
+/// dB → 标量，[`taper_db`] 的分段线性反函数；结果夹到 `0.0..=1.0`。
+pub fn taper_scalar(db: f64) -> f32 {
+    let t = VOLUME_TAPER;
+    if !db.is_finite() {
+        return 0.0;
+    }
+    if db >= t[0].1 {
+        return 1.0;
+    }
+    if db <= t[t.len() - 1].1 {
+        return 0.0;
+    }
+    for w in t.windows(2) {
+        let (s_hi, db_hi) = (w[0].0 as f64, w[0].1);
+        let (s_lo, db_lo) = (w[1].0 as f64, w[1].1);
+        if db <= db_hi && db >= db_lo {
+            let span = db_hi - db_lo;
+            if span.abs() < 1e-9 {
+                return s_hi as f32;
+            }
+            return (s_lo + (db - db_lo) / span * (s_hi - s_lo)) as f32;
+        }
+    }
+    0.0
+}
+
+/// 用端点自己报告的 `(current_scalar, current_db)` 做锚点校正后，把目标 dB 换算成标量。
+///
+/// [`VOLUME_TAPER`] 只是「典型」曲线：同一个标量在不同端点上的实际 dB 会差到几 dB。
+/// 端点自己报出的当前 `(scalar, db)` 就给出了它相对典型曲线的偏移量
+/// `offset = current_db − taper_db(current_scalar)`，把它减掉再查表，个体偏差就消掉了。
+pub fn taper_scalar_anchored(target_db: f64, current_scalar: f32, current_db: f64) -> f32 {
+    if !current_db.is_finite() {
+        return taper_scalar(target_db);
+    }
+    let offset = current_db - taper_db(current_scalar);
+    taper_scalar(target_db - offset)
+}
+
+/// 平衡计算里「一路」的输入：麦克风实测电平 + 端点当前音量。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BalanceSide {
+    /// 麦克风实测到的这一路电平（dB，相对值；两路同口径即可，绝对值不重要）。
+    pub measured_db: f64,
+    /// 端点当前报告的 dB（来自 [`crate::volume::EndpointVolume::db`]）。
+    pub current_db: f64,
+    /// 端点当前音量标量（`0.0..=1.0`）。
+    pub current_scalar: f32,
+}
+
+/// 两路实测电平差小于等于这个值（dB）时建议维持现状。
+pub const BALANCE_DEADBAND_DB: f64 = 1.0;
+
+/// 单条路单次建议的最大调整量（dB）；不够就再测一轮，避免一次跳到极值。
+pub const BALANCE_MAX_STEP_DB: f64 = 12.0;
+
+/// 建议百分比的下限：**标量 0.0 会让端点进入 muted**（实测），所以永远不给 0。
+pub const BALANCE_MIN_PERCENT: u8 = 1;
+
+/// 平衡测量用的测试音频率（Hz）。
+pub const BALANCE_TONE_HZ: f64 = 1_000.0;
+
+/// 纯计算：由两路实测电平与端点当前音量，算出建议的端点音量百分比。
+///
+/// 规则（与 GUI 的约定一致）：
+///
+/// 1. `|left − right| <= `[`BALANCE_DEADBAND_DB`] → 两路都维持当前百分比。
+/// 2. 否则以**较响的一路为基准不动**，把较安静的一路往上抬 `|delta|` dB。
+/// 3. 若安静一路抬到 100%（0 dB）仍不够，再把较响的一路往下压，使两者相等。
+/// 4. 每路单次调整不超过 [`BALANCE_MAX_STEP_DB`]；百分比夹到
+///    [`BALANCE_MIN_PERCENT`]`..=100`。
+///
+/// 返回 `(建议左路百分比, 建议右路百分比)`。纯函数，不碰设备，可直接单测。
+pub fn suggest_balance_percent(left: BalanceSide, right: BalanceSide) -> (u8, u8) {
+    let pct = |side: BalanceSide, target_db: f64| -> u8 {
+        let scalar = taper_scalar_anchored(target_db, side.current_scalar, side.current_db);
+        let p = (scalar as f64 * 100.0).round();
+        if !p.is_finite() {
+            return 100;
+        }
+        p.clamp(BALANCE_MIN_PERCENT as f64, 100.0) as u8
+    };
+
+    let delta = left.measured_db - right.measured_db;
+    if !delta.is_finite() || delta.abs() <= BALANCE_DEADBAND_DB {
+        return (pct(left, left.current_db), pct(right, right.current_db));
+    }
+
+    let left_is_louder = delta > 0.0;
+    let (louder, quieter) = if left_is_louder {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let need = delta.abs();
+    // 安静那一路到 0 dB（100%）还有多少向上余量。
+    let room_up = (0.0 - quieter.current_db).max(0.0);
+    let raise = need.min(room_up).min(BALANCE_MAX_STEP_DB);
+    let remaining = need - raise;
+    let lower = remaining.clamp(0.0, BALANCE_MAX_STEP_DB);
+
+    let quieter_target = quieter.current_db + raise;
+    let louder_target = louder.current_db - lower;
+    let louder_pct = pct(louder, louder_target);
+    let quieter_pct = pct(quieter, quieter_target);
+    if left_is_louder {
+        (louder_pct, quieter_pct)
+    } else {
+        (quieter_pct, louder_pct)
+    }
+}
+
+/// 左右两路的实测响度与建议端点音量。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BalanceReport {
+    /// 左路实测电平（dB，`20*log10(Goertzel 幅度)`，0 dBFS = 1.0）。
+    pub left_db: f64,
+    /// 右路实测电平（dB）。
+    pub right_db: f64,
+    /// `left_db − right_db`；正值 = 左路更响。
+    pub delta_db: f64,
+    /// 建议写回左端点的音量百分比（1..=100）。
+    pub suggested_left_percent: u8,
+    /// 建议写回右端点的音量百分比（1..=100）。
+    pub suggested_right_percent: u8,
+    /// 置信度 `0.0..=1.0`：由两次测量的测试音信噪比取小。
+    pub confidence: f64,
+}
+
+impl BalanceReport {
+    /// 人读一行。
+    pub fn describe(&self) -> String {
+        format!(
+            "左 {:.1} dB / 右 {:.1} dB | delta {:.1} dB（{}更响）| 建议 左 {}% / 右 {}% | 置信度 {:.2}",
+            self.left_db,
+            self.right_db,
+            self.delta_db,
+            if self.delta_db >= 0.0 { "左" } else { "右" },
+            self.suggested_left_percent,
+            self.suggested_right_percent,
+            self.confidence
+        )
+    }
+
+    /// 两路是否已经在死区内（不需要调整）。
+    pub fn balanced(&self) -> bool {
+        self.delta_db.abs() <= BALANCE_DEADBAND_DB
+    }
+}
+
+/// 一次单路平衡采集的结果：测试音幅度、测试音信噪比、原始录音。
+#[cfg(windows)]
+struct BalanceCapture {
+    tone_amp: f64,
+    snr_db: f64,
+    captured: CapturedAudio,
+}
+
+/// 只往一个端点播测试音，同时用麦克风录，测该路的电平。
+#[cfg(windows)]
+fn balance_capture_one(
+    mic: &str,
+    endpoint: &str,
+    cfg: &SyncConfig,
+    probe_ms: u32,
+) -> Result<BalanceCapture> {
+    if mic.trim().is_empty() {
+        return Err(AudioError::invalid("麦克风名字/ID 不能为空"));
+    }
+    if endpoint.trim().is_empty() {
+        return Err(AudioError::invalid("被测端点不能为空"));
+    }
+    ensure_render_endpoint(endpoint, "被测")?;
+    let probe_ms = probe_ms.clamp(100, 5_000);
+    let probe = tone_signal(BALANCE_TONE_HZ, probe_ms, cfg.amplitude, SYNC_RATE);
+    if probe.iter().all(|&s| s == 0) {
+        return Err(AudioError::invalid(
+            "测试音全零：检查 amplitude 是否被设成了 0",
+        ));
+    }
+    let pcm = interleave_stereo_i16(&probe);
+    let format = PcmFormat::new(SYNC_RATE, SYNC_CHANNELS, 16);
+    let window_ms = cfg
+        .pre_roll_ms
+        .saturating_add(probe_ms)
+        .saturating_add(cfg.tail_ms);
+
+    let dev = endpoint.to_string();
+    let player = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        play_pcm_s16(&selector_for(&dev), format, &pcm)
+    });
+    let captured = capture_mono(mic, window_ms);
+    let played = join_player(player);
+    let captured = captured?;
+    played.map_err(AudioError::invalid)?;
+
+    let rate = captured.rate.max(8_000);
+    let win = (rate as usize / 10).max(64); // 100 ms
+    let (tone_amp, start) = best_tone_window(&captured.samples, rate, BALANCE_TONE_HZ, win);
+
+    // 本底噪声取录音开头那段：`pre_roll_ms` 默认 2 s，而 `play_pcm_s16` 还要先预填
+    // 约 1 s 才出声，所以开头这一段一定是「没在播」的。
+    let noise_len = ((rate as usize * 3) / 10)
+        .min(captured.samples.len() / 4)
+        .max(64);
+    let noise_rms = if captured.samples.len() >= noise_len {
+        let seg = &captured.samples[..noise_len];
+        let sum: f64 = seg.iter().map(|&x| (x as f64) * (x as f64)).sum();
+        (sum / seg.len() as f64).sqrt()
+    } else {
+        0.0
+    };
+    // Goertzel 幅度 ≈ 测试音的峰值幅度，换算成 RMS 要除 √2。
+    let tone_rms = tone_amp / std::f64::consts::SQRT_2;
+    let snr_db = if noise_rms > 0.0 && tone_rms > 0.0 {
+        20.0 * (tone_rms / noise_rms).log10()
+    } else if tone_rms > 0.0 {
+        120.0
+    } else {
+        -120.0
+    };
+    let _ = start;
+    Ok(BalanceCapture {
+        tone_amp,
+        snr_db,
+        captured,
+    })
+}
+
+/// 依次只在左路、只在右路放测试音，用麦克风录音测各自电平，给出平衡建议。
+///
+/// 两路**分别**播放分别测量（不并发），避免串音把两路的电平混淆。端点参数支持
+/// ID 形状（`{0.0.0.00000000}.{...}`）或名字子串，内部走现有的 [`selector_for`]。
+///
+/// 端点当前音量用 [`crate::volume::get_endpoint_volume`] 读取，用它报告的 `db`
+/// 字段（不是 `20*log10(scalar)`——Windows 的音量曲线不是对数直线，见
+/// [`VOLUME_TAPER`]）；`db` 缺失时退回 [`taper_db`]。
+///
+/// 返回的 `confidence` 由两次测量的测试音信噪比取小：`clamp((snr − 6) / 24, 0, 1)`，
+/// 也就是说信噪比低于 6 dB 时直接给 0，提醒 GUI 这次建议不可信。
+#[cfg(windows)]
+pub fn measure_balance(
+    mic: &MicCandidate,
+    left_endpoint: &str,
+    right_endpoint: &str,
+    cfg: &SyncConfig,
+) -> anyhow::Result<BalanceReport> {
+    let mic_sel = if mic.id().trim().is_empty() {
+        mic.name().to_string()
+    } else {
+        mic.id().to_string()
+    };
+    if left_endpoint.trim().is_empty() || right_endpoint.trim().is_empty() {
+        return Err(AudioError::invalid("左右端点都不能为空").into());
+    }
+
+    let probe_ms = cfg.probe_ms.clamp(200, 2_000);
+    let left = balance_capture_one(&mic_sel, left_endpoint, cfg, probe_ms)?;
+    let right = balance_capture_one(&mic_sel, right_endpoint, cfg, probe_ms)?;
+
+    let amp_db = |amp: f64| -> f64 {
+        if amp > 1e-9 {
+            20.0 * amp.log10()
+        } else {
+            -180.0
+        }
+    };
+    let left_db = amp_db(left.tone_amp);
+    let right_db = amp_db(right.tone_amp);
+    let delta_db = left_db - right_db;
+
+    let side = |measured_db: f64, endpoint: &str| -> Result<BalanceSide> {
+        let vol = crate::volume::get_endpoint_volume(endpoint)?;
+        let scalar = vol.scalar.clamp(0.0, 1.0);
+        let db = vol.db.map(|d| d as f64).unwrap_or_else(|| taper_db(scalar));
+        Ok(BalanceSide {
+            measured_db,
+            current_db: db,
+            current_scalar: scalar,
+        })
+    };
+    let left_side = side(left_db, left_endpoint)?;
+    let right_side = side(right_db, right_endpoint)?;
+    let (suggested_left_percent, suggested_right_percent) =
+        suggest_balance_percent(left_side, right_side);
+
+    let conf_of = |snr: f64| -> f64 { ((snr - 6.0) / 24.0).clamp(0.0, 1.0) };
+    let confidence = conf_of(left.snr_db).min(conf_of(right.snr_db));
+
+    if left.tone_amp <= 1e-9 || right.tone_amp <= 1e-9 {
+        return Err(AudioError::invalid(format!(
+            "测试音没被麦克风采到（左 {:.1} dB / 右 {:.1} dB，录音 {}；{}）——麦克风是否可用？\
+             先用 `mic_health` 体检",
+            left_db,
+            right_db,
+            left.captured.describe(),
+            right.captured.describe()
+        ))
+        .into());
+    }
+
+    Ok(BalanceReport {
+        left_db,
+        right_db,
+        delta_db,
+        suggested_left_percent,
+        suggested_right_percent,
+        confidence,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3796,5 +4175,95 @@ mod tests {
         let weak = vec![(10.0f64, 0.01f32)];
         let (_, v2) = direct_arrival(&weak, (10.0, 0.01));
         assert!((v2 - 0.01).abs() < 1e-6);
+    }
+
+    // --- task-22：左右音量平衡 -------------------------------------------------
+
+    /// 造一路的输入：端点标量 `scalar`、报告 dB 取自 `VOLUME_TAPER`（锚点无偏移）。
+    fn side(measured_db: f64, scalar: f32) -> BalanceSide {
+        BalanceSide {
+            measured_db,
+            current_db: taper_db(scalar),
+            current_scalar: scalar,
+        }
+    }
+
+    #[test]
+    fn taper_round_trips_and_is_not_a_log_line() {
+        for (s, db) in VOLUME_TAPER {
+            let back = taper_scalar(db);
+            assert!(
+                (back - s).abs() < 1e-4,
+                "标量 {s} → {db} dB → {back} 应当回到原值"
+            );
+        }
+        // 关键：Windows 的音量曲线不是对数直线。20*log10(0.5) = −6.0，实测是 −10.3。
+        assert!((taper_db(0.5) - -10.3).abs() < 1e-6, "taper_db(0.5)");
+        assert!(taper_db(0.5) < -8.0, "不该退化成 20*log10");
+        // 端点自己报了 (scalar, db) 时锚点校正应当消掉个体偏差：
+        // 若该端点在标量 0.5 处实际是 −6.0 dB（比典型曲线高 4.3 dB），
+        // 那么目标 −6.0 dB 就该原样映射回 0.5。
+        let anchored = taper_scalar_anchored(-6.0, 0.5, -6.0);
+        assert!((anchored - 0.5).abs() < 1e-4, "锚点校正 = {anchored}");
+    }
+
+    #[test]
+    fn balance_keeps_current_when_levels_are_equal() {
+        // 实测电平相等 → 死区内，两路都维持当前百分比。
+        let (l, r) = suggest_balance_percent(side(0.0, 0.7), side(0.0, 0.4));
+        assert_eq!((l, r), (70, 40));
+        // 差 0.5 dB 仍在 1 dB 死区内。
+        let (l, r) = suggest_balance_percent(side(-3.0, 0.7), side(-3.5, 0.4));
+        assert_eq!((l, r), (70, 40));
+    }
+
+    #[test]
+    fn balance_raises_the_quieter_side() {
+        // 左比右响 6 dB，两路端点都在 50%（−10.3 dB）→ 基准（左）不动，右抬 6 dB。
+        let (l, r) = suggest_balance_percent(side(0.0, 0.5), side(-6.0, 0.5));
+        assert_eq!(l, 50, "较响的左路应当不动");
+        // −10.3 + 6 = −4.3 dB → 标量 0.75
+        assert_eq!(r, 75, "较安静的右路应当抬到 75%");
+
+        // 反过来：右比左响 6 dB → 左抬、右不动。
+        let (l, r) = suggest_balance_percent(side(-6.0, 0.5), side(0.0, 0.5));
+        assert_eq!(l, 75);
+        assert_eq!(r, 50);
+    }
+
+    #[test]
+    fn balance_lowers_the_louder_side_when_the_quieter_is_at_max() {
+        // 右路已经在 100%（0 dB）没法再抬 → 改把较响的左路压下去，使两者相等。
+        let (l, r) = suggest_balance_percent(side(0.0, 0.5), side(-6.0, 1.0));
+        assert_eq!(r, 100, "已经到顶的那一路不动");
+        // −10.3 − 6 = −16.3 dB → 标量 ≈ 0.336
+        assert!(
+            (l as i32 - 34).abs() <= 1,
+            "较响的左路应当压到 ~34%，实测 {l}"
+        );
+    }
+
+    #[test]
+    fn balance_clamps_extreme_delta_to_one_step() {
+        // 差 40 dB：先尽量抬安静一路（到 100%），剩下的再把响的一路压下去；
+        // 每路单次都不超过 BALANCE_MAX_STEP_DB = 12 dB，且百分比夹在 1..=100。
+        let (l, r) = suggest_balance_percent(side(0.0, 0.5), side(-40.0, 0.5));
+        assert_eq!(r, 100, "抬到 100% 仍不够时安静一路就停在 100%");
+        assert!((1..=100).contains(&l), "百分比必须夹在 1..=100，实测 {l}");
+        // 较响的左路 −10.3 → −22.3 dB，正好压了 12 dB（不超过上限）。
+        assert!(
+            (taper_db(l as f32 / 100.0) - -22.3).abs() < 1.0,
+            "左路应当压到约 −22.3 dB，实测 {:.1} dB",
+            taper_db(l as f32 / 100.0)
+        );
+    }
+
+    #[test]
+    fn balance_never_suggests_zero_percent() {
+        // 标量 0.0 会让端点进入 muted，所以建议值下限是 1%。
+        let (l, r) = suggest_balance_percent(side(0.0, 0.0), side(-1.5, 0.0));
+        assert!(l >= BALANCE_MIN_PERCENT, "左 {l}%");
+        assert!(r >= BALANCE_MIN_PERCENT, "右 {r}%");
+        assert_eq!((l, r), (1, 1));
     }
 }
