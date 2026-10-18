@@ -1555,8 +1555,20 @@ impl StereoLinkApp {
                     text: format!("采集失败：{err}"),
                 });
             }
+            let mut retrying = false;
             for route in &stats.routes {
-                if let Some(err) = &route.error {
+                if route.retry_in_ms > 0 {
+                    retrying = true;
+                    hints.push(Hint {
+                        tone: Tone::Warn,
+                        text: format!(
+                            "{}正在自动重连（第 {} 次失败，约 {:.0} 秒后重试）：设备可能没开机或没连上",
+                            self.route_label(route.channel),
+                            route.retry_count,
+                            route.retry_in_ms as f64 / 1000.0
+                        ),
+                    });
+                } else if let Some(err) = &route.error {
                     hints.push(Hint {
                         tone: Tone::Err,
                         text: format!("{}链路错误：{err}", self.route_label(route.channel)),
@@ -1572,7 +1584,24 @@ impl StereoLinkApp {
                     });
                 }
             }
-            if hints.iter().all(|h| h.tone != Tone::Err) {
+            if stats.source_retrying > 0 {
+                retrying = true;
+                hints.push(Hint {
+                    tone: Tone::Warn,
+                    text: format!(
+                        "采集源正在自动重连（第 {} 次）：采集端点可能被切换或占用",
+                        stats.source_retrying
+                    ),
+                });
+            }
+            if stats.degraded {
+                retrying = true;
+                hints.push(Hint {
+                    tone: Tone::Warn,
+                    text: "还没有任何一路打开，正在后台自动重试（设备恢复后会自动开始）".to_string(),
+                });
+            }
+            if hints.iter().all(|h| h.tone != Tone::Err) && !retrying {
                 hints.push(Hint {
                     tone: Tone::Ok,
                     text: "链路正常，音频在走".to_string(),
@@ -2073,6 +2102,13 @@ impl StereoLinkApp {
                 ui.add_space(6.0);
                 if self.engine.is_some() {
                     pill(ui, "分离运行中", OK, 96.0);
+                    if let Some(stats) = &self.stats {
+                        if stats.degraded {
+                            pill(ui, "等待设备", WARN, 84.0);
+                        } else if stats.routes.iter().any(|r| r.retry_in_ms > 0) {
+                            pill(ui, "重连中", WARN, 72.0);
+                        }
+                    }
                 } else {
                     pill(ui, "未运行", Color32::from_rgb(120, 128, 142), 96.0);
                 }
@@ -2598,19 +2634,33 @@ impl StereoLinkApp {
             )
             .on_hover_text(under_tip);
 
-            let (path_short, path_tip) = match route
-                .as_ref()
-                .and_then(|route| route.format_path.as_deref())
-            {
-                Some(path) => (
-                    if path.contains("autoconvert") {
-                        "Auto"
-                    } else {
-                        "转换"
-                    },
-                    format!("开流路径：{path}"),
+            let (path_short, path_tip, path_color) = match route.as_ref() {
+                Some(route) if route.retry_in_ms > 0 => (
+                    "重连",
+                    format!(
+                        "正在自动重连：第 {} 次失败，约 {:.0} 秒后重试。\n{}",
+                        route.retry_count,
+                        route.retry_in_ms as f64 / 1000.0,
+                        route
+                            .error
+                            .as_deref()
+                            .unwrap_or("端点暂时不可用（设备没开机或没连上）")
+                    ),
+                    WARN,
                 ),
-                None => ("—", "开流路径：尚未开流".to_string()),
+                Some(route) => match route.format_path.as_deref() {
+                    Some(path) => (
+                        if path.contains("autoconvert") {
+                            "Auto"
+                        } else {
+                            "转换"
+                        },
+                        format!("开流路径：{path}"),
+                        MUTED,
+                    ),
+                    None => ("—", "开流路径：尚未开流".to_string(), MUTED),
+                },
+                None => ("—", "开流路径：尚未开流".to_string(), MUTED),
             };
             text_cell(
                 ui,
@@ -2618,7 +2668,7 @@ impl StereoLinkApp {
                 ROUTE_ROW_H,
                 path_short,
                 FontId::proportional(12.0),
-                MUTED,
+                path_color,
                 false,
             )
             .on_hover_text(path_tip);

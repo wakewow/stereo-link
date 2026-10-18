@@ -80,6 +80,12 @@ const LEVEL_DECAY: f32 = 0.8;
 const START_TIMEOUT: Duration = Duration::from_secs(3);
 /// 引擎内部格式（2ch / 16 bit）一帧的字节数，`RouteEngineStats::frame_bytes` 用。
 const FRAME_BYTES: u64 = 4;
+/// 退避重试的起始间隔（毫秒）：设备暂时不可用时第一次重试前等多久。
+const RETRY_BASE_MS: u64 = 1_000;
+/// 退避重试间隔的上限（毫秒）：指数退避不会等超过这个值。
+const RETRY_MAX_MS: u64 = 30_000;
+/// 重试等待切成小片，每片检查一次停止标志（保证 `stop()` 最多等这么久，毫秒）。
+const RETRY_SLEEP_SLICE_MS: u64 = 100;
 
 /// 10 ms 对应多少帧（sink 每轮最多消费的量，按引擎采样率算）。
 fn render_chunk_frames(rate: u32) -> usize {
@@ -396,6 +402,10 @@ pub struct RouteStats {
     pub format_path: Option<String>,
     /// 打开/运行失败原因；`None` = 正常（含尚在打开中）。
     pub error: Option<String>,
+    /// 这条路由累计重试打开的次数（`0` = 从未失败过；GUI 用来显示「重试中」）。
+    pub retry_count: u64,
+    /// 当前正在等待的重试间隔（毫秒）；`0` = 现在没有在等重试（正常或已放弃）。
+    pub retry_in_ms: u64,
 }
 
 impl RouteStats {
@@ -419,6 +429,12 @@ impl RouteStats {
         if let Some(path) = &self.format_path {
             text.push_str(&format!(" | 路径：{path}"));
         }
+        if self.retry_in_ms > 0 {
+            text.push_str(&format!(
+                " | 重试中：第 {} 次失败，{} ms 后重试",
+                self.retry_count, self.retry_in_ms
+            ));
+        }
         if let Some(err) = &self.error {
             text.push_str(&format!(" | 失败：{err}"));
         }
@@ -433,8 +449,15 @@ pub struct RouteEngineStats {
     pub running: bool,
     /// 实际打开的回环采集设备友好名（空 = 还没打开）。
     pub source_device: String,
-    /// 采集侧致命错误（设备失效等）；出现后引擎会停。
+    /// 采集侧最近一次错误。
+    ///
+    /// 设备暂时失效（拔掉/休眠/默认输出切换）这类错误会自动退避重试，重试期间引擎继续
+    /// 跑（输出补静音，`source_retrying` 反映重试次数）；只有配置/格式类不可重试错误才停引擎。
     pub source_error: Option<String>,
+    /// 是否处于「降级」状态：引擎还在跑，但**一条输出路由都没能打开**（正在后台重试）。
+    pub degraded: bool,
+    /// 采集线程当前连续重试次数（`0` = 采集正常；`>0` = 正在等设备回来）。
+    pub source_retrying: u64,
     /// 实际使用的引擎采样率（Hz）。`None` 不是值——自动模式下这就是采集源混音采样率。
     pub rate: u32,
     /// 实际使用的采集 WASAPI 缓冲（毫秒）。
@@ -474,6 +497,12 @@ impl RouteEngineStats {
         if let Some(err) = &self.source_error {
             text.push_str(&format!(" | 采集故障：{err}"));
         }
+        if self.degraded {
+            text.push_str(" | 降级：没有输出路由打开，正在后台重试");
+        }
+        if self.source_retrying > 0 {
+            text.push_str(&format!(" | 采集重试中：第 {} 次", self.source_retrying));
+        }
         for route in &self.routes {
             text.push_str(" | ");
             text.push_str(&route.describe());
@@ -494,6 +523,8 @@ impl RouteEngineHandle {
     ///
     /// 返回前最多等 [`START_TIMEOUT`]（3 秒）让各条路由的 render 流打开：
     /// * 单条（或部分）路由打开失败 → 只记进该路 `error`，其它路继续，整体仍 `running`；
+    ///   打不开的路由会在后台按 1s→2s→4s→8s→（封顶 30s）指数退避重试，
+    ///   设备休眠/掉线恢复后自动补上，不用重启引擎；
     /// * **全部**路由都打开失败 → 清理线程并返回错误（错误里带每路的失败原因）；
     /// * 超时仍有路由没打开 → 先返回，没打开的路由在后台继续尝试，成功后自动补上。
     ///
@@ -528,7 +559,6 @@ impl RouteEngineHandle {
             .collect();
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
-            sinks_alive: AtomicU32::new(sink_count as u32),
             captured_frames: AtomicU64::new(0),
             rate: engine_rate,
             level_l: AtomicU32::new(0),
@@ -536,6 +566,7 @@ impl RouteEngineHandle {
             started: Instant::now(),
             source_device: Mutex::new(String::new()),
             source_error: Mutex::new(None),
+            source_retrying: AtomicU64::new(0),
             sinks,
             delays_ms,
         });
@@ -571,8 +602,15 @@ impl RouteEngineHandle {
             thread::sleep(Duration::from_millis(10));
         }
 
-        if count_failed(&shared) >= sink_count {
-            let reasons = failure_reasons(&shared);
+        // 契约：3 秒内一条路都没打开 → 启动失败（≥1 条 → Ok，其余在后台继续重试）。
+        if count_opened(&shared) == 0 {
+            let mut reasons = failure_reasons(&shared);
+            if reasons.is_empty() {
+                reasons.push(format!(
+                    "{} 秒内没有任何路由完成打开",
+                    START_TIMEOUT.as_secs()
+                ));
+            }
             shared.stop.store(true, Ordering::Relaxed);
             for handle in threads.drain(..) {
                 let _ = handle.join();
@@ -612,10 +650,12 @@ impl RouteEngineHandle {
         &self.config
     }
 
-    /// 是否还在跑：没被停止，且至少一条输出路由的线程还活着。
+    /// 是否还在跑：只看有没有被显式停止。
+    ///
+    /// 单条路由打开失败、采集源暂时掉线都会在后台重试，引擎仍算 running（此时
+    /// [`RouteEngineStats::degraded`] / [`RouteEngineStats::source_error`] 会如实反映状态）。
     pub fn alive(&self) -> bool {
         !self.shared.stop.load(Ordering::Relaxed)
-            && self.shared.sinks_alive.load(Ordering::Relaxed) > 0
     }
 
     /// 播放中实时调整某条路由的微调延迟（毫秒），**不需要重启引擎**。
@@ -681,6 +721,8 @@ impl RouteEngineHandle {
                     level: sink.level,
                     format_path: sink.format_path.clone(),
                     error: sink.error.clone(),
+                    retry_count: sink.retry_count,
+                    retry_in_ms: sink.retry_in_ms,
                 }),
                 // 锁被 poison 只可能是音频线程 panic（正常情况下不会），给个占位不拖垮快照。
                 Err(_) => routes.push(RouteStats::default()),
@@ -690,6 +732,8 @@ impl RouteEngineHandle {
             running: self.alive(),
             source_device,
             source_error,
+            degraded: count_opened(&self.shared) == 0,
+            source_retrying: self.shared.source_retrying.load(Ordering::Relaxed),
             rate: self.shared.rate,
             capture_buffer_ms: self.config.effective_capture_buffer_ms(),
             captured_frames,
@@ -727,10 +771,16 @@ struct SinkState {
     gain: f32,
     /// 是否把该路样本反相（写入队列前取反）。
     invert: bool,
-    /// 是否已经成功打开 render 流（start() 的等待条件之一）。
+    /// 是否已经成功打开 render 流（运行中失效后被重试流程重开；`stats()` 用它判断「路径」）。
     opened: bool,
-    /// 打开/运行失败原因；`Some` = 这条路由已判失败（sink 线程随后退出）。
+    /// 首次启动结论是否已定（打开成功或第一次失败）；`start()` 的等待条件。
+    settled: bool,
+    /// 打开/运行失败原因；`Some` = 当前这次打开失败（这条路由会在后台退避重试）。
     error: Option<String>,
+    /// 累计重试打开的次数（含正在等待的这一次）。
+    retry_count: u64,
+    /// 当前等待中的重试间隔（毫秒）；`0` = 没在等重试。
+    retry_in_ms: u64,
     queue: VecDeque<i16>,
     queue_cap_samples: usize,
     sent_bytes: u64,
@@ -753,7 +803,10 @@ impl SinkState {
             gain: route.gain,
             invert: route.invert,
             opened: false,
+            settled: false,
             error: None,
+            retry_count: 0,
+            retry_in_ms: 0,
             queue: VecDeque::with_capacity(cap),
             queue_cap_samples: cap,
             sent_bytes: 0,
@@ -778,8 +831,6 @@ impl SinkState {
 /// 引擎线程共享的运行时状态。
 struct Shared {
     stop: AtomicBool,
-    /// 还活着的 sink 线程数；掉到 0 表示所有输出都没了 → 停引擎。
-    sinks_alive: AtomicU32,
     captured_frames: AtomicU64,
     /// 引擎采样率（Hz）：采集侧转换目标、延迟/队列换算基准。启动时确定，运行中不变。
     rate: u32,
@@ -789,6 +840,8 @@ struct Shared {
     started: Instant,
     source_device: Mutex<String>,
     source_error: Mutex<Option<String>>,
+    /// 采集线程当前连续重试次数（0 = 采集正常，>0 = 正在等设备回来）。
+    source_retrying: AtomicU64,
     /// 每条启用路由一份；下标与启用顺序一致。
     sinks: Vec<Mutex<SinkState>>,
     /// 每条启用路由的微调延迟（毫秒），下标与 `sinks` 一致；可在播放中随时改。
@@ -1129,27 +1182,27 @@ fn probe_source_mix_rate(source_endpoint: &str) -> Option<u32> {
     }
 }
 
-/// 启动阶段：还有多少条路由既没打开也没失败。
+/// 启动阶段：还有多少条路由的首次结论没定（既没打开也没第一次失败）。
 fn count_pending(shared: &Shared) -> usize {
     shared
         .sinks
         .iter()
         .filter(|slot| match slot.lock() {
-            Ok(sink) => !sink.opened && sink.error.is_none(),
+            Ok(sink) => !sink.settled,
             // 锁坏了当作已结束，别让 start() 白等 3 秒。
             Err(_) => false,
         })
         .count()
 }
 
-/// 已判失败的路由条数。
-fn count_failed(shared: &Shared) -> usize {
+/// 当前成功打开着 render 流的路由条数（`degraded` 判定用）。
+fn count_opened(shared: &Shared) -> usize {
     shared
         .sinks
         .iter()
         .filter(|slot| match slot.lock() {
-            Ok(sink) => sink.error.is_some(),
-            Err(_) => true,
+            Ok(sink) => sink.opened,
+            Err(_) => false,
         })
         .count()
 }
@@ -1183,6 +1236,64 @@ fn spawn_failure(
         let _ = handle.join();
     }
     AudioError::invalid(message)
+}
+
+// ---------------------------------------------------------------------------
+// 自愈重试：设备暂时不可用（休眠/掉线/默认输出切换）时退避重试，不判死引擎
+// ---------------------------------------------------------------------------
+
+/// 这个错误是否值得退避重试（设备暂时不可用类错误）。
+///
+/// 可重试：设备找不到、没有默认设备、设备已失效（`AUDCLNT_E_DEVICE_INVALIDATED`）、
+/// 音频服务没在跑（`AUDCLNT_E_SERVICE_NOT_RUNNING`）、设备被占用/权限暂时不足
+/// （`E_ACCESSDENIED`）。不可重试：参数/格式类错误（重试也不会变）。
+fn is_retryable(error: &AudioError) -> bool {
+    match error {
+        AudioError::DeviceNotFound(_) | AudioError::NoDefaultDevice(_) => true,
+        AudioError::DeviceInvalidated => true,
+        AudioError::Wasapi(hr, _) => is_retryable_hresult(*hr),
+        _ => false,
+    }
+}
+
+/// HRESULT 是否属于「设备暂时不可用」的可重试集合。
+fn is_retryable_hresult(hr: i32) -> bool {
+    /// `AUDCLNT_E_DEVICE_INVALIDATED`：端点被拔掉/切换/格式变化。
+    const AUDCLNT_E_DEVICE_INVALIDATED: u32 = 0x8889_0004;
+    /// `AUDCLNT_E_SERVICE_NOT_RUNNING`：音频服务暂时没跑。
+    const AUDCLNT_E_SERVICE_NOT_RUNNING: u32 = 0x8889_0010;
+    /// `E_ACCESSDENIED`：设备被独占/权限暂时不足（切端点时常见）。
+    const E_ACCESSDENIED: u32 = 0x8007_0005;
+    matches!(
+        hr as u32,
+        AUDCLNT_E_DEVICE_INVALIDATED | AUDCLNT_E_SERVICE_NOT_RUNNING | E_ACCESSDENIED
+    )
+}
+
+/// 第 `attempt` 次重试前的等待时长（毫秒）：1s→2s→4s→8s→…→封顶 30s。
+///
+/// `attempt` 从 1 开始（第 1 次失败后等 1s）；0 也按 1s 处理，防御非法调用。
+fn retry_backoff_ms(attempt: u32) -> u64 {
+    let exponent = attempt.saturating_sub(1).min(8);
+    RETRY_BASE_MS
+        .saturating_mul(1u64 << exponent)
+        .min(RETRY_MAX_MS)
+}
+
+/// 分片睡眠 `total_ms`，期间每 [`RETRY_SLEEP_SLICE_MS`] 检查一次停止标志。
+///
+/// 返回 `false` = 睡到一半发现引擎要停，调用方应立刻退出（`stop()` 不会被长退避卡住）。
+fn sleep_unless_stopped(shared: &Shared, total_ms: u64) -> bool {
+    let mut remaining = total_ms;
+    while remaining > 0 {
+        if shared.stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        let slice = remaining.min(RETRY_SLEEP_SLICE_MS);
+        thread::sleep(Duration::from_millis(slice));
+        remaining -= slice;
+    }
+    !shared.stop.load(Ordering::Relaxed)
 }
 
 // ---------------------------------------------------------------------------
@@ -1466,16 +1577,60 @@ fn run_sink(
     render_buffer_ms: u32,
     engine_rate: u32,
 ) {
-    if let Err(e) = sink_loop(&shared, index, &route, render_buffer_ms, engine_rate) {
-        if let Ok(mut sink) = shared.sinks[index].lock() {
-            if sink.error.is_none() {
-                sink.error = Some(e.to_string());
+    let mut consecutive_failures: u32 = 0;
+    loop {
+        if shared.stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let started = Instant::now();
+        match sink_loop(&shared, index, &route, render_buffer_ms, engine_rate) {
+            // sink_loop 只在引擎 stop 时正常返回。
+            Ok(()) => break,
+            Err(error) => {
+                if shared.stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                // 这次流跑了超过 1 秒才坏 = 健康过：退避从头算（掉线后不会越等越久）。
+                if started.elapsed() >= Duration::from_secs(1) {
+                    consecutive_failures = 0;
+                }
+                let retryable = is_retryable(&error);
+                let delay_ms = if retryable {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    retry_backoff_ms(consecutive_failures)
+                } else {
+                    0
+                };
+                let Ok(mut sink) = shared.sinks[index].lock() else {
+                    break;
+                };
+                sink.settled = true;
+                sink.opened = false;
+                sink.error = Some(error.to_string());
+                // 当前这次流已经没了，路径也失效（重开后由 sink_loop 重新写入）。
+                sink.format_path = None;
+                if retryable {
+                    sink.retry_count = sink.retry_count.saturating_add(1);
+                    sink.retry_in_ms = delay_ms;
+                } else {
+                    sink.retry_in_ms = 0;
+                }
+                drop(sink);
+                if !retryable {
+                    // 参数/格式类错误重试也没用：这条路由彻底放弃（其它路继续跑）。
+                    break;
+                }
+                if !sleep_unless_stopped(&shared, delay_ms) {
+                    break;
+                }
             }
         }
     }
-    // 全部输出路都没了：没有继续采集的意义。
-    if shared.sinks_alive.fetch_sub(1, Ordering::Relaxed) == 1 {
-        shared.stop.store(true, Ordering::Relaxed);
+    // 线程退出（显式 stop 或不可重试错误）：收掉「重试中」，避免 GUI 一直显示倒计时。
+    if let Ok(mut sink) = shared.sinks[index].lock() {
+        sink.opened = false;
+        sink.settled = true;
+        sink.retry_in_ms = 0;
     }
 }
 
@@ -1566,9 +1721,14 @@ fn sink_loop(
     }
     unsafe { client.Start() }.map_err(|e| AudioError::wasapi(e.code().0, "Start(route)"))?;
 
-    // 从这里开始 start() 认为这条路由"已打开"。
+    // 从这里开始 start() 认为这条路由"已打开"；重开时清掉旧错误、丢弃陈旧积压。
     if let Ok(mut sink) = shared.sinks[index].lock() {
         sink.opened = true;
+        sink.settled = true;
+        sink.error = None;
+        sink.retry_in_ms = 0;
+        // 重开（设备回来）时不要吐出断线前积压的陈旧音频，否则会听到一段旧声音。
+        sink.queue.clear();
         sink.format_path = Some(output.describe());
     }
 
@@ -1712,12 +1872,42 @@ fn encode_native_stereo(mono: &[i16], out: &mut Vec<u8>) -> usize {
 // ---------------------------------------------------------------------------
 
 fn run_capture(shared: Arc<Shared>, config: RouteEngineConfig) {
-    if let Err(e) = capture_loop(&shared, &config) {
-        if let Ok(mut slot) = shared.source_error.lock() {
-            *slot = Some(e.to_string());
+    let mut consecutive_failures: u32 = 0;
+    loop {
+        if shared.stop.load(Ordering::Relaxed) {
+            break;
         }
-        shared.stop.store(true, Ordering::Relaxed);
+        let started = Instant::now();
+        match capture_loop(&shared, &config) {
+            // capture_loop 只在引擎 stop 时正常返回。
+            Ok(()) => break,
+            Err(error) => {
+                if shared.stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                if started.elapsed() >= Duration::from_secs(1) {
+                    consecutive_failures = 0;
+                }
+                if let Ok(mut slot) = shared.source_error.lock() {
+                    *slot = Some(error.to_string());
+                }
+                if !is_retryable(&error) {
+                    // 配置/格式类错误重试也没用：保持旧行为，停引擎让 GUI 报「采集故障」。
+                    shared.stop.store(true, Ordering::Relaxed);
+                    break;
+                }
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                shared
+                    .source_retrying
+                    .store(consecutive_failures as u64, Ordering::Relaxed);
+                let delay_ms = retry_backoff_ms(consecutive_failures);
+                if !sleep_unless_stopped(&shared, delay_ms) {
+                    break;
+                }
+            }
+        }
     }
+    shared.source_retrying.store(0, Ordering::Relaxed);
 }
 
 fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> {
@@ -1778,6 +1968,12 @@ fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> 
         .map_err(|e| AudioError::wasapi(e.code().0, "GetService(IAudioCaptureClient, route)"))?;
     unsafe { client.Start() }
         .map_err(|e| AudioError::wasapi(e.code().0, "Start(route capture)"))?;
+
+    // 采集已经打开：清掉上一次失败的重试状态（音频又流动起来，GUI 的错误提示该消失）。
+    if let Ok(mut slot) = shared.source_error.lock() {
+        *slot = None;
+    }
+    shared.source_retrying.store(0, Ordering::Relaxed);
 
     let mut dsp = CaptureDsp::new(format, shared.rate, config.capture_gain);
     let result = (|| -> Result<()> {
@@ -2404,6 +2600,8 @@ mod tests {
             running: true,
             source_device: "立体声链".to_owned(),
             source_error: None,
+            degraded: false,
+            source_retrying: 0,
             captured_frames: 44_100,
             frame_bytes: 176_400,
             uptime_seconds: 1.0,
@@ -2425,6 +2623,8 @@ mod tests {
                         "mix-format 软件转换（44100 Hz / 2 ch / 32-bit float）".to_owned(),
                     ),
                     error: None,
+                    retry_count: 0,
+                    retry_in_ms: 0,
                 },
                 RouteStats {
                     endpoint: "箱B".to_owned(),
@@ -2437,6 +2637,8 @@ mod tests {
                     level: 0.0,
                     format_path: None,
                     error: Some("设备已拔出".to_owned()),
+                    retry_count: 2,
+                    retry_in_ms: 4_000,
                 },
             ],
         };
@@ -2447,6 +2649,8 @@ mod tests {
         assert!(describe.contains("44100 帧"), "{describe}");
         // 回退路径（混音格式 + 软件转换）要在 describe() 里能看到，便于 GUI 显示。
         assert!(describe.contains("mix-format"), "{describe}");
+        // 重试中的路由要能看出来（GUI 日志/自检用）。
+        assert!(describe.contains("重试中：第 2 次失败，4000 ms 后重试"), "{describe}");
     }
 
     #[test]
@@ -2459,15 +2663,17 @@ mod tests {
         state.underruns = 1;
         state.level = 0.25;
         state.delay_frames = 441;
+        state.opened = true;
+        state.settled = true;
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
-            sinks_alive: AtomicU32::new(1),
             captured_frames: AtomicU64::new(0),
             level_l: AtomicU32::new(0.5f32.to_bits()),
             level_r: AtomicU32::new(0.25f32.to_bits()),
             started: Instant::now(),
             source_device: Mutex::new("立体声链".to_owned()),
             source_error: Mutex::new(None),
+            source_retrying: AtomicU64::new(0),
             sinks: vec![Mutex::new(state)],
             delays_ms: vec![AtomicU32::new(10)],
             rate: 48_000,
@@ -2482,12 +2688,15 @@ mod tests {
         };
         let stats = handle.stats();
         assert!(stats.running);
+        assert!(!stats.degraded);
         assert_eq!(stats.source_device, "立体声链");
         assert_eq!(stats.routes.len(), 1);
         assert_eq!(stats.routes[0].endpoint, "箱A");
         assert_eq!(stats.routes[0].channel, RouteChannel::Left);
         assert_eq!(stats.routes[0].sent_bytes, 8);
         assert_eq!(stats.routes[0].underruns, 1);
+        assert_eq!(stats.routes[0].retry_count, 0);
+        assert_eq!(stats.routes[0].retry_in_ms, 0);
         assert_eq!(stats.rate, 48_000);
         assert_eq!(stats.capture_buffer_ms, 40);
         assert_eq!(stats.routes[0].queued_ms, samples_to_ms(4, stats.rate));
@@ -2498,35 +2707,153 @@ mod tests {
         assert_eq!(stats.uptime_seconds >= 0.0, true);
     }
 
-    #[test]
-    fn stats_marks_dead_engine_when_all_sinks_gone() {
-        let shared = Arc::new(Shared {
-            stop: AtomicBool::new(false),
-            sinks_alive: AtomicU32::new(0),
+    /// 造一个引擎内部状态（不启动线程），供 stats()/重试字段测试用。
+    fn shared_with(states: Vec<SinkState>, stop: bool) -> Arc<Shared> {
+        let delays_ms = states
+            .iter()
+            .map(|_| AtomicU32::new(0))
+            .collect::<Vec<_>>();
+        Arc::new(Shared {
+            stop: AtomicBool::new(stop),
             captured_frames: AtomicU64::new(0),
+            rate: 48_000,
             level_l: AtomicU32::new(0),
             level_r: AtomicU32::new(0),
             started: Instant::now(),
             source_device: Mutex::new(String::new()),
             source_error: Mutex::new(None),
-            sinks: vec![Mutex::new(SinkState::new(
-                &route("箱A", RouteChannel::Left),
-                4,
-            ))],
-            delays_ms: vec![AtomicU32::new(0)],
-            rate: 44_100,
-        });
-        let handle = RouteEngineHandle {
+            source_retrying: AtomicU64::new(0),
+            sinks: states.into_iter().map(Mutex::new).collect(),
+            delays_ms,
+        })
+    }
+
+    /// 用现成的共享状态构造一个不启动线程的句柄（`stats()`/`alive()` 测试用）。
+    fn handle_for(shared: Arc<Shared>) -> RouteEngineHandle {
+        RouteEngineHandle {
             shared,
             threads: Vec::new(),
             config: RouteEngineConfig::default(),
-        };
-        let stats = handle.stats();
+        }
+    }
+
+    #[test]
+    fn stopped_engine_reports_not_running() {
+        let stats = handle_for(shared_with(Vec::new(), true)).stats();
         assert!(!stats.running);
+        assert!(stats.degraded);
         assert_eq!(stats.captured_frames, 0);
         assert_eq!(stats.frame_bytes, 0);
-        assert_eq!(stats.rate, 44_100);
+        assert_eq!(stats.rate, 48_000);
         assert_eq!(stats.capture_buffer_ms, 40);
+    }
+
+    #[test]
+    fn retry_backoff_sequence_is_exponential_and_capped() {
+        assert_eq!(retry_backoff_ms(0), 1_000);
+        assert_eq!(retry_backoff_ms(1), 1_000);
+        assert_eq!(retry_backoff_ms(2), 2_000);
+        assert_eq!(retry_backoff_ms(3), 4_000);
+        assert_eq!(retry_backoff_ms(4), 8_000);
+        assert_eq!(retry_backoff_ms(5), 16_000);
+        assert_eq!(retry_backoff_ms(6), 30_000);
+        assert_eq!(retry_backoff_ms(30), 30_000);
+    }
+
+    #[test]
+    fn retryable_errors_are_classified() {
+        assert!(is_retryable(&AudioError::DeviceNotFound("箱".to_owned())));
+        assert!(is_retryable(&AudioError::NoDefaultDevice("没有".to_owned())));
+        assert!(is_retryable(&AudioError::DeviceInvalidated));
+        assert!(is_retryable(&AudioError::wasapi(
+            0x8889_0004u32 as i32,
+            "设备已失效"
+        )));
+        assert!(is_retryable(&AudioError::wasapi(
+            0x8007_0005u32 as i32,
+            "设备被占用"
+        )));
+        assert!(is_retryable(&AudioError::wasapi(
+            0x8889_0010u32 as i32,
+            "音频服务没跑"
+        )));
+        // 格式/参数类错误重试也不会变。
+        assert!(!is_retryable(&AudioError::wasapi(
+            0x8889_0003u32 as i32,
+            "端点类型错"
+        )));
+        assert!(!is_retryable(&AudioError::invalid("参数不对")));
+        assert!(!is_retryable(&AudioError::UnsupportedFormat(
+            "6 声道".to_owned()
+        )));
+        assert!(!is_retryable(&AudioError::NotStarted));
+    }
+
+    #[test]
+    fn count_pending_waits_for_first_conclusion() {
+        let mut open = SinkState::new(&route("箱A", RouteChannel::Left), 4);
+        open.opened = true;
+        open.settled = true;
+        let mut failed = SinkState::new(&route("箱B", RouteChannel::Right), 4);
+        failed.settled = true;
+        failed.error = Some("设备找不到".to_owned());
+        let pending = SinkState::new(&route("箱C", RouteChannel::Both), 4);
+        let shared = shared_with(vec![open, failed, pending], false);
+        assert_eq!(count_pending(&shared), 1);
+        if let Ok(mut sink) = shared.sinks[2].lock() {
+            sink.settled = true;
+        }
+        assert_eq!(count_pending(&shared), 0);
+    }
+
+    #[test]
+    fn one_failed_route_keeps_engine_alive_and_not_degraded() {
+        let mut open = SinkState::new(&route("箱A", RouteChannel::Left), 4);
+        open.opened = true;
+        open.settled = true;
+        let mut failed = SinkState::new(&route("箱B", RouteChannel::Right), 4);
+        failed.settled = true;
+        failed.error = Some("找不到匹配的设备：箱B".to_owned());
+        failed.retry_count = 3;
+        failed.retry_in_ms = 4_000;
+        let handle = handle_for(shared_with(vec![open, failed], false));
+        assert!(handle.alive(), "还有一条路由在跑，引擎不能算死");
+        let stats = handle.stats();
+        assert!(stats.running);
+        assert!(!stats.degraded);
+        assert_eq!(stats.routes.len(), 2);
+        assert_eq!(stats.routes[1].retry_count, 3);
+        assert_eq!(stats.routes[1].retry_in_ms, 4_000);
+        let describe = stats.describe();
+        assert!(describe.contains("箱B"), "{describe}");
+        assert!(describe.contains("重试中"), "{describe}");
+    }
+
+    #[test]
+    fn degraded_engine_when_no_route_can_open() {
+        let mut failed = SinkState::new(&route("箱A", RouteChannel::Left), 4);
+        failed.settled = true;
+        failed.error = Some("设备休眠".to_owned());
+        failed.retry_count = 1;
+        failed.retry_in_ms = 1_000;
+        let handle = handle_for(shared_with(vec![failed], false));
+        assert!(handle.alive(), "后台重试期间引擎仍算 running");
+        let stats = handle.stats();
+        assert!(stats.running);
+        assert!(stats.degraded);
+        let describe = stats.describe();
+        assert!(describe.contains("降级"), "{describe}");
+    }
+
+    #[test]
+    fn engine_stats_describe_mentions_source_retry() {
+        let shared = shared_with(Vec::new(), false);
+        shared.source_retrying.store(2, Ordering::Relaxed);
+        let mut stats = handle_for(shared).stats();
+        stats.degraded = true;
+        let describe = stats.describe();
+        assert!(describe.contains("采集重试中：第 2 次"), "{describe}");
+        assert!(describe.contains("降级"), "{describe}");
     }
 
     // ---- 回退路径（混音格式 + 软件转换）的纯逻辑测试 ----
