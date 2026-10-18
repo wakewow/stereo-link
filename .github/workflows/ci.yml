@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows / fmt + clippy + test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # 只跑纯逻辑测试：DSP / 解析 / 配置 / 重试退避，不需要真实音频设备。
+      # 需要真实端点、麦克风或蓝牙音箱的验证都在 examples/ 与 docs/ 里手工跑。
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: cargo build (release)
+        run: cargo build --workspace --release
+
+      # 内核驱动（drivers/）不在这里构建：需要 WDK + 自签名 + 测试签名模式，
+      # 见 drivers/REPORT.md。发布产物见 GitHub Releases。
+
+  msrv:
+    name: MSRV 1.88 编译检查
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --workspace
