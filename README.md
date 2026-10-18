@@ -23,7 +23,9 @@
 StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别推给两台（或更多）设备；每路的电平、
 发流量、缓冲、欠载实时可见；两路各自独立起流，一台掉线不影响另一台。
 
-- 程序形态：单个 `stereo-link.exe`（EGUI/OpenGL 绘制），没有安装包、没有后台服务、没有网页前端。
+- 程序形态：单个 `stereo-link.exe`（EGUI/OpenGL 绘制），没有后台服务、没有网页前端、不写注册表；
+  想省事可以直接下 [Release](https://github.com/wakewow/stereo-link/releases) 里的安装包（可选，免安装的
+  便携版也在同一个 Release 里）。
 - 采集源是**任意一个「不会被听见」的本机输出端点**：虚拟音频设备（自研 StereoLink 虚拟声卡、
   UU远程虚拟音频设备、Steam Streaming），或者一个没接音箱 / 显示器的物理输出（板载 Realtek
   扬声器口、空着的 HDMI / DP）。**零安装即可用**：不用装驱动、不用重启、不用第三方软件。
@@ -92,7 +94,7 @@ StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别
 | 音箱 | 2 × 蓝牙音箱（各自独立 A2DP 连接，**没有组「立体声组合」**；本机实测用的是两台同型号音箱） |
 | 采集源 | 「扬声器 (UU远程虚拟音频设备)」（零安装路径）；自研 `StereoLinkVad` 驱动是可选的高级路径 |
 | 工具链 | Rust 1.88+（MSVC）、cargo 1.99 |
-| 程序形态 | 单个 `stereo-link.exe`（egui / OpenGL），无安装包、无后台服务、无网页前端 |
+| 程序形态 | 单个 `stereo-link.exe`（egui / OpenGL），可选安装包（Inno Setup，按用户安装、免 UAC）、无后台服务、无网页前端 |
 | 开销 | 面板常驻约 150 MB 内存、约 4.7% 单核（可见时；最小化后更低） |
 
 **兼容性提醒**
@@ -125,6 +127,11 @@ StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别
 让面板自动对齐。看面板上每路电平和欠载次数可以判断链路质量。
 
 ## 快速开始
+
+> **下载与安装（可选）**：不想自己编译就下 [Release](https://github.com/wakewow/stereo-link/releases) 里的
+> `stereo-link-setup-0.2.0.exe` —— Inno Setup 打包，按当前用户安装、**不需要管理员权限**，卸载时可选是否
+> 一并删除配置；也可以直接用免安装的 `stereo-link.exe`。安装包**不含**自研虚拟声卡驱动：驱动是可选的高级
+> 路径，要管理员权限 + 开启测试签名 + 重启，见下文「可选：安装自研虚拟声卡」。
 
 三步：**选采集源 → 选左右音箱 → 开始路由**。
 
@@ -180,6 +187,14 @@ cargo build --release -p stereo-link
 ```
 
 需要 Rust 1.88+（MSVC 工具链）。`cargo test --workspace` 跑全部单元测试。
+
+**发布用构建**用 `scripts\build-release.ps1`（等价于上面那条命令 + 一组 `--remap-path-prefix`）：
+它会把构建机的仓库路径、`%USERPROFILE%\.cargo`、`.rustup` 从二进制的 panic 位置字符串里改写成中性
+名字，并在构建后自检产物里是否残留本机路径 —— 直接 `cargo build --release` 出来的 exe 会带上
+`C:\Users\<你>\.cargo\registry\src\...` 这类路径，不适合分发。
+
+**安装包**用 `installer\stereo-link.iss`（Inno Setup 6）：`ISCC.exe installer\stereo-link.iss` →
+`dist\stereo-link-setup-0.2.0.exe`；图标由 `scripts\make-icon.py`（Pillow）从面板的图标算法生成。
 
 自研虚拟声卡驱动是独立的 WDK 工程（不在 Rust workspace 里，属于可选高级路径），源码、签名流水线
 与驱动包都在 `drivers\`：`scream-derived\`（驱动源码）、`make_package.ps1` / `sign-vad.ps1` /
@@ -256,15 +271,21 @@ crates/
    └─ src/ring.rs          环形缓冲 / 低延迟读
 scripts/
 ├─ switch-audio-default.ps1  切 Windows 默认输出（IPolicyConfig，内嵌进程序）
+├─ build-release.ps1         发布用构建（路径脱敏 + 产物自检）
+├─ make-icon.py              生成安装包图标 installer/stereo-link.ico
 ├─ gui-set-name.ps1          历史改名工具（面板已不再调用，开发工具）
 ├─ rename-endpoint.ps1       通用命令行改名工具（开发工具，备份/回滚/试运行）
 └─ backups/                  rename-endpoint.ps1 的备份（本机数据，勿提交）
+installer/
+├─ stereo-link.iss           Inno Setup 脚本（按用户安装、免 UAC）
+├─ license.txt               安装向导里显示的许可与免责
+└─ stereo-link.ico           安装包 / 快捷方式图标
 安装虚拟声卡.cmd / 卸载虚拟声卡.cmd   自研虚拟声卡的安装 / 卸载入口（可选高级路径，需管理员、需重启）
 docs/gui.md                 面板手册（界面、采集源、操作、FAQ）
 docs/virtual-soundcard.md   采集源与虚拟声卡：三种采集源、自研驱动、testsigning、FAQ
 LICENSE-MIT / LICENSE-APACHE   项目主体双许可全文
 NOTICE                         第三方署名与商标声明
-LICENSES/                      非 MIT/Apache 部分：MS-PL 全文与来源说明（LICENSES/README.md）
+LICENSES/                      非 MIT/Apache 部分：MS-PL 全文、编入二进制的四种字体许可与来源说明（LICENSES/README.md）
 ```
 
 驱动源码、构建流水线与签名后的驱动包（`StereoLinkVad.inf` / `.sys` / `.cat` / `LICENSE-MS-PL.txt`）

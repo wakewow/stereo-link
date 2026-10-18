@@ -9,9 +9,14 @@ NOTICE                      # 第三方署名汇总（MS-PL 驱动 + egui 字体
 LICENSES/
   README.md                 # 本文件
   MS-PL.txt                 # MS-PL 全文（逐字，来自上游 Scream 的 LICENSE）
-  OFL-1.1.txt               # 发布二进制时放入（本仓库只发布源码，当前未包含）
-  Ubuntu-font-1.0.txt       # 同上
+  OFL-1.1.txt               # 打包 exe/安装包时编入的 NotoEmoji 字体许可（SIL OFL 1.1）
+  Ubuntu-font-1.0.txt       # 打包 exe/安装包时编入的 Ubuntu-Light 字体许可（UFL 1.0）
+  Hack-MIT.txt              # 打包 exe/安装包时编入的 Hack 字体许可（MIT/Expat + Bitstream Vera）
+  emoji-icon-font-MIT.txt   # 打包 exe/安装包时编入的 emoji-icon-font 许可（MIT）
 ```
+
+> 上面四个字体许可文本来自构建时实际链接的 `epaint_default_fonts 0.31.1`
+> （crates.io 包内 `fonts/` 目录的逐字副本），随 `stereo-link.exe` / 安装包一起分发。
 
 ## LICENSES/MS-PL.txt 的来源
 
@@ -54,11 +59,18 @@ LICENSES/
 
 `stereo-link.exe` 用 eframe/egui 的 `default_fonts` 特性构建时，会把
 `epaint_default_fonts 0.31.1` 的字体数据编进可执行文件，该 crate 的许可是
-`(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`。因此发布 exe/安装包时要：
+`(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`，包内实际含四种字体：
+Ubuntu-Light（UFL 1.0）、NotoEmoji（OFL 1.1）、Hack（MIT/Expat + Bitstream Vera）、
+emoji-icon-font（MIT）。因此发布 exe / 安装包时要：
 
-1. 附 `LICENSES/OFL-1.1.txt` 与 `LICENSES/Ubuntu-font-1.0.txt` 全文；
+1. 附 `LICENSES/OFL-1.1.txt`、`LICENSES/Ubuntu-font-1.0.txt`、`LICENSES/Hack-MIT.txt`、
+   `LICENSES/emoji-icon-font-MIT.txt` 全文；
 2. 附 `NOTICE`；
 3. 附所有 Rust 依赖的许可清单（建议 `cargo about generate` 或 `cargo deny`）。
 
+**本仓库已经这么做**：`installer/stereo-link.iss` 会把 `LICENSES/**`、`NOTICE`、
+`LICENSE-MIT`、`LICENSE-APACHE` 一并装进 `{app}`，所以从 Release 下载的安装包自带
+上述全部许可文本；只下载裸 `stereo-link.exe` 时请自行附上这些文件。
+
 只发布**源码**（GitHub 仓库）时不需要额外附字体许可文本，因为字体是构建时从 crates.io
-拉取的依赖，不是本仓库的源文件。
+拉取的依赖，不是本仓库的源文件；但仓库里保留这些副本，方便打包者直接取用。

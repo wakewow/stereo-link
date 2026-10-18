@@ -31,20 +31,28 @@ attribution of origin. The MS-PL does not grant any trademark license
 affiliation with, Microsoft Corporation or Tom Kistner.
 
 --------------------------------------------------------------------------------
-2. egui / eframe default fonts - OFL-1.1 and Ubuntu Font Licence
+2. egui / eframe default fonts - OFL-1.1, Ubuntu Font Licence 1.0, MIT
 --------------------------------------------------------------------------------
 
 When stereo-link.exe is built with eframe's default "default_fonts" feature,
 the executable embeds font data from the crate epaint_default_fonts 0.31.1
 (part of egui, https://github.com/emilk/egui), which is licensed under
-"(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0".
+"(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0". That crate bundles four
+fonts, each under its own terms:
 
-Redistributing a compiled stereo-link.exe therefore requires including the
-text of the SIL Open Font License 1.1 and the Ubuntu Font Licence, together
-with this NOTICE. SIL Open Font License 1.1 text:
-https://openfontlicense.org/open-font-license-official-text/
-Ubuntu Font Licence text:
-https://ubuntu.com/legal/font-licence
+  Ubuntu-Light.ttf         Ubuntu Font Licence 1.0
+  NotoEmoji-Regular.ttf    SIL Open Font License 1.1
+  Hack-Regular.ttf         MIT/Expat style licence (plus Bitstream Vera terms)
+  emoji-icon-font.ttf      MIT
+
+Redistributing a compiled stereo-link.exe therefore requires including those
+licence texts together with this NOTICE. Verbatim copies are kept in this
+repository and are installed alongside the program:
+
+  LICENSES/OFL-1.1.txt
+  LICENSES/Ubuntu-font-1.0.txt
+  LICENSES/Hack-MIT.txt
+  LICENSES/emoji-icon-font-MIT.txt
 
 If the program is rebuilt without the "default_fonts" feature and without
 embedding those fonts, this notice can be dropped for that build.

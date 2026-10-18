@@ -4,6 +4,15 @@
 
 ## [未发布]
 
+### 新增
+
+- **安装包**：`installer/stereo-link.iss`（Inno Setup 6）打包成 `stereo-link-setup-0.2.0.exe`，
+  按当前用户安装、不需要管理员权限，带开始菜单 / 可选桌面快捷方式与卸载器；安装包**不含**自研虚拟声卡驱动。
+- **发布用构建脚本**：`scripts/build-release.ps1` 用 `--remap-path-prefix` 把构建机路径从二进制的
+  panic 位置字符串里抹掉，并在构建后自检产物；`scripts/make-icon.py` 生成安装包图标。
+- **字体许可落位**：编入二进制的四种字体（Ubuntu-Light / NotoEmoji / Hack / emoji-icon-font）的许可全文
+  补进 `LICENSES/`，`NOTICE` 与 `LICENSES/README.md` 同步。
+
 ## [0.2.0] - 2026-10-18
 
 StereoLink 立体声链的首个公开版本。此前它以 `miplay-bridge` 为名，走的是「PC 系统声音 → 云端下发 →
