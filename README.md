@@ -5,6 +5,19 @@
 
 ![StereoLink 面板](docs/images/gui.png)
 
+![StereoLink 信号流](docs/images/architecture.png)
+
+## 这个项目适合谁
+
+**手头有两台以上音频设备（重点是蓝牙音箱），但没法把它们组成立体声的人。**
+
+- 不同品牌 / 不同型号的音箱，根本配不成官方「立体声组合」（TWS 对）；
+- 同款音箱能组「立体声组合」，但组队后延迟更高、只能两只一起用、或者必须待在同一间房；
+- 想让「一台放左、一台放右」，Windows 自己做不到：系统只能把一条立体声混音送给**一个**输出端点。
+
+StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别推给两台（或更多）设备；每路的电平、
+发流量、缓冲、欠载实时可见；两路各自独立起流，一台掉线不影响另一台。
+
 - 程序形态：单个 `stereo-link.exe`（EGUI/OpenGL 绘制），没有安装包、没有后台服务、没有网页前端。
 - 采集源是**任意一个「不会被听见」的本机输出端点**：虚拟音频设备（自研 StereoLink 虚拟声卡、
   UU远程虚拟音频设备、Steam Streaming），或者一个没接音箱 / 显示器的物理输出（板载 Realtek
@@ -53,8 +66,29 @@
 - **诊断与日志**：面板内置诊断清单（采集源、默认输出、路由状态等），可一键复制；内嵌日志面板
   方便排障。
 
-当前状态：Windows 10 / 11 x64，Rust 1.82+。零安装路径不需要任何驱动；自研虚拟声卡是自签内核
-驱动，安装时要开测试签名并重启（卸载时可撤销）。
+## 测试环境与兼容性
+
+本项目**只在这一台机器上完整实测过**；换机型、换蓝牙适配器、换音箱请自行验证。
+
+| 项目 | 本机实测配置 |
+| --- | --- |
+| 操作系统 | Windows 11 24H2（build 26100.9711，x64）<br>※ 注册表 `ProductName` 仍写 “Windows 10 Pro”，这是 Win11 的已知显示现象 |
+| 蓝牙适配器 | Intel(R) Wireless Bluetooth(R)，`USB\VID_8087&PID_0033`，驱动 23.140.0.5，固件 3719a3584001000d19（Intel Wi-Fi 6E AX211 的 CNVi 组合模块） |
+| 蓝牙协议 | 经典蓝牙 A2DP（Windows 内置蓝牙栈，SBC 编码）；适配器上报 LMP 13 / 子版本 0x3058（蓝牙 5.4 档位；Intel 对 AX211 标称蓝牙 5.3） |
+| 音箱 | 2 × 小米 Sound（`Xiaomi Sound-1695` / `Xiaomi Sound-5320`），各自独立蓝牙连接，**没有组「立体声组合」** |
+| 采集源 | 「扬声器 (UU远程虚拟音频设备)」（零安装路径）；自研 `StereoLinkVad` 驱动是可选的高级路径 |
+| 工具链 | Rust 1.82+（MSVC）、cargo 1.99 |
+| 程序形态 | 单个 `stereo-link.exe`（egui / OpenGL），无安装包、无后台服务、无网页前端 |
+| 开销 | 面板常驻约 150 MB 内存、约 4.7% 单核（可见时；最小化后更低） |
+
+**兼容性提醒**
+
+- 微软官方文档称「一个蓝牙适配器同时只支持一条 A2DP 链路」，但**本机实测 Intel AX211 能同时维持两条**
+  （两只音箱各自独立连接、同时出声）。这个结论依赖适配器 / 驱动 / 音箱固件，换机器请先跑一次
+  「左右自检音」确认两只箱能同时出声。
+- 零安装路径（借用已有虚拟音频设备或空闲物理输出）不需要任何驱动，Win10 / Win11 x64 理论上都能跑。
+- 自研虚拟声卡是自签内核驱动：需要关闭 Secure Boot、`bcdedit /set testsigning on` 并重启一次，
+  桌面会常驻「测试模式」水印；不想走这条路就用零安装路径。
 
 ## 延迟
 
@@ -124,14 +158,15 @@
 
 ```powershell
 cargo build --release -p stereo-link
-# 产物：target\release\stereo-link.exe（约 10 MB）
+# 产物：target\release\stereo-link.exe（约 5.6 MB，单文件、无外部依赖）
 ```
 
 需要 Rust 1.82+（MSVC 工具链）。`cargo test --workspace` 跑全部单元测试。
 
-自研虚拟声卡驱动是独立的 WDK 工程（不在 Rust workspace 里，属于可选高级路径），构建 / 签名流水线
-在本机开发目录 `.scratch\vad\`，命令见 [`docs/virtual-soundcard.md`](docs/virtual-soundcard.md) 的
-「构建与自签」。
+自研虚拟声卡驱动是独立的 WDK 工程（不在 Rust workspace 里，属于可选高级路径），源码、签名流水线
+与驱动包都在 `drivers\`：`scream-derived\`（驱动源码）、`make_package.ps1` / `sign-vad.ps1` /
+`install-vad.ps1`、`pkg-stereolink\`（签名后的 `.inf` / `.sys` / `.cat`）。命令见
+[`docs/virtual-soundcard.md`](docs/virtual-soundcard.md) 的「构建与自签」。
 
 ## 配置与数据路径
 
@@ -203,8 +238,8 @@ docs/gui.md                 面板手册（界面、采集源、操作、FAQ）
 docs/virtual-soundcard.md   采集源与虚拟声卡：三种采集源、自研驱动、testsigning、FAQ
 ```
 
-驱动构建流水线与驱动包（`StereoLinkVad.inf` / `.sys` / `.cat` / `LICENSE-MS-PL.txt`）在
-`.scratch\vad\`——本机开发目录，不进仓库；安装脚本也会在 `drivers\pkg-stereolink\` 找驱动包。
+驱动源码、构建流水线与签名后的驱动包（`StereoLinkVad.inf` / `.sys` / `.cat` / `LICENSE-MS-PL.txt`）
+都在仓库的 `drivers\` 下；安装脚本也在这里找驱动包。私钥（`.pfx` / `.pvk`）不入库。
 
 ## 开发与测试
 
@@ -224,5 +259,5 @@ cargo run -p stereo-audio --example route_demo -- --left "Xiaomi Sound-1695" --r
 ## 许可证
 
 MIT（面板与音频库）。自研虚拟声卡驱动是从 Scream 派生的 MS-PL 代码（上游血统 MSVAD → Scream →
-StereoLinkVad），许可证全文随驱动包提供（`LICENSE-MS-PL.txt`），再分发时需保留版权与许可声明；
-驱动二进制目前不随仓库提交。
+StereoLinkVad），许可证全文随驱动包提供（`LICENSE-MS-PL.txt`），再分发时需保留版权与许可声明。
+驱动二进制与开发公钥证书（`drivers\certs\stereolink-dev.cer`）随仓库提交，签名私钥不入库。
