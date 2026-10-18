@@ -220,16 +220,6 @@ cargo run -p stereo-audio --example route_demo -- --left "Xiaomi Sound-1695" --r
 自研虚拟声卡驱动的构建、自签、安装与回滚命令见
 [`docs/virtual-soundcard.md`](docs/virtual-soundcard.md) 的「构建与自签 / 安装 / 卸载」三节。
 
-## 历史
-
-本仓库早期是 `miplay-bridge`：把系统声音通过小米妙播云 API 投放到小米音箱（含 AirPlay 2 发送端）。
-妙播云路线 PC 侧延迟约 0.25 s、但音箱固件内部缓冲接近 1 s，压不下来；AirPlay 2 在本机设备上
-能建流但渲染静音，故都已被移除。
-
-虚拟声卡也经历了两代：早期「借用 Steam Streaming Speakers 改名」，后来换成自研驱动
-StereoLinkVad。现在采集源已经泛化为**任意一个不会被听见的本机输出端点**（零安装优先，UU远程
-兜底），自研虚拟声卡退为可选的高级路径；面板的「虚拟声卡改名」功能已删除（改名只影响显示名，
-对采集没有帮助）。现在产品只做「本机音频设备左右分声道」这一条纯用户态路线。
 
 ## 许可证
 

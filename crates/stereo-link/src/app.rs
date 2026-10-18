@@ -184,6 +184,16 @@ const ROUTE_ROW_H: f32 = 28.0;
 /// 诊断卡固定槽位数：条数变化不改变卡片高度。
 const DIAG_SLOTS: usize = 5;
 
+/// 「欠载」的悬停说明：表头与数据行共用同一段话。
+const UNDERRUN_HELP: &str = "\
+欠载（underrun）= 这一路要往音箱写数据时，抖动缓冲里已经没数据了，\
+只能补静音凑够这一轮（约 10 ms），每补一次记 1 次。\n\
+· 0～几次：正常 —— 刚开始路由时队列还没攒满，头一两轮必然补静音；\n\
+· 几十次：偶发轻微咔哒，多半听不出来；\n\
+· 几百次以上：会听到断音/爆音，把「抖动缓冲」调大（40 → 80～120 ms，代价是延迟增加），\
+并确认采集源就是 Windows 默认输出、播放器确实在放声音。\n\
+反方向的问题是丢帧：缓冲满了就丢掉最旧的采样，用来吸收两条链路的时钟漂移。";
+
 /// 设备列吃掉剩余宽度：同一窗口尺寸下恒定，不随数值变化。
 fn route_device_width(available: f32, spacing: f32) -> f32 {
     let fixed = ROUTE_COL_CH
@@ -1855,7 +1865,8 @@ impl StereoLinkApp {
                     text_cell(ui, ROUTE_COL_LEVEL, 18.0, "电平", header_font.clone(), MUTED, false);
                     text_cell(ui, ROUTE_COL_SENT, 18.0, "已发流", header_font.clone(), MUTED, true);
                     text_cell(ui, ROUTE_COL_BUF, 18.0, "缓冲", header_font.clone(), MUTED, true);
-                    text_cell(ui, ROUTE_COL_UNDER, 18.0, "欠载", header_font.clone(), MUTED, true);
+                    text_cell(ui, ROUTE_COL_UNDER, 18.0, "欠载", header_font.clone(), MUTED, true)
+                        .on_hover_text(UNDERRUN_HELP);
                     text_cell(ui, ROUTE_COL_PATH, 18.0, "路径", header_font, MUTED, false);
                 });
             }
@@ -2206,6 +2217,18 @@ impl StereoLinkApp {
                 .as_ref()
                 .map(|route| format!("{:>4}", route.underruns))
                 .unwrap_or_else(|| "   —".to_string());
+            let under_tip = match route.as_ref() {
+                Some(route) if route.underruns > 0 => format!(
+                    "这一路已欠载 {} 次。\n{}",
+                    route.underruns,
+                    if route.underruns > 200 {
+                        "次数偏多：建议把「抖动缓冲」调到 80～120 ms（代价是延迟增加）。"
+                    } else {
+                        "少量欠载（尤其刚开始路由时的头几次）属正常。"
+                    }
+                ),
+                _ => UNDERRUN_HELP.to_string(),
+            };
             text_cell(
                 ui,
                 ROUTE_COL_UNDER,
@@ -2214,7 +2237,8 @@ impl StereoLinkApp {
                 FontId::monospace(12.0),
                 if underruns > 0 { WARN } else { TEXT },
                 true,
-            );
+            )
+            .on_hover_text(under_tip);
 
             let (path_short, path_tip) = match route
                 .as_ref()
