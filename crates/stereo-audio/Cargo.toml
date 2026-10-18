@@ -1,0 +1,29 @@
+[package]
+name = "stereo-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Windows WASAPI 回环采集 + 多路声道分发/合成（StereoLink 音频引擎）"
+
+[dependencies]
+thiserror.workspace = true
+anyhow.workspace = true
+# 引擎只发事件、不装订阅器：宿主（GUI/CLI）装了 tracing 订阅器时这些日志才会出现。
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Media",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+# `#[windows::core::interface]` 宏展开时会用绝对路径引用 `windows_core`，
+# 所以需要把同版本的 windows-core 作为直接依赖带上（版本必须与 windows 内部一致）。
+windows-core = "0.62"
