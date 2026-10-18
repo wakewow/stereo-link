@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
+use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 /// 声道路由参数（两条链路：左声道、右声道）。
@@ -173,6 +174,74 @@ impl<'de> Deserialize<'de> for CloseBehavior {
     }
 }
 
+/// 界面主题模式。
+///
+/// - [`ThemeMode::System`]（默认）：跟随 Windows 的浅色/深色设置，系统切换时界面即时跟着变；
+/// - [`ThemeMode::Light`] / [`ThemeMode::Dark`]：用户手动锁定，不受系统影响。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    /// 跟随系统。
+    #[default]
+    System,
+    /// 强制浅色。
+    Light,
+    /// 强制深色。
+    Dark,
+}
+
+impl<'de> Deserialize<'de> for ThemeMode {
+    /// 大小写不敏感地解析（`"System"`/`"LIGHT"`/`"dark"` 都接受），写回仍用 snake_case。
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        let raw = String::deserialize(deserializer)?;
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "system" => Ok(ThemeMode::System),
+            "light" => Ok(ThemeMode::Light),
+            "dark" => Ok(ThemeMode::Dark),
+            _ => Err(D::Error::custom(format!(
+                "theme 取值 {raw:?} 不合法（可选 system / light / dark，大小写不限）"
+            ))),
+        }
+    }
+}
+
+impl ThemeMode {
+    /// 全部模式（下拉框 / 循环切换用）。
+    pub const ALL: [ThemeMode; 3] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark];
+
+    /// 界面上显示的短文字。
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeMode::System => "跟随系统",
+            ThemeMode::Light => "浅色",
+            ThemeMode::Dark => "深色",
+        }
+    }
+
+    /// 循环切到下一个模式（侧边栏收起时点一下切换）。
+    pub fn next(self) -> Self {
+        match self {
+            ThemeMode::System => ThemeMode::Light,
+            ThemeMode::Light => ThemeMode::Dark,
+            ThemeMode::Dark => ThemeMode::System,
+        }
+    }
+
+    /// 转成 egui 的主题偏好（`System` = `None`，交给 winit/系统上报）。
+    pub fn preference(self) -> Option<egui::Theme> {
+        match self {
+            ThemeMode::System => None,
+            ThemeMode::Light => Some(egui::Theme::Light),
+            ThemeMode::Dark => Some(egui::Theme::Dark),
+        }
+    }
+}
+
 /// 面板持久化配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -203,6 +272,11 @@ pub struct AppConfig {
     /// `#[serde(default)]`：老配置文件里没有这个字段时按 [`CloseBehavior::Ask`] 处理。
     #[serde(default)]
     pub close_behavior: CloseBehavior,
+    /// 界面主题（默认跟随系统）。
+    ///
+    /// `#[serde(default)]`：老配置文件没有这个字段时按 [`ThemeMode::System`] 处理。
+    #[serde(default)]
+    pub theme: ThemeMode,
 }
 
 fn default_auto_start() -> bool {
@@ -220,6 +294,7 @@ impl Default for AppConfig {
             sync_mic: String::new(),
             volume_follow: VolumeFollow::Auto,
             close_behavior: CloseBehavior::Ask,
+            theme: ThemeMode::System,
         }
     }
 }

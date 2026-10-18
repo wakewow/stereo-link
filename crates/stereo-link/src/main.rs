@@ -13,6 +13,8 @@ mod audio_default;
 #[allow(dead_code)]
 mod close_flow;
 mod config;
+// 端点状态轮询线程：把周期性 WASAPI/COM 调用搬离 UI 线程（拖动窗口不再卡顿）。
+mod endpoint_poll;
 mod fonts;
 mod logbuf;
 // 托盘模块同上：app.rs 接线前只有 tray_probe 示例会用到。

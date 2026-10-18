@@ -68,6 +68,7 @@ pub fn pick_virtual(renders: &[stereo_audio::EndpointInfo]) -> Option<stereo_aud
 ///
 /// 按 [`VAD_NAME_HINTS`] 的优先级找：自研虚拟声卡优先于历史借用的 Steam 设备，
 /// 避免两块都叫「立体声链…」的端点同时存在时选错。
+#[allow(dead_code)] // 供示例/诊断脚本使用的旧版 UI 线程回退接口；正式界面走 endpoint_poll 后台线程
 pub fn virtual_endpoint() -> Option<stereo_audio::EndpointInfo> {
     let list = stereo_audio::list_endpoints().ok()?;
     let renders: Vec<stereo_audio::EndpointInfo> = list
@@ -78,6 +79,7 @@ pub fn virtual_endpoint() -> Option<stereo_audio::EndpointInfo> {
 }
 
 /// 按端点 id 找端点（id 形如 `{0.0.0.00000000}.{guid}`）。
+#[allow(dead_code)] // 供示例/诊断脚本使用的旧版 UI 线程回退接口；正式界面走 endpoint_poll 后台线程
 pub fn endpoint_by_id(id: &str) -> Option<stereo_audio::EndpointInfo> {
     if id.trim().is_empty() {
         return None;
@@ -90,6 +92,7 @@ pub fn endpoint_by_id(id: &str) -> Option<stereo_audio::EndpointInfo> {
 
 /// 解析虚拟声卡端点：优先用记住的端点 id（用户改名后名字变了、端点 id 不变），
 /// 记不住再退回按名字提示匹配。
+#[allow(dead_code)] // 供示例/诊断脚本使用的旧版 UI 线程回退接口；正式界面走 endpoint_poll 后台线程
 pub fn resolve_virtual_endpoint(remembered_id: Option<&str>) -> Option<stereo_audio::EndpointInfo> {
     if let Some(id) = remembered_id {
         if let Some(ep) = endpoint_by_id(id) {
