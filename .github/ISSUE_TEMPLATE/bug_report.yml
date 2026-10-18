@@ -26,7 +26,7 @@ body:
     id: speakers
     attributes:
       label: 音箱/耳机型号与连接方式
-      description: 例如「2 × 小米 Sound，各自蓝牙独立连接」或「1 个蓝牙 + 1 个 USB 耳机」
+      description: 例如「2 台蓝牙音箱，各自独立连接」或「1 个蓝牙 + 1 个 USB 耳机」
     validations:
       required: true
   - type: dropdown
