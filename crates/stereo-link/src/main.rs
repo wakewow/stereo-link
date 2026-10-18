@@ -17,6 +17,8 @@ mod config;
 mod endpoint_poll;
 mod fonts;
 mod logbuf;
+// 玻璃拟态设计系统：token、柔光背景纹理、玻璃卡片、行内波形/频谱、分段电平条。
+mod theme;
 // 托盘模块同上：app.rs 接线前只有 tray_probe 示例会用到。
 #[allow(dead_code)]
 mod tray;

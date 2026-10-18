@@ -38,6 +38,7 @@ use crate::config::{AppConfig, ThemeMode, VolumeFollow};
 use crate::endpoint_poll::{EndpointPoll, PollInput};
 use crate::fonts;
 use crate::logbuf::{LogBuffer, LogLine};
+use crate::theme::{self, GlassLevel};
 use crate::tray::{Tray, TrayEvent};
 
 // ---------------------------------------------------------------------------
@@ -165,13 +166,12 @@ fn text_on(bg: Color32) -> Color32 {
     }
 }
 
-/// 卡片外框。
+/// 卡片外框：玻璃拟态（半透明填充 + 1px 描边 + 阴影，见 `theme::glass_frame`）。
+///
+/// egui 没有 `backdrop-filter`，毛玻璃靠「底层柔光纹理 + 半透明卡片 + 描边高光」
+/// 三层近似，所以这里必须是半透明填充，不能退回不透明色。
 fn card_frame() -> egui::Frame {
-    egui::Frame::default()
-        .fill(palette().card)
-        .stroke(Stroke::new(1.0_f32, palette().border))
-        .inner_margin(Margin::symmetric(18, 16))
-        .corner_radius(CornerRadius::same(12))
+    theme::glass_frame(GlassLevel::Base, is_dark())
 }
 
 /// 固定宽度的药丸标签：宽度写死，内容居中，不随文字伸缩。
@@ -294,14 +294,17 @@ fn clip_text(text: &str, max_chars: usize) -> String {
 
 // ---- 声道路由表：列宽写死，数值列右对齐 ----
 const ROUTE_COL_CH: f32 = 52.0;
-const ROUTE_COL_LEVEL: f32 = 84.0;
+/// 行内「波形 + 频谱」装饰列（真实电平驱动，见 `theme::WaveBuf`）。
+const ROUTE_COL_WAVE: f32 = 112.0;
+const ROUTE_COL_LEVEL: f32 = 92.0;
 /// 每路音量条：占用原先「已发流 / 欠载」两列的位置。
 const ROUTE_COL_VOL: f32 = 150.0;
 const ROUTE_COL_BUF: f32 = 72.0;
 const ROUTE_COL_PATH: f32 = 44.0;
 /// 反相开关列：从「高级」里移出来，每路都直接可见。
 const ROUTE_COL_INV: f32 = 96.0;
-const ROUTE_ROW_H: f32 = 28.0;
+/// 行高：给行内波形/频谱留出呼吸（原型 44~48px）。
+const ROUTE_ROW_H: f32 = 40.0;
 
 /// 左侧导航栏展开 / 收起宽度。
 const SIDEBAR_W: f32 = 176.0;
@@ -322,12 +325,13 @@ const VOLUME_FOLLOW_HELP: &str = "\
 /// 设备列吃掉剩余宽度：同一窗口尺寸下恒定，不随数值变化。
 fn route_device_width(available: f32, spacing: f32) -> f32 {
     let fixed = ROUTE_COL_CH
+        + ROUTE_COL_WAVE
         + ROUTE_COL_LEVEL
         + ROUTE_COL_VOL
         + ROUTE_COL_BUF
         + ROUTE_COL_PATH
         + ROUTE_COL_INV;
-    (available - fixed - spacing * 7.0).max(150.0)
+    (available - fixed - spacing * 8.0).max(150.0)
 }
 
 /// 描边小徽标。
@@ -349,40 +353,8 @@ fn badge(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
     response
 }
 
-/// 电平条。
-fn level_bar(ui: &mut egui::Ui, width: f32, level: f32, color: Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 9.0), Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(5), palette().extreme_bg);
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(5),
-        Stroke::new(1.0_f32, palette().border),
-        egui::StrokeKind::Inside,
-    );
-    let ratio = level.clamp(0.0, 1.0);
-    let filled = rect.width() * ratio;
-    if filled > 1.5 {
-        let bar = Rect::from_min_size(
-            rect.min + Vec2::new(1.0, 1.0),
-            Vec2::new((filled - 2.0).max(1.0), rect.height() - 2.0),
-        );
-        let c = if ratio > 0.85 {
-            palette().err
-        } else if ratio > 0.6 {
-            palette().warn
-        } else {
-            color
-        };
-        painter.rect_filled(bar, CornerRadius::same(4), c);
-    }
-    let mid = rect.min.x + rect.width() * 0.5;
-    painter.line_segment(
-        [egui::pos2(mid, rect.min.y), egui::pos2(mid, rect.max.y)],
-        Stroke::new(1.0_f32, palette().border),
-    );
-}
-
+/// 电平条已被 `theme::segmented_level`（分段电平条 + 峰值保持线）取代，
+/// 见声道路由表的「电平」列。此处不再保留旧实现，避免死代码。
 fn muted(text: impl Into<String>) -> RichText {
     RichText::new(text).size(12.0).color(palette().muted)
 }
@@ -705,6 +677,16 @@ pub struct StereoLinkApp {
     balance_status: String,
     /// 日志页是否自动滚动到最新一行。
     log_autoscroll: bool,
+    /// 左声道行内波形/频谱（幅度来自真实 `RouteStats.level`）。
+    wave_l: theme::WaveBuf,
+    /// 右声道行内波形/频谱。
+    wave_r: theme::WaveBuf,
+    /// 上一帧时间：给波形/频谱算 dt。
+    last_frame_at: Instant,
+    /// 临时诊断开关（`STEREOLINK_LEVEL_LOG=1`）：把引擎上报的电平周期性写进日志。
+    level_log: bool,
+    /// 上一次电平诊断日志的时间。
+    last_level_log: Option<Instant>,
 }
 
 impl StereoLinkApp {
@@ -781,6 +763,11 @@ impl StereoLinkApp {
             balance_error: None,
             balance_status: String::new(),
             log_autoscroll: true,
+            wave_l: theme::WaveBuf::new(),
+            wave_r: theme::WaveBuf::new(),
+            last_frame_at: Instant::now(),
+            level_log: std::env::var_os("STEREOLINK_LEVEL_LOG").is_some(),
+            last_level_log: None,
         };
         // 首帧直接用第一份快照（触点、采集源、默认输出都在里面）。
         app.apply_endpoint_snapshot();
@@ -857,6 +844,54 @@ impl StereoLinkApp {
     }
 
     // ---- 状态 ----
+
+    /// 推进每路行内「波形 + 频谱」。
+    ///
+    /// 幅度取引擎上报的**真实**电平（`RouteStats.level`），包络在 `WaveBuf` 里做
+    /// 快攻慢放；波形形状是合成信号（egui 侧拿不到原始 PCM），所以它反映的是
+    /// 「这一路现在有多响」，不是真实波形。
+    fn advance_waves(&mut self, dt: f32) {
+        let l = self
+            .route_of(RouteChannel::Left)
+            .map(|r| r.level)
+            .unwrap_or(0.0);
+        let r = self
+            .route_of(RouteChannel::Right)
+            .map(|r| r.level)
+            .unwrap_or(0.0);
+        self.wave_l.advance(dt, l);
+        self.wave_r.advance(dt, r);
+        if self.level_log
+            && self
+                .last_level_log
+                .map(|t| t.elapsed() >= Duration::from_millis(500))
+                .unwrap_or(true)
+        {
+            self.last_level_log = Some(Instant::now());
+            let (frames, src, err) = self
+                .stats
+                .as_ref()
+                .map(|s| {
+                    (
+                        s.captured_frames,
+                        s.source_device.clone(),
+                        s.source_error.clone(),
+                    )
+                })
+                .unwrap_or((0, String::new(), None));
+            tracing::info!(
+                "[电平] 引擎 L {:.3} R {:.3} | 平滑 L {:.3} R {:.3} | 采集帧 {} | 源 {} | 采集错误 {:?} | 引擎 {}",
+                l,
+                r,
+                self.wave_l.level(),
+                self.wave_r.level(),
+                frames,
+                src,
+                err,
+                self.engine.is_some()
+            );
+        }
+    }
 
     fn tick(&mut self) {
         self.poll_format_probe();
@@ -2161,10 +2196,11 @@ impl StereoLinkApp {
             .exact_width(width)
             .resizable(false)
             .frame(
+                // 侧边栏也是玻璃：半透明底色 + 1px 描边，透出底层的柔光纹理。
                 egui::Frame::default()
-                    .fill(palette().panel)
+                    .fill(theme::tokens(is_dark()).sidebar)
                     .inner_margin(Margin::symmetric(margin_x, 12))
-                    .stroke(Stroke::new(1.0_f32, palette().border)),
+                    .stroke(Stroke::new(1.0_f32, theme::tokens(is_dark()).stroke)),
             )
             .show(ctx, |ui| {
                 // 页脚先声明，占掉底部空间：主题 → 系统声音设置 → 身份（最下方）。
@@ -2221,11 +2257,6 @@ impl StereoLinkApp {
                             } else {
                                 page.icon().to_string()
                             };
-                            let fill = if selected {
-                                palette().card_soft
-                            } else {
-                                palette().panel
-                            };
                             let color = if selected {
                                 palette().accent
                             } else {
@@ -2236,23 +2267,23 @@ impl StereoLinkApp {
                                 Sense::click(),
                             );
                             let hovered = response.hovered();
-                            let painter = ui.painter();
-                            painter.rect_filled(
-                                rect,
-                                CornerRadius::same(8),
-                                if hovered { palette().hover } else { fill },
+                            // 选中项 = 玻璃胶囊（accent 半透明底 + 1px 描边 + 左侧竖条）。
+                            // 用一个 0..1 动画量过渡，切页时胶囊「长出来」而不是硬切。
+                            let glow = ui.ctx().animate_value_with_time(
+                                egui::Id::new(("nav_capsule", page.label())),
+                                if selected { 1.0 } else { 0.0 },
+                                theme::tokens(is_dark()).dur_micro,
                             );
-                            if selected {
-                                painter.rect_filled(
-                                    Rect::from_min_size(
-                                        rect.min + Vec2::new(0.0, 7.0),
-                                        Vec2::new(3.0, 20.0),
-                                    ),
-                                    CornerRadius::same(2),
-                                    palette().accent,
+                            if selected || glow > 0.01 {
+                                theme::nav_capsule(ui, rect, is_dark(), glow);
+                            } else if hovered {
+                                ui.painter().rect_filled(
+                                    rect,
+                                    CornerRadius::same(10),
+                                    palette().hover.gamma_multiply(0.75),
                                 );
                             }
-                            painter.text(
+                            ui.painter().text(
                                 rect.center(),
                                 egui::Align2::CENTER_CENTER,
                                 text,
@@ -2687,8 +2718,10 @@ impl StereoLinkApp {
     fn main_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(
+                // 透明底：柔光背景纹理画在窗口最底层（见 update() 里的 paint_background），
+                // 中央面板不铺不透明色，玻璃卡片才透得出底纹。
                 egui::Frame::default()
-                    .fill(palette().bg)
+                    .fill(Color32::TRANSPARENT)
                     .inner_margin(Margin::symmetric(16, 14)),
             )
             .show(ctx, |ui| {
@@ -3249,7 +3282,29 @@ impl StereoLinkApp {
                 },
             );
 
-            // 电平：固定 rect 电平条 + 右对齐百分比。
+            // 行内「波形 + 频谱」装饰：幅度取这一路的真实电平（波形形状是合成的，
+            // 见 theme::WaveBuf 的说明）。左侧声道蓝、右侧声道琥珀。
+            let wave = if channel == RouteChannel::Left {
+                &self.wave_l
+            } else {
+                &self.wave_r
+            };
+            let wave_peak = wave.peak();
+            let wave_level = wave.level();
+            let dark = is_dark();
+            cell(
+                ui,
+                ROUTE_COL_WAVE,
+                ROUTE_ROW_H,
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::new(104.0, 30.0), Sense::hover());
+                    wave.paint(ui, rect, color, dark);
+                },
+            );
+
+            // 电平：分段电平条（12 段绿→黄→红 + 峰值保持线）+ 右对齐百分比。
             let linear = route.as_ref().map(|route| route.level).unwrap_or(0.0);
             cell(
                 ui,
@@ -3257,7 +3312,9 @@ impl StereoLinkApp {
                 ROUTE_ROW_H,
                 Layout::left_to_right(Align::Center),
                 |ui| {
-                    level_bar(ui, 40.0, linear.sqrt(), color);
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::new(44.0, 12.0), Sense::hover());
+                    theme::segmented_level(ui, rect, wave_level.sqrt(), wave_peak, dark);
                     text_cell(
                         ui,
                         36.0,
@@ -3930,8 +3987,14 @@ impl eframe::App for StereoLinkApp {
         let frame_start = Instant::now();
         // 最小化/隐藏期间把心跳降到 1s：既省 CPU，又给托盘事件留一层兜底刷新。
         // 窗口不可见时**不能**用 250ms 心跳（见 handle_close 的注释）。
+        // 声道路由页在路由运行时要画波形/频谱，心跳提到 100ms（10 fps）；
+        // 只有这一页、只有引擎在跑时才加速，其它情况维持 250ms。
+        let routing_animating =
+            !self.window_hidden && self.page == Page::Routing && self.engine.is_some();
         ctx.request_repaint_after(if self.window_hidden {
             Duration::from_secs(1)
+        } else if routing_animating {
+            Duration::from_millis(100)
         } else {
             Duration::from_millis(250)
         });
@@ -3943,6 +4006,14 @@ impl eframe::App for StereoLinkApp {
         let tick_start = Instant::now();
         self.tick();
         let tick_ms = tick_start.elapsed().as_secs_f32() * 1000.0;
+
+        // 行内波形/频谱按真实帧间隔推进（幅度来自引擎上报的 RouteStats.level）。
+        let dt = self.last_frame_at.elapsed().as_secs_f32();
+        self.last_frame_at = Instant::now();
+        self.advance_waves(dt);
+
+        // 柔光背景铺满整窗、画在最底层（LayerId::background），玻璃面板/卡片半透明叠在上面。
+        theme::paint_background(ctx, ctx.screen_rect(), is_dark(), ctx.input(|i| i.time));
 
         // 顶栏已取消：身份/状态在侧边栏底部，诊断徽章在路由页顶部。
         self.sidebar(ctx);
@@ -3967,6 +4038,11 @@ impl eframe::App for StereoLinkApp {
                 );
             }
         }
+    }
+
+    /// 清屏色：玻璃面板是半透明的，底层必须是不透明的主题底色（否则边缘会透黑）。
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        palette().bg.to_normalized_gamma_f32()
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

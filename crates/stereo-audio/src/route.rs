@@ -1877,6 +1877,12 @@ fn encode_native_stereo(mono: &[i16], out: &mut Vec<u8>) -> usize {
 // 采集线程：只开一条，把每个采集块拆进所有路由的队列
 // ---------------------------------------------------------------------------
 
+/// 采集诊断开关（`STEREOLINK_CAPTURE_TRACE=1`）：只用于排查 loopback 采集收不到包的问题。
+fn capture_trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("STEREOLINK_CAPTURE_TRACE").is_some())
+}
+
 fn run_capture(shared: Arc<Shared>, config: RouteEngineConfig) {
     let mut consecutive_failures: u32 = 0;
     loop {
@@ -1917,16 +1923,24 @@ fn run_capture(shared: Arc<Shared>, config: RouteEngineConfig) {
 }
 
 fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> {
+    tracing::info!("[采集] capture_loop 进入");
     let _com = ComGuard::new()?;
     let enumerator = com::enumerator()?;
     let selector = crate::sync::selector_for(&config.source_endpoint);
     let device = com::resolve(&enumerator, &selector, DataFlow::Render)?;
+    tracing::info!("[采集] 已解析端点 {}", device.name);
     if let Ok(mut slot) = shared.source_device.lock() {
         *slot = device.name.clone();
     }
 
     let client = com::activate_client(&device.device)?;
+    if capture_trace() {
+        tracing::info!("[采集] 已激活 IAudioClient");
+    }
     let info = com::mix_format(&client)?;
+    if capture_trace() {
+        tracing::info!("[采集] 混音格式 {}", info.describe());
+    }
     let format = CaptureFormat::from_info(&info)?;
     let buffer_ms = config.effective_capture_buffer_ms();
 
@@ -1970,10 +1984,21 @@ fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> 
         )
     })?;
 
+    if capture_trace() {
+        tracing::info!("[采集] Initialize 完成（回环，buffer {} ms）", buffer_ms);
+    }
+
     let capture: IAudioCaptureClient = unsafe { client.GetService() }
         .map_err(|e| AudioError::wasapi(e.code().0, "GetService(IAudioCaptureClient, route)"))?;
     unsafe { client.Start() }
         .map_err(|e| AudioError::wasapi(e.code().0, "Start(route capture)"))?;
+    if capture_trace() {
+        tracing::info!(
+            "[采集] 已开流 {}（回环，buffer {} ms）",
+            device.name,
+            buffer_ms
+        );
+    }
 
     // 采集已经打开：清掉上一次失败的重试状态（音频又流动起来，GUI 的错误提示该消失）。
     if let Ok(mut slot) = shared.source_error.lock() {
@@ -1982,6 +2007,7 @@ fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> 
     shared.source_retrying.store(0, Ordering::Relaxed);
 
     let mut dsp = CaptureDsp::new(format, shared.rate, config.capture_gain);
+    let mut last_trace = Instant::now();
     let result = (|| -> Result<()> {
         while !shared.stop.load(Ordering::Relaxed) {
             let pending = match unsafe { capture.GetNextPacketSize() } {
@@ -1997,6 +2023,10 @@ fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> 
                 }
             };
             if pending == 0 {
+                if capture_trace() && last_trace.elapsed() >= Duration::from_secs(2) {
+                    last_trace = Instant::now();
+                    tracing::info!("[采集] 暂无数据包（GetNextPacketSize=0）");
+                }
                 thread::sleep(Duration::from_millis(CAPTURE_POLL_MS));
                 continue;
             }
