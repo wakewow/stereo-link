@@ -186,26 +186,9 @@ fn card_frame() -> egui::Frame {
     theme::glass_frame(GlassLevel::Base, is_dark())
 }
 
-/// 玻璃卡片 + 悬停流光：`card_frame().show(..)` 的包装。
-///
-/// 收成一层的意义在于「画完内容再补描边流光」——必须拿到卡片的最终矩形，
-/// 而矩形只有 `show` 返回后才知道。调用点写法与 `card_frame().show` 完全一样。
+/// 玻璃卡片：`card_frame().show(..)` 的薄包装，调用点写法与它完全一样。
 fn card<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let card = card_frame().show(ui, add_contents);
-    decorate_card(ui, &card.response);
-    card.inner
-}
-
-/// 卡片悬停流光：鼠标移上去时沿圆角描边跑一圈高光。
-///
-/// 必须画在卡片内容之后（同一层、后画即在上），所以调用点都是
-/// `let card = card_frame().show(..); decorate_card(ui, &card.response);`。
-/// 卡片本身仍是 `Sense::hover()`，不会吞掉里面控件的点击。
-fn decorate_card(ui: &egui::Ui, resp: &egui::Response) {
-    let dt = ui.input(|i| i.stable_dt).clamp(0.0, 0.1);
-    let hover_target = if resp.hovered() { 1.0 } else { 0.0 };
-    let hover = theme::spring(ui.ctx(), (resp.id, "card-hover"), hover_target, dt);
-    theme::card_border_flow(ui, resp.rect, hover, is_dark(), 0.0);
+    card_frame().show(ui, add_contents).inner
 }
 
 /// 统一按钮（自动带当前主题）。主操作 `Primary`、次操作 `Secondary`、
@@ -257,14 +240,12 @@ fn icon_button(
     tip: &str,
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
-    let dt = ui.input(|i| i.stable_dt).clamp(0.0, 0.1);
-    let hover_target = if resp.hovered() { 1.0 } else { 0.0 };
-    let hover = theme::spring(ui.ctx(), (resp.id, "icon-hover"), hover_target, dt);
-    if hover > 0.01 {
+    // 即时反馈，不做淡入：界面里没有随时间变化的动效。
+    if resp.hovered() {
         let fill = if is_dark() {
-            Color32::from_white_alpha((11.0 * hover).round() as u8)
+            Color32::from_white_alpha(11)
         } else {
-            Color32::from_black_alpha((9.0 * hover).round() as u8)
+            Color32::from_black_alpha(9)
         };
         ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
     }
@@ -960,6 +941,10 @@ impl StereoLinkApp {
         visuals.widgets.active.fg_stroke =
             Stroke::new(1.0_f32, if pal.dark { Color32::WHITE } else { pal.text });
         style.visuals = visuals;
+        // 连带把 egui 自带的过渡也关掉：折叠区展开、下拉弹出、控件悬停/按下的
+        // 渐变都按 `animation_time` 补间。设成 0 就全部变成瞬时切换，
+        // 界面里再没有任何随时间变化的东西（只剩用户在看的波形/电平）。
+        style.animation_time = 0.0;
     }
 
     // ---- 状态 ----
@@ -2384,14 +2369,8 @@ impl StereoLinkApp {
                             );
                             let hovered = response.hovered();
                             // 选中项 = 玻璃胶囊（accent 半透明底 + 1px 描边 + 左侧竖条）。
-                            // 用一个 0..1 动画量过渡，切页时胶囊「长出来」而不是硬切。
-                            let glow = ui.ctx().animate_value_with_time(
-                                egui::Id::new(("nav_capsule", page.label())),
-                                if selected { 1.0 } else { 0.0 },
-                                theme::tokens(is_dark()).dur_micro,
-                            );
-                            if selected || glow > 0.01 {
-                                theme::nav_capsule(ui, rect, is_dark(), glow);
+                            if selected {
+                                theme::nav_capsule(ui, rect, is_dark());
                             } else if hovered {
                                 ui.painter().rect_filled(
                                     rect,
@@ -2519,9 +2498,6 @@ impl StereoLinkApp {
                     .selected_text(chosen.label())
                     .width(84.0)
                     .show_ui(ui, |ui| {
-                        let enter = theme::popup_enter(ui.ctx(), "theme_mode");
-                        ui.set_opacity(enter);
-                        ui.add_space((1.0 - enter) * 4.0);
                         for mode in ThemeMode::ALL {
                             if ui.selectable_label(chosen == mode, mode.label()).clicked() {
                                 chosen = mode;
@@ -2697,9 +2673,6 @@ impl StereoLinkApp {
                         .size(12.5),
                 })
                 .show_ui(ui, |ui| {
-                    let enter = theme::popup_enter(ui.ctx(), "capture_source");
-                    ui.set_opacity(enter);
-                    ui.add_space((1.0 - enter) * 4.0);
                     for ep in &devices {
                         let kind = capture_kind(&ep.name);
                         let selected = capture_id
@@ -2775,9 +2748,6 @@ impl StereoLinkApp {
                     .width(150.0)
                     .selected_text(follow.label())
                     .show_ui(ui, |ui| {
-                        let enter = theme::popup_enter(ui.ctx(), "volume_follow");
-                        ui.set_opacity(enter);
-                        ui.add_space((1.0 - enter) * 4.0);
                         for option in [VolumeFollow::Auto, VolumeFollow::On, VolumeFollow::Off] {
                             ui.selectable_value(&mut follow, option, option.label());
                         }
@@ -3165,9 +3135,6 @@ impl StereoLinkApp {
                                     .color(palette().text)
                             })
                             .show_ui(ui, |ui| {
-                                let enter = theme::popup_enter(ui.ctx(), "sync_mic");
-                                ui.set_opacity(enter);
-                                ui.add_space((1.0 - enter) * 4.0);
                                 for m in &self.sync_mics {
                                     let id = m.id().to_string();
                                     let text = format!(
@@ -3466,9 +3433,6 @@ impl StereoLinkApp {
                                 .size(13.0)
                         })
                         .show_ui(ui, |ui| {
-                            let enter = theme::popup_enter(ui.ctx(), ("route", label));
-                            ui.set_opacity(enter);
-                            ui.add_space((1.0 - enter) * 4.0);
                             if ui
                                 .selectable_label(
                                     current.is_empty(),
@@ -3921,9 +3885,6 @@ impl StereoLinkApp {
                                         RichText::new(clip_text(&selected, 26)).size(12.0),
                                     )
                                     .show_ui(ui, |ui| {
-                                        let enter = theme::popup_enter(ui.ctx(), ("fmt", &ep.id));
-                                        ui.set_opacity(enter);
-                                        ui.add_space((1.0 - enter) * 4.0);
                                         for f in list {
                                             ui.selectable_value(
                                                 choice,
@@ -4298,14 +4259,11 @@ impl eframe::App for StereoLinkApp {
         // 窗口不可见时**不能**用 250ms 心跳（见 handle_close 的注释）。
         // 声道路由页在路由运行时要画波形/频谱，心跳提到 100ms（10 fps）；
         // 只有这一页、只有引擎在跑时才加速，其它情况维持 250ms。
+        // 动效拆完后这里不再有 60 fps 分支（toast 自己按过期时间唤醒，见 `Toasts::show`）。
         let routing_animating =
             !self.window_hidden && self.page == Page::Routing && self.engine.is_some();
-        // toast 有存活项时用 16ms 心跳，让淡入淡出按 60fps 走；否则回落到常规心跳。
-        let toast_animating = !self.toasts.is_empty();
         ctx.request_repaint_after(if self.window_hidden {
             Duration::from_secs(1)
-        } else if toast_animating {
-            Duration::from_millis(16)
         } else if routing_animating {
             Duration::from_millis(100)
         } else {
@@ -4326,7 +4284,7 @@ impl eframe::App for StereoLinkApp {
         self.advance_waves(dt);
 
         // 柔光背景铺满整窗、画在最底层（LayerId::background），玻璃面板/卡片半透明叠在上面。
-        theme::paint_background(ctx, ctx.screen_rect(), is_dark(), ctx.input(|i| i.time));
+        theme::paint_background(ctx, ctx.screen_rect(), is_dark());
 
         // 顶栏已取消：身份/状态在侧边栏底部，诊断徽章在路由页顶部。
         self.sidebar(ctx);

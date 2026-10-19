@@ -17,7 +17,7 @@
 
 #define AppName        "StereoLink 立体声链"
 #define AppNameShort   "StereoLink"
-#define AppVersion     "0.5.2"
+#define AppVersion     "0.5.3"
 #define AppExe         "stereo-link.exe"
 #define AppPublisher   "StereoLink contributors"
 #define AppURL         "https://github.com/wakewow/stereo-link"
