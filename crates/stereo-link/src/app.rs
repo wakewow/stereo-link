@@ -634,6 +634,8 @@ pub struct StereoLinkApp {
     sync_busy: bool,
     /// 后台自校验线程的结果通道（延迟对齐 + 音量平衡一起返回）。
     sync_rx: Option<std::sync::mpsc::Receiver<CalibrateOutcome>>,
+    /// 后台体检线程的结果通道（麦克风能不能采到声音；`Err` 只用于参数非法）。
+    check_rx: Option<std::sync::mpsc::Receiver<Result<MicHealth, String>>>,
     /// 最近一次自校验结果。
     sync_result: Option<SyncResult>,
     /// 手动对齐点击串正在播。
@@ -749,6 +751,7 @@ impl StereoLinkApp {
             sync_status: "还没选麦克风。".to_string(),
             sync_busy: false,
             sync_rx: None,
+            check_rx: None,
             sync_result: None,
             clicks_busy: false,
             clicks_at: None,
@@ -911,6 +914,7 @@ impl StereoLinkApp {
     fn tick(&mut self) {
         self.poll_format_probe();
         self.poll_sync();
+        self.poll_check();
         // 把「要看什么」推给后台轮询线程，再把它的最新快照应用到界面。
         self.sync_poll_input();
         self.apply_endpoint_snapshot();
@@ -1654,20 +1658,47 @@ impl StereoLinkApp {
     }
 
     /// 对选中麦克风做一次体检（决定「自动对齐」能不能用）。
+    ///
+    /// 体检要真的录 1 s（独占模式优先，失败还要按几种格式重试），**必须放到后台线程**：
+    /// 早先是同步调用的，点一下「体检」整个界面会僵住约 1 秒。
     fn check_mic(&mut self) {
+        if self.check_rx.is_some() {
+            return;
+        }
         if self.sync_mic.is_empty() {
             self.sync_status = "先选一个麦克风。".to_string();
             return;
         }
         let mic = self.sync_mic.clone();
+        tracing::info!("[自校验] 开始体检麦克风：{mic}");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let health = stereo_audio::mic_health(&mic, 1_000).map_err(|e| e.to_string());
+            let _ = tx.send(health);
+        });
+        self.check_rx = Some(rx);
         self.sync_status = "正在体检麦克风（请保持环境安静）…".to_string();
-        match stereo_audio::mic_health(&mic, 1_000) {
-            Ok(h) => {
+    }
+
+    /// 收后台体检结果。
+    fn poll_check(&mut self) {
+        let Some(rx) = self.check_rx.as_ref() else {
+            return;
+        };
+        match rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.check_rx = None;
+                self.sync_status = "体检线程异常退出。".to_string();
+            }
+            Ok(Ok(h)) => {
+                self.check_rx = None;
                 self.sync_status = h.describe();
                 tracing::info!("[自校验] 麦克风体检：{}", h.describe());
                 self.sync_health = Some(h);
             }
-            Err(e) => {
+            Ok(Err(e)) => {
+                self.check_rx = None;
                 self.sync_status = format!("体检失败：{e}");
                 self.sync_health = None;
             }
@@ -1677,6 +1708,12 @@ impl StereoLinkApp {
     /// 后台跑一次「延迟对齐 + 音量平衡」：先量两台箱的到达时差，再分别量左右电平。
     fn start_sync(&mut self) {
         if self.sync_busy {
+            return;
+        }
+        // 体检线程正在采麦（独占模式优先），此刻开校准必然抢不到设备。
+        // 界面上的「校准」按钮在体检期间本来就是禁用的，这里兜住「应用并复测」那条路。
+        if self.check_rx.is_some() {
+            self.sync_status = "正在体检麦克风，等体检结束再校准。".to_string();
             return;
         }
         let mic = self.sync_mic.clone();
@@ -3026,12 +3063,21 @@ impl StereoLinkApp {
                 if ui.button("刷新").clicked() {
                     action = Some("refresh");
                 }
-                if ui.button("体检").clicked() {
+                // 体检在后台线程跑（界面不再僵住），体检期间禁止重复点击，也禁止同时开校准——
+                // 两者都会短暂独占麦克风。
+                let check_busy = self.check_rx.is_some();
+                if ui
+                    .add_enabled(
+                        !check_busy,
+                        egui::Button::new(if check_busy { "体检中…" } else { "体检" }),
+                    )
+                    .clicked()
+                {
                     action = Some("check");
                 }
                 if ui
                     .add_enabled(
-                        !self.sync_busy && !self.sync_mic.is_empty(),
+                        !self.sync_busy && !check_busy && !self.sync_mic.is_empty(),
                         egui::Button::new(if self.sync_busy {
                             "校准中…"
                         } else {
