@@ -680,7 +680,7 @@ pub fn popup_enter(ctx: &egui::Context, salt: impl std::hash::Hash) -> f32 {
     let frame = ctx.cumulative_pass_nr();
     let far = id.with("frame");
     let prev: Option<u64> = ctx.data_mut(|d| d.get_temp(far));
-    let fresh = prev.map_or(true, |f| frame.saturating_sub(f) > 1);
+    let fresh = prev.is_none_or(|f| frame.saturating_sub(f) > 1);
     let mut s: Spring = ctx
         .data_mut(|d| d.get_temp::<Spring>(id))
         .unwrap_or_else(|| Spring::new(0.0));
