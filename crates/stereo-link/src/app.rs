@@ -62,6 +62,18 @@ fn is_dark() -> bool {
     DARK_MODE.load(Ordering::Relaxed)
 }
 
+/// 让原生标题栏跟随应用主题。
+///
+/// Windows 11 上 winit 会把它翻成 `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)`；
+/// 不设的话，浅色界面会顶着一条系统深色标题栏——窗口上沿和下方 UI 风格割裂。
+fn sync_window_theme(ctx: &egui::Context, dark: bool) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(if dark {
+        egui::SystemTheme::Dark
+    } else {
+        egui::SystemTheme::Light
+    }));
+}
+
 /// 一套调色板：深浅主题各一份，颜色语义与旧常量一一对应。
 #[derive(Debug, Clone, Copy)]
 struct Palette {
@@ -638,6 +650,8 @@ pub struct StereoLinkApp {
     source_volume_revision: u64,
     /// 最近一次应用的界面深浅（主题切换时重设样式）。
     theme_dark: bool,
+    /// 最近一次下发给系统的窗口主题；`None` 表示还没发过（首帧补发）。
+    window_theme: Option<bool>,
     /// 帧耗时日志级别：0=关（默认）；1=只打 >16 ms 的慢帧；2=每帧都打（实测用）。
     /// 环境变量 `STEREOLINK_FRAME_LOG` 只在启动时读一次，平时零开销。
     frame_log: u8,
@@ -743,6 +757,7 @@ impl StereoLinkApp {
             poll,
             source_volume_revision: 0,
             theme_dark: dark,
+            window_theme: None,
             frame_log: match std::env::var("STEREOLINK_FRAME_LOG") {
                 Ok(value) if value.trim() == "2" => 2,
                 Ok(_) => 1,
@@ -1120,6 +1135,10 @@ impl StereoLinkApp {
     fn sync_theme(&mut self, ctx: &egui::Context) {
         let dark = matches!(ctx.theme(), egui::Theme::Dark);
         set_dark_mode(dark);
+        if self.window_theme != Some(dark) {
+            self.window_theme = Some(dark);
+            sync_window_theme(ctx, dark);
+        }
         if dark != self.theme_dark {
             self.theme_dark = dark;
             Self::apply_visuals(ctx);
@@ -2192,15 +2211,19 @@ impl StereoLinkApp {
             SIDEBAR_W_COLLAPSED
         };
         let margin_x = if self.sidebar_open { 10 } else { 6 };
-        egui::SidePanel::left("sidebar")
+        let panel = egui::SidePanel::left("sidebar")
             .exact_width(width)
             .resizable(false)
             .frame(
-                // 侧边栏也是玻璃：半透明底色 + 1px 描边，透出底层的柔光纹理。
+                // 侧边栏也是玻璃：半透明底色，透出底层的柔光底纹。
+                //
+                // 这里**故意不描边**：侧边栏的左/上/下三条边本身就贴着窗口边框，四边描一圈
+                // 只会在窗口边缘凭空多出一道浅色实线——上沿那条尤其像「第二个标题栏」，
+                // 也就是用户说的「莫名其妙的白边」。设计原型里侧边栏是
+                // `border: 0; border-right: 1px solid`，所以这里也只在右缘补一条分隔线。
                 egui::Frame::default()
                     .fill(theme::tokens(is_dark()).sidebar)
-                    .inner_margin(Margin::symmetric(margin_x, 12))
-                    .stroke(Stroke::new(1.0_f32, theme::tokens(is_dark()).stroke)),
+                    .inner_margin(Margin::symmetric(margin_x, 12)),
             )
             .show(ctx, |ui| {
                 // 页脚先声明，占掉底部空间：主题 → 系统声音设置 → 身份（最下方）。
@@ -2301,6 +2324,22 @@ impl StereoLinkApp {
                         }
                     });
             });
+
+        // 侧边栏右缘的 1px 分隔线（对应设计原型的 `border-right`）。
+        // 面板自身不描边，这条线单独用一层画在面板之外，免得被 `inner_margin` 裁掉。
+        let panel_rect = panel.response.rect;
+        ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::new("sidebar_separator"),
+        ))
+        .rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(panel_rect.right() - 1.0, panel_rect.top()),
+                panel_rect.right_bottom(),
+            ),
+            0.0,
+            theme::tokens(is_dark()).stroke,
+        );
     }
 
     /// 侧边栏底部：应用身份（图标 + 名称 + 简介），上方是运行状态胶囊。

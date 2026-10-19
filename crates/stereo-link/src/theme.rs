@@ -3,11 +3,19 @@
 //!
 //! egui 是即时模式、**没有 `backdrop-filter`**，所以「毛玻璃」用三层近似：
 //!
-//! 1. 预渲染一张柔光渐变 + 模糊色斑 + 细噪点的纹理，铺在窗口最底层
-//!    （`egui::LayerId::background()`），漂移只改 UV，不重新栅格化；
+//! 1. 底层即时画一片「柔光底纹」：整屏竖直渐变 + 四角对称的柔光色斑 +
+//!    极淡噪点，全部是 `Mesh` 三角（画在 `egui::LayerId::background()`）。
+//!    色斑在**像素空间**是正圆，四团同半径、同透明度，漂移只改圆心；
 //! 2. 卡片/侧边栏用**半透明**填充（alpha 0.05~0.20），让底纹透上来 —— 这是
 //!    视觉上最接近「磨砂玻璃」的部分；
 //! 3. 1px 描边 + 顶部内高光 + 阴影，制造玻璃的厚度与光感。
+//!
+//! ⚠️ egui 的 `Color32` 是**预乘 alpha** 格式，GL 混合是
+//! `out = src.rgb + dst.rgb * (1 - src.a)`。所以「白色 + 低 alpha」必须写成
+//! `from_rgba_premultiplied(a, a, a, a)`（即 `from_white_alpha(a)`），
+//! 而不是 `from_rgba_premultiplied(255, 255, 255, a)` —— 后者 RGB(255) 远超
+//! alpha(a)，混合时会过冲饱和成**刺眼的纯白 1px 实线**（曾经全站卡片/侧边栏/
+//! 行内波形框都套着这样一圈白边）。合法预乘色的硬约束：任一通道 ≤ alpha。
 //!
 //! 颜色语义沿用界面既有的「颜色即信号」约定：左声道蓝、右声道琥珀，
 //! 电平条绿→黄→红。深浅两套 token 保证对比度（深色底文字 #E8ECF4，
@@ -28,6 +36,11 @@ pub struct Tokens {
     /// 卡片（基础层）填充：半透明，底纹能透上来。
     pub glass_base: Color32,
     /// 抬升层（表格行、内嵌小块）。
+    /// 「抬升玻璃」层级：留给浮层/提示气泡这类真正浮在卡片之上的面。
+    ///
+    /// 行内波形框原本用它当底，但设计原型里那一块是**无边框的极淡底色**，
+    /// 所以暂时没有消费者；保留 token 以免下次做浮层时又要重新配色。
+    #[allow(dead_code)]
     pub glass_raised: Color32,
     /// 侧边栏底色。
     pub sidebar: Color32,
@@ -53,6 +66,12 @@ pub struct Tokens {
     pub bg_top: Color32,
     /// 背景渐变底部色。
     pub bg_bottom: Color32,
+    /// 色斑峰值不透明度（0..=255）。
+    pub blob_alpha: u8,
+    /// 色斑半径（px，像素空间正圆，不随窗口宽高比拉伸）。
+    pub blob_radius: f32,
+    /// 细噪点最大叠加 alpha（0 = 关闭）。
+    pub grain_alpha: u8,
     /// 卡片圆角。
     pub radius: u8,
     /// 微交互时长（秒）：悬停/切换/胶囊出现。
@@ -64,8 +83,9 @@ pub const DARK_TOKENS: Tokens = Tokens {
     glass_base: Color32::from_rgba_premultiplied(14, 17, 23, 150),
     glass_raised: Color32::from_rgba_premultiplied(22, 26, 34, 190),
     sidebar: Color32::from_rgba_premultiplied(11, 14, 19, 170),
-    stroke: Color32::from_rgba_premultiplied(255, 255, 255, 38),
-    highlight: Color32::from_rgba_premultiplied(255, 255, 255, 46),
+    // 白描边/内高光：预乘色必须 RGB == alpha，写 (255,255,255,38) 会变成纯白实线。
+    stroke: Color32::from_rgba_premultiplied(38, 38, 38, 38),
+    highlight: Color32::from_rgba_premultiplied(46, 46, 46, 46),
     accent: Color32::from_rgb(56, 189, 248),
     accent2: Color32::from_rgb(167, 139, 250),
     wave_l: Color32::from_rgb(96, 165, 250),
@@ -75,17 +95,27 @@ pub const DARK_TOKENS: Tokens = Tokens {
     meter_high: Color32::from_rgb(248, 113, 113),
     bg_top: Color32::from_rgb(20, 24, 33),
     bg_bottom: Color32::from_rgb(8, 10, 14),
+    blob_alpha: 64,
+    blob_radius: 520.0,
+    // 噪点上限：渲染偏移 = (255-L_bg)·a/255，a 在 [0,α] 上均匀 → σ ≈ 0.247·α（L_bg≈37）。
+    // α=7 时 σ≈1.7 luma，是设计原型的 2 倍多，3 倍裁切下肉眼可见颗粒；α=3 → σ≈0.74，与原型 0.82 同级。
+    grain_alpha: 3,
     radius: 14,
     dur_micro: 0.18,
 };
 
 /// 浅色 token。
 pub const LIGHT_TOKENS: Tokens = Tokens {
-    glass_base: Color32::from_rgba_premultiplied(255, 255, 255, 186),
-    glass_raised: Color32::from_rgba_premultiplied(255, 255, 255, 214),
-    sidebar: Color32::from_rgba_premultiplied(248, 251, 255, 196),
-    stroke: Color32::from_rgba_premultiplied(15, 23, 42, 34),
-    highlight: Color32::from_rgba_premultiplied(255, 255, 255, 220),
+    // 白色玻璃同样必须预乘：白色 @ α 的预乘值是 (α, α, α, α)，写 (255,255,255,α)
+    // 会变成「不透明的纯白卡片」——浅色主题会失去通透感，也会盖掉底层柔光。
+    glass_base: Color32::from_rgba_premultiplied(186, 186, 186, 186),
+    glass_raised: Color32::from_rgba_premultiplied(214, 214, 214, 214),
+    // (248,251,255) @ 76.9% → (191,193,196,196)。
+    sidebar: Color32::from_rgba_premultiplied(191, 193, 196, 196),
+    // 浅色主题的描边是「深蓝 + 低 alpha」：预乘值 = 各通道 × alpha/255。
+    // (15,23,42) @ 13.3% → (2,3,6,34)。写原始色会过冲成一条发亮的蓝灰实线。
+    stroke: Color32::from_rgba_premultiplied(2, 3, 6, 34),
+    highlight: Color32::from_rgba_premultiplied(220, 220, 220, 220),
     accent: Color32::from_rgb(2, 132, 199),
     accent2: Color32::from_rgb(109, 40, 217),
     wave_l: Color32::from_rgb(37, 99, 235),
@@ -95,6 +125,10 @@ pub const LIGHT_TOKENS: Tokens = Tokens {
     meter_high: Color32::from_rgb(185, 28, 28),
     bg_top: Color32::from_rgb(240, 245, 251),
     bg_bottom: Color32::from_rgb(222, 230, 241),
+    blob_alpha: 80,
+    blob_radius: 520.0,
+    // 浅色底噪点本就极淡（(255-L_bg) 只有约 19），与深色取同一上限即可。
+    grain_alpha: 3,
     radius: 14,
     dur_micro: 0.18,
 };
@@ -134,53 +168,32 @@ pub fn glass_frame(level: GlassLevel, dark: bool) -> egui::Frame {
         })
 }
 
-/// 取（并缓存）柔光背景纹理。同一主题只生成一次，之后复用。
-pub fn background_texture(ctx: &egui::Context, dark: bool) -> egui::TextureHandle {
-    let id = egui::Id::new(("stereo-link-bg", dark));
+/// 取（并缓存）一层**无缝**细噪点贴图：128×128，alpha 落在 `0..=max_alpha`。
+///
+/// 白噪逐像素互不相关，平铺时不存在「接缝」可言 —— 这跟把一张**渐变**贴图拉去
+/// 平铺是两回事：后者在环绕处必然出现一条硬边（本轮修掉的缺陷之一）。
+fn grain_texture(ctx: &egui::Context, max_alpha: u8) -> egui::TextureHandle {
+    let id = egui::Id::new(("stereo-link-grain", max_alpha));
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return tex;
     }
-    let size = 512usize;
-    let t = tokens(dark);
-    // 三团模糊色斑：左声道蓝、右声道琥珀、次强调紫。
-    let blobs: [(f32, f32, f32, Color32, f32); 3] = [
-        (0.20, 0.16, 0.52, t.wave_l, 0.42),
-        (0.86, 0.30, 0.46, t.wave_r, 0.26),
-        (0.52, 0.92, 0.60, t.accent2, 0.30),
-    ];
-    let mut pixels = Vec::with_capacity(size * size);
-    for y in 0..size {
-        let v = y as f32 / (size - 1) as f32;
-        let base = lerp_color(t.bg_top, t.bg_bottom, v);
-        for x in 0..size {
-            let u = x as f32 / (size - 1) as f32;
-            let mut c = base;
-            for (bx, by, br, col, strength) in blobs {
-                let d = ((u - bx).powi(2) + (v - by).powi(2)).sqrt();
-                let w = (1.0 - (d / br)).clamp(0.0, 1.0);
-                if w > 0.0 {
-                    c = blend(c, col, w * w * strength);
-                }
-            }
-            // 细噪点：打散渐变的「塑料感」，也让玻璃的透光有颗粒。
-            let n = (hash01(x as u32, y as u32) - 0.5) * 7.0;
-            pixels.push(shade(c, n));
+    const S: usize = 128;
+    let mut pixels = Vec::with_capacity(S * S);
+    for y in 0..S {
+        for x in 0..S {
+            let a = (hash01(x as u32, y as u32) * max_alpha as f32).round() as u8;
+            pixels.push(Color32::from_rgba_premultiplied(a, a, a, a));
         }
     }
-    let image = egui::ColorImage {
-        size: [size, size],
-        pixels,
-    };
     let tex = ctx.load_texture(
-        if dark {
-            "stereo-link-bg-dark"
-        } else {
-            "stereo-link-bg-light"
+        "stereo-link-grain",
+        egui::ColorImage {
+            size: [S, S],
+            pixels,
         },
-        image,
         egui::TextureOptions {
-            magnification: egui::TextureFilter::Linear,
-            minification: egui::TextureFilter::Linear,
+            magnification: egui::TextureFilter::Nearest,
+            minification: egui::TextureFilter::Nearest,
             wrap_mode: egui::TextureWrapMode::Repeat,
             mipmap_mode: None,
         },
@@ -189,20 +202,156 @@ pub fn background_texture(ctx: &egui::Context, dark: bool) -> egui::TextureHandl
     tex
 }
 
-/// 把背景纹理铺满 `rect`（画在窗口最底层）。`time` 用 `ctx.input(|i| i.time)`，
-/// 漂移靠 UV 偏移 + REPEAT 环绕，每帧零栅格化成本。
+/// 往网格里追加一个四边形：上边两顶点取 `c_top`、下边两顶点取 `c_bottom`，
+/// 顶点色线性插值出来就是一条竖直渐变（顶点顺序与 `Mesh::add_colored_rect` 一致）。
+fn push_gradient_quad(mesh: &mut egui::Mesh, rect: Rect, c_top: Color32, c_bottom: Color32) {
+    let base = mesh.vertices.len() as u32;
+    let v = |pos: egui::Pos2, color: Color32| egui::epaint::Vertex {
+        pos,
+        uv: egui::Pos2::ZERO,
+        color,
+    };
+    mesh.vertices.push(v(rect.left_top(), c_top));
+    mesh.vertices.push(v(rect.right_top(), c_top));
+    mesh.vertices.push(v(rect.right_bottom(), c_bottom));
+    mesh.vertices.push(v(rect.left_bottom(), c_bottom));
+    mesh.indices
+        .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+/// 往网格里追加一团柔光色斑：像素空间**正圆**，中心最亮、向外衰减到全透明。
+///
+/// 用同心环三角带近似径向渐变，环数越多过渡越接近真模糊。颜色全程保持预乘
+/// （RGB 与 alpha 同比例衰减），插值时色相不会跑偏，也不会在边缘留下死黑圈。
+fn push_blob(
+    mesh: &mut egui::Mesh,
+    center: egui::Pos2,
+    radius: f32,
+    color: Color32,
+    alpha: u8,
+    segments: usize,
+    rings: usize,
+) {
+    if radius <= 1.0 || alpha == 0 || rings == 0 || segments < 3 {
+        return;
+    }
+    let tint = |a: u8| {
+        let s = a as u32;
+        Color32::from_rgba_premultiplied(
+            (color.r() as u32 * s / 255) as u8,
+            (color.g() as u32 * s / 255) as u8,
+            (color.b() as u32 * s / 255) as u8,
+            a,
+        )
+    };
+    let mut starts = Vec::with_capacity(rings + 1);
+    for k in 0..=rings {
+        starts.push(mesh.vertices.len() as u32);
+        let x = k as f32 / rings as f32;
+        // 1.2 次幂：比线性稍快地收到 0，边缘更柔，又不像高斯那样只剩中心一小坨。
+        let a = ((1.0 - x).powf(1.2) * alpha as f32)
+            .round()
+            .clamp(0.0, 255.0) as u8;
+        let c = tint(a);
+        let r = radius * x;
+        for i in 0..segments {
+            let ang = i as f32 / segments as f32 * std::f32::consts::TAU;
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: center + Vec2::new(ang.cos(), ang.sin()) * r,
+                uv: egui::Pos2::ZERO,
+                color: c,
+            });
+        }
+    }
+    for k in 0..rings {
+        let (inner, outer) = (starts[k], starts[k + 1]);
+        for i in 0..segments as u32 {
+            let j = (i + 1) % segments as u32;
+            mesh.indices.extend_from_slice(&[
+                inner + i,
+                inner + j,
+                outer + j,
+                inner + i,
+                outer + j,
+                outer + i,
+            ]);
+        }
+    }
+}
+
+/// 四角柔光色斑的取色：左上 / 右上 / 左下 / 右下。
+///
+/// 四团**同半径、同透明度**，只有色相不同 —— 这是「背景不像几块拼板」的关键。
+/// 深色主题直接复用语义色（左声道蓝 / 次强调紫 / 主强调青 / 右声道琥珀）；浅色
+/// 主题下同一组色相必须调淡，饱和色铺在浅底上会发脏。
+fn blob_colors(dark: bool) -> [Color32; 4] {
+    let t = tokens(dark);
+    if dark {
+        [t.wave_l, t.accent2, t.accent, t.wave_r]
+    } else {
+        [
+            Color32::from_rgb(147, 197, 253),
+            Color32::from_rgb(196, 181, 253),
+            Color32::from_rgb(125, 211, 252),
+            Color32::from_rgb(253, 186, 116),
+        ]
+    }
+}
+
+/// 把「柔光底纹」铺满 `rect`（画在窗口最底层）。`time` 用 `ctx.input(|i| i.time)`。
+///
+/// 全部即时画成网格，**不再用平铺贴图**：贴图方案有两处硬伤 ——
+/// (1) 贴图在环绕处不连续，`uv` 越过 1.0 时留下一条笔直的接缝；
+/// (2) 正方形贴图铺进非正方形窗口，色斑会被宽高比压成椭圆。
+/// 现在色斑在像素空间是正圆、四团同半径同透明度四角对称，背景才是一片连贯
+/// 的柔光，而不是几块颜色各异的拼板。漂移只改圆心，每帧不重新栅格化任何东西。
 pub fn paint_background(ctx: &egui::Context, rect: Rect, dark: bool, time: f64) {
-    let tex = background_texture(ctx, dark);
-    let t = time as f32;
-    // 两个不同周期的正弦，让漂移看起来不循环。
-    let drift = Vec2::new((t * 0.035).sin() * 0.05, (t * 0.023).cos() * 0.05);
-    let uv = Rect::from_min_max(
-        egui::pos2(0.20 + drift.x, 0.20 + drift.y),
-        egui::pos2(1.20 + drift.x, 1.20 + drift.y),
-    );
-    let mut mesh = egui::Mesh::with_texture(tex.id());
-    mesh.add_rect_with_uv(rect, uv, Color32::WHITE);
-    ctx.layer_painter(egui::LayerId::background()).add(mesh);
+    let t = tokens(dark);
+    let painter = ctx.layer_painter(egui::LayerId::background());
+    let mut mesh = egui::Mesh::default();
+
+    // 1) 基底：整屏竖直渐变（顶亮底暗）。
+    push_gradient_quad(&mut mesh, rect, t.bg_top, t.bg_bottom);
+
+    // 2) 四团柔光色斑：圆心固定在窗口的 20%/80% 与 26%/72% 处 —— 取位与设计原型
+    //    一致，且天然关于窗口中心对称，窗口缩放不会失衡。
+    let r = t.blob_radius;
+    let cx = [
+        rect.left() + rect.width() * 0.20,
+        rect.left() + rect.width() * 0.80,
+    ];
+    let cy = [
+        rect.top() + rect.height() * 0.26,
+        rect.top() + rect.height() * 0.72,
+    ];
+    let spots = [
+        egui::pos2(cx[0], cy[0]),
+        egui::pos2(cx[1], cy[0]),
+        egui::pos2(cx[0], cy[1]),
+        egui::pos2(cx[1], cy[1]),
+    ];
+    // 原型 drift1..4 的周期（秒）：四团各漂各的，看起来不循环。
+    const PERIODS: [f32; 4] = [46.0, 61.0, 74.0, 53.0];
+    let blobs = blob_colors(dark);
+    let now = time as f32;
+    for (i, spot) in spots.iter().enumerate() {
+        let phase = std::f32::consts::TAU * now / PERIODS[i] + i as f32 * 1.7;
+        let drift = Vec2::new(phase.cos(), (phase * 0.77).sin()) * (r * 0.045);
+        push_blob(&mut mesh, *spot + drift, r, blobs[i], t.blob_alpha, 48, 8);
+    }
+    painter.add(mesh);
+
+    // 3) 极淡噪点：打散渐变的「塑料感」，也让玻璃的透光有颗粒。
+    if t.grain_alpha > 0 {
+        let tex = grain_texture(ctx, t.grain_alpha);
+        let uv = Rect::from_min_max(
+            egui::Pos2::ZERO,
+            egui::pos2(rect.width() / 128.0, rect.height() / 128.0),
+        );
+        let mut grain = egui::Mesh::with_texture(tex.id());
+        grain.add_rect_with_uv(rect, uv, Color32::WHITE);
+        painter.add(grain);
+    }
 }
 
 /// 每路一行内嵌的「波形 + 频谱」状态。
@@ -278,16 +427,17 @@ impl WaveBuf {
 
     /// 画一行内嵌波形 + 频谱：频谱柱作底纹，波形线作前景。
     pub fn paint(&self, ui: &egui::Ui, rect: Rect, color: Color32, dark: bool) {
-        let t = tokens(dark);
         let painter = ui.painter();
-        let radius = CornerRadius::same(7);
-        painter.rect_filled(rect, radius, t.glass_raised);
-        painter.rect_stroke(
-            rect,
-            radius,
-            Stroke::new(1.0_f32, t.stroke),
-            egui::StrokeKind::Inside,
-        );
+        // 底框：设计原型里这一块**没有描边**，只有一层几乎看不见的提亮/压暗。
+        // 之前那圈 1px 白描边正是「莫名其妙的白边」的来源之一 —— 一行一个白框，
+        // 把整张路由表切成一排小盒子。这里跟原型对齐：无边框、纯极淡底色。
+        let radius = CornerRadius::same(8);
+        let fill = if dark {
+            Color32::from_white_alpha(9)
+        } else {
+            Color32::from_rgba_premultiplied(1, 1, 1, 8) // (15,23,42) @ 3%
+        };
+        painter.rect_filled(rect, radius, fill);
         let inner = rect.shrink2(Vec2::new(4.0, 3.0));
         if inner.width() <= 4.0 || inner.height() <= 4.0 {
             return;
@@ -419,14 +569,12 @@ pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 }
 
 /// 把 `over` 按 `alpha` 叠到 `base` 上（都当不透明色处理）。
+///
+/// 底纹改成网格绘制后界面里暂时没人调它，但它是颜色工具的一部分、且被下面的
+/// 单测覆盖，先留着备用（不要因为它「没人用」就把测试一起删了）。
+#[allow(dead_code)]
 pub fn blend(base: Color32, over: Color32, alpha: f32) -> Color32 {
     lerp_color(base, over, alpha.clamp(0.0, 1.0))
-}
-
-/// 整体提亮/压暗 `delta`（-255..255）。
-fn shade(c: Color32, delta: f32) -> Color32 {
-    let f = |x: u8| (x as f32 + delta).round().clamp(0.0, 255.0) as u8;
-    Color32::from_rgb(f(c.r()), f(c.g()), f(c.b()))
 }
 
 /// 确定性伪随机（0..1）：背景噪点用，保证同一像素每次一致。
@@ -448,6 +596,42 @@ mod tests {
         assert_ne!(DARK_TOKENS.wave_l, LIGHT_TOKENS.wave_l);
         assert_eq!(tokens(true).accent, DARK_TOKENS.accent);
         assert_eq!(tokens(false).accent, LIGHT_TOKENS.accent);
+    }
+
+    /// `Color32` 是**预乘** alpha：任一通道大于 alpha 就是非法值，GL 的
+    /// `ONE / ONE_MINUS_SRC_ALPHA` 混合会把它放大成过冲的刺眼纯白。
+    /// 这条断言就是为了让「白边」以测试失败的形式复现，而不是靠肉眼看截图。
+    #[test]
+    fn all_token_colors_are_valid_premultiplied() {
+        let check = |name: &str, c: Color32| {
+            let a = c.a();
+            assert!(
+                c.r() <= a && c.g() <= a && c.b() <= a,
+                "{name} 不是合法的预乘色：rgba=({}, {}, {}, {}) —— 通道值必须 <= alpha",
+                c.r(),
+                c.g(),
+                c.b(),
+                a
+            );
+        };
+        for (theme, t) in [("dark", DARK_TOKENS), ("light", LIGHT_TOKENS)] {
+            check(&format!("{theme}.glass_base"), t.glass_base);
+            check(&format!("{theme}.glass_raised"), t.glass_raised);
+            check(&format!("{theme}.sidebar"), t.sidebar);
+            check(&format!("{theme}.stroke"), t.stroke);
+            check(&format!("{theme}.highlight"), t.highlight);
+            // 描边/高光本身也不能是「白到发光」的：1px 线的 alpha 必须收敛。
+            assert!(
+                t.stroke.a() <= 64,
+                "{theme}.stroke 的 alpha 过大（{}），1px 描边会变成刺眼白线",
+                t.stroke.a()
+            );
+            assert!(
+                t.highlight.a() <= 230,
+                "{theme}.highlight 的 alpha 过大（{}）",
+                t.highlight.a()
+            );
+        }
     }
 
     #[test]
