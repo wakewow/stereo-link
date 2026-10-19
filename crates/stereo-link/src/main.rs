@@ -16,7 +16,11 @@ mod config;
 // 端点状态轮询线程：把周期性 WASAPI/COM 调用搬离 UI 线程（拖动窗口不再卡顿）。
 mod endpoint_poll;
 mod fonts;
+// 手绘线性图标：全部用 Painter 画，不依赖字体字形。
+mod icons;
 mod logbuf;
+// 右下角浮层提示：不占布局、带淡入淡出。
+mod toast;
 // 玻璃拟态设计系统：token、柔光背景纹理、玻璃卡片、行内波形/频谱、分段电平条。
 mod theme;
 // 托盘模块同上：app.rs 接线前只有 tray_probe 示例会用到。

@@ -22,6 +22,8 @@
 use eframe::egui;
 
 use crate::config::{AppConfig, CloseBehavior};
+use crate::icons::{self, Icon};
+use crate::theme::{self, ButtonKind};
 
 /// `on_close_requested` 的处理结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,45 +123,84 @@ pub fn on_close_requested(
     let mut open = state.open;
     let mut remember = state.remember;
     let mut chosen: Option<CloseOutcome> = None;
+    // 头部右侧的 ✕ 和 Esc 一样：只取消确认框，不退出、不缩托盘。
+    let mut cancelled = false;
+
+    // 跟随 eframe 已解析好的最终主题（系统 / 用户在设置里的偏好都算在内）。
+    let dark = matches!(ctx.theme(), egui::Theme::Dark);
+    let t = theme::tokens(dark);
+
+    // 整屏压暗层必须在建窗**之前**铺：同一帧里先创建的图层画在下面，
+    // 晚一帧就会盖住弹窗。
+    theme::modal_scrim(ctx, ctx.screen_rect(), dark);
 
     egui::Window::new("关闭 StereoLink")
+        // 不要 egui 自带的系统色标题栏，头部自己画，才能和玻璃拟态一致。
+        .title_bar(false)
         .collapsible(false)
         .resizable(false)
         // 居中：主窗口无论在哪里，确认框都在用户眼前。
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .frame(theme::modal_frame(dark))
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.set_min_width(380.0);
+            // 内容宽 340 + 左右内边距各 20 = 外框宽 380，高度由内容自适应。
+            ui.set_width(340.0);
 
-            ui.label("要把 StereoLink 缩小到系统托盘吗？");
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(
-                    "「缩小至托盘」：窗口藏起来，路由与左右声道输出继续在后台运行，\
-                     双击托盘图标可唤回。",
-                )
-                .weak(),
-            );
-            ui.label(
-                egui::RichText::new("「直接关闭」：停止路由、恢复系统默认输出并退出。").weak(),
-            );
-
-            ui.add_space(10.0);
-            ui.checkbox(&mut remember, "下次不再提示（记住我的选择）");
-
-            ui.add_space(10.0);
+            // ---- 头部：警示图标 + 标题 + 右侧 ✕（取消）----
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::new("缩小至托盘")).clicked() {
-                    chosen = Some(CloseOutcome::MinimizeToTray);
-                }
-                if ui.button("直接关闭").clicked() {
-                    chosen = Some(CloseOutcome::Quit);
-                }
+                // 这是一个「要不要关」的确认，用 Warn 而不是 Cross，
+                // 免得和右侧真正表示“关掉这个框”的 ✕ 撞语义。
+                let _ = icons::show(ui, Icon::Warn, 21.0, t.meter_high);
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new("关闭 StereoLink")
+                        .size(15.0)
+                        .strong()
+                        .color(t.text),
+                );
+                // 右对齐：remaining width 交给 right_to_left 布局，× 贴右边。
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // 用 U+00D7「×」而不是 U+2715「✕」：内嵌的 Ubuntu-Light /
+                    // emoji-icon-font 和本机 msyh 都没有 U+2715 的字形，会渲染成方块；
+                    // U+00D7 三套字体都有（`app.rs` 的 Tone::Err 也用它）。
+                    if theme::button(ui, "×", ButtonKind::Ghost, dark).clicked() {
+                        cancelled = true;
+                    }
+                });
             });
+
+            // ---- 正文：只剩「记住选择」复选，不再放任何托盘/关闭的说明文字 ----
+            ui.add_space(14.0);
+            ui.checkbox(
+                &mut remember,
+                egui::RichText::new("下次不再提示（记住我的选择）")
+                    .size(13.0)
+                    .color(t.text),
+            );
+
+            // ---- 按钮行：右对齐，从右往左依次是「直接关闭」（危险）和
+            //      「缩小至托盘」（主操作，默认更安全，给更醒目的强调色）----
+            ui.add_space(16.0);
+            // 显式给一行高度：右对齐布局拿到的是「剩余可用高度」，
+            // 不约束的话会把整个确认框撑高，按钮跑到底部正中。
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 32.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    if theme::button(ui, "直接关闭", ButtonKind::Danger, dark).clicked() {
+                        chosen = Some(CloseOutcome::Quit);
+                    }
+                    if theme::button(ui, "缩小至托盘", ButtonKind::Primary, dark).clicked() {
+                        chosen = Some(CloseOutcome::MinimizeToTray);
+                    }
+                },
+            );
         });
 
-    // 弹框右上角的 × 等价于取消。
-    state.open = open;
+    // 头部的 ✕ 等价于取消；其余情况沿用 `open`（`.open(false)` 只可能在
+    // egui 画了关闭按钮时才被改写，这里没有标题栏，所以实际不会变）。
+    state.open = open && !cancelled;
     state.remember = remember;
 
     // 用户按回车 = 默认按钮「缩小至托盘」。
