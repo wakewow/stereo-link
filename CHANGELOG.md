@@ -2,6 +2,20 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 修复
+
+- **鼠标在窗口里移动时「整窗莫名亮一下暗一下」**：0.5.2 那团「鼠标跟随柔光」画在了
+  `LayerId::background()`（整窗背景层）上 —— 指针一动，就有一团半径约 300 px 的柔光在整个
+  背景上游走、并透过所有半透明面板，看起来就是整窗亮度跟着鼠标闪。
+  设计原型里这团光是 `.card::after`
+  （`radial-gradient(320px circle at var(--mx) var(--my), var(--glow), transparent 62%)`），
+  **只在悬停的那张卡片内部**出现。现已改成 `theme::pointer_glow()`，由 `decorate_card()`
+  在卡片矩形内裁剪绘制：背景层不再随指针变化（实测指针从图像坐标 (400,760) 移到 (900,760)，
+  背景层 ±300 px 区域的平均亮度变化从 ±14 luma 降到 **0.00**），卡片内部仍保留一团
+  跟随指针的柔光（指针处 +20 luma，越外越淡）。
+
 ## [0.5.2] - 2026-10-19
 
 ### 新增

@@ -205,6 +205,7 @@ fn decorate_card(ui: &egui::Ui, resp: &egui::Response) {
     let dt = ui.input(|i| i.stable_dt).clamp(0.0, 0.1);
     let hover_target = if resp.hovered() { 1.0 } else { 0.0 };
     let hover = theme::spring(ui.ctx(), (resp.id, "card-hover"), hover_target, dt);
+    theme::pointer_glow(ui, resp.rect, is_dark(), hover);
     theme::card_border_flow(ui, resp.rect, hover, is_dark(), 0.0);
 }
 

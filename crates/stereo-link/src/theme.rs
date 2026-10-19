@@ -350,31 +350,11 @@ pub fn paint_background(ctx: &egui::Context, rect: Rect, dark: bool, time: f64) 
         push_blob(&mut mesh, *spot + drift, r, blobs[i], t.blob_alpha, 48, 8);
     }
 
-    // 2.5) 鼠标跟随柔光（P2.13）：一团跟着指针走的极淡强调色光，带惯性。
-    //      只在还没追上指针时请求重绘 —— 停住之后就不再叫醒渲染循环，
-    //      不会因为鼠标停在窗口里就一直满速空转。
-    if let Some(target) = ctx.input(|i| i.pointer.hover_pos()) {
-        let key = egui::Id::new("stereo-link-pointer-glow");
-        let mut pos = ctx
-            .data(|d| d.get_temp::<egui::Pos2>(key))
-            .unwrap_or(target);
-        let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
-        let k = 1.0 - (-dt / 0.18).exp();
-        pos += (target - pos) * k;
-        ctx.data_mut(|d| d.insert_temp(key, pos));
-        push_blob(
-            &mut mesh,
-            pos,
-            r * 0.62,
-            t.accent,
-            (t.blob_alpha as f32 * 0.5) as u8,
-            40,
-            7,
-        );
-        if (target - pos).length() > 0.5 {
-            ctx.request_repaint();
-        }
-    }
+    // 2.5) 早期版本这里还画过一团「跟着指针走」的柔光。它挂在**整窗背景层**上，
+    //      结果鼠标一动就有一团光在整个背景上游走、穿过所有半透明面板 ——
+    //      用户看到的就是「整窗莫名亮一下暗一下」。设计原型里这团光属于
+    //      `.card::after`，只在**悬停的那张卡片内部**出现，故已挪到
+    //      `pointer_glow()`，由 `decorate_card()` 在卡片矩形内裁剪绘制。
     painter.add(mesh);
 
     // 3) 极淡噪点：打散渐变的「塑料感」，也让玻璃的透光有颗粒。
@@ -388,6 +368,38 @@ pub fn paint_background(ctx: &egui::Context, rect: Rect, dark: bool, time: f64) 
         grain.add_rect_with_uv(rect, uv, Color32::WHITE);
         painter.add(grain);
     }
+}
+
+/// 卡片内的「鼠标跟随柔光」（对应设计原型的 `.card::after`）。
+///
+/// 原型是 `radial-gradient(320px circle at var(--mx) var(--my), var(--glow),
+/// transparent 62%)`，只在 `:hover` 时淡入。这里用同样量级画一团网格，
+/// **并裁剪在卡片矩形内** —— 光不会溢出到卡片外面去「照亮整窗」。
+/// `strength` 传卡片 hover 弹簧值（0..1），负责淡入淡出。
+pub fn pointer_glow(ui: &egui::Ui, rect: Rect, dark: bool, strength: f32) {
+    let strength = strength.clamp(0.0, 1.0);
+    if strength <= 0.01 || rect.width() < 8.0 || rect.height() < 8.0 {
+        return;
+    }
+    let Some(p) = ui.ctx().input(|i| i.pointer.hover_pos()) else {
+        return;
+    };
+    if !rect.contains(p) {
+        return;
+    }
+    let t = tokens(dark);
+    // 原型 --glow 深色是 rgba(59,130,246,.20)、浅色 .16。
+    let alpha = ((if dark { 51.0 } else { 41.0 }) * strength).round() as u8;
+    if alpha == 0 {
+        return;
+    }
+    let mut mesh = egui::Mesh::default();
+    // 320px 的 62% 处收干净 ⇒ 可见半径约 200px。
+    push_blob(&mut mesh, p, 200.0, t.accent, alpha, 32, 6);
+    let clip = rect.intersect(ui.clip_rect());
+    ui.painter()
+        .with_clip_rect(clip)
+        .add(egui::Shape::mesh(mesh));
 }
 
 /// 每路一行内嵌的「波形 + 频谱」状态。
