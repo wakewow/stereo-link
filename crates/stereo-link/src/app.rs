@@ -4255,6 +4255,21 @@ fn log_line(ui: &mut egui::Ui, line: &LogLine) {
 impl eframe::App for StereoLinkApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let frame_start = Instant::now();
+        // 帧率上限（60 fps）。
+        //
+        // winit 每收到一个鼠标移动事件就请求一次重绘，鼠标快速扫过时实测能跑到 170~200 fps。
+        // 在这种远高于显示器刷新率的呈现节奏下，会偶发「整窗只剩清屏色」的一帧被推上屏
+        // （DXGI 桌面复制 120 fps 采集：不设上限时 6 轮里 3 轮抓到 1~4 帧，每帧 8~33 ms；
+        // 限制到 60 fps 后 12 轮全部为 0；App 自身的帧日志显示这些时刻它正在正常整帧绘制，
+        // 所以问题出在 present/swap 侧，不是内容）。限制到 60 fps 后不再复现，顺带省 CPU/GPU。
+        //
+        // 放在 update 开头而不是末尾：睡够间隔再画，呈现时刻就被压到 60 Hz 附近。
+        const MAX_FPS: f64 = 60.0;
+        let min_frame = Duration::from_secs_f64(1.0 / MAX_FPS);
+        let since_last = self.last_frame_at.elapsed();
+        if since_last < min_frame {
+            std::thread::sleep(min_frame - since_last);
+        }
         // 最小化/隐藏期间把心跳降到 1s：既省 CPU，又给托盘事件留一层兜底刷新。
         // 窗口不可见时**不能**用 250ms 心跳（见 handle_close 的注释）。
         // 声道路由页在路由运行时要画波形/频谱，心跳提到 100ms（10 fps）；
