@@ -37,8 +37,21 @@ Write-Host ''
 $env:RUSTFLAGS = $remap
 Push-Location $root
 try {
-    cargo build --release -p stereo-link
-    if ($LASTEXITCODE -ne 0) { throw "cargo build 失败（exit $LASTEXITCODE）" }
+    # Windows PowerShell 5.1 会把原生命令写到 stderr 的每一行（cargo 的
+    # `Compiling ... / Finished ...` 进度）包成 ErrorRecord。本脚本开头设了
+    # `$ErrorActionPreference = 'Stop'`，于是这些进度行会被当成终止性错误抛出，
+    # 构建刚起步就中断（PowerShell 7.3+ 默认不这样，所以只在 5.1 上复现）。
+    # 这里临时静音这些进度行——它们不是错误——成败只看 $LASTEXITCODE。
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        cargo build --release -p stereo-link
+        $cargoExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($cargoExit -ne 0) { throw "cargo build 失败（exit $cargoExit）" }
+    Write-Host 'cargo 构建完成（进度输出已被 PowerShell 5.1 归入 stderr 并静音）'
 } finally {
     Pop-Location
 }
