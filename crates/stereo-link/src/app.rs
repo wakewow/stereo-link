@@ -3552,7 +3552,8 @@ impl StereoLinkApp {
                         toggle_wave_pause = true;
                     }
                     resp.on_hover_text(format!(
-                        "{chan_name}声道 · 峰值 {peak_db:.1} dBFS\n点击{}波形动画（不影响声音）",
+                        // chan_name 本身已经带「声道」二字（左声道 / 右声道），这里不要再拼一次。
+                        "{chan_name} · 峰值 {peak_db:.1} dBFS\n点击{}波形动画（不影响声音）",
                         if wave_paused { "恢复" } else { "暂停" }
                     ));
                 },
