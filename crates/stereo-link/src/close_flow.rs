@@ -135,6 +135,11 @@ pub fn on_close_requested(
     theme::modal_scrim(ctx, ctx.screen_rect(), dark);
 
     egui::Window::new("关闭 StereoLink")
+        // 弹窗放到 Foreground 层：压暗层是 Order::Middle 的自定义图层，和
+        // egui::Window 默认所在的 Middle 层**没有确定的先后**（同一 Order 内非 Area
+        // 图层按 LayerId 排序，压暗层可能被排到弹窗之上，把弹窗自己也压暗）。
+        // 换到更高的层，两者顺序就固定了。
+        .order(egui::Order::Foreground)
         // 不要 egui 自带的系统色标题栏，头部自己画，才能和玻璃拟态一致。
         .title_bar(false)
         .collapsible(false)
