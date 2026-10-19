@@ -186,6 +186,99 @@ fn card_frame() -> egui::Frame {
     theme::glass_frame(GlassLevel::Base, is_dark())
 }
 
+/// 玻璃卡片 + 悬停流光：`card_frame().show(..)` 的包装。
+///
+/// 收成一层的意义在于「画完内容再补描边流光」——必须拿到卡片的最终矩形，
+/// 而矩形只有 `show` 返回后才知道。调用点写法与 `card_frame().show` 完全一样。
+fn card<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let card = card_frame().show(ui, add_contents);
+    decorate_card(ui, &card.response);
+    card.inner
+}
+
+/// 卡片悬停流光：鼠标移上去时沿圆角描边跑一圈高光。
+///
+/// 必须画在卡片内容之后（同一层、后画即在上），所以调用点都是
+/// `let card = card_frame().show(..); decorate_card(ui, &card.response);`。
+/// 卡片本身仍是 `Sense::hover()`，不会吞掉里面控件的点击。
+fn decorate_card(ui: &egui::Ui, resp: &egui::Response) {
+    let dt = ui.input(|i| i.stable_dt).clamp(0.0, 0.1);
+    let hover_target = if resp.hovered() { 1.0 } else { 0.0 };
+    let hover = theme::spring(ui.ctx(), (resp.id, "card-hover"), hover_target, dt);
+    theme::card_border_flow(ui, resp.rect, hover, is_dark(), 0.0);
+}
+
+/// 统一按钮（自动带当前主题）。主操作 `Primary`、次操作 `Secondary`、
+/// 轻量操作 `Ghost`、停止/破坏性 `Danger`。
+fn btn(ui: &mut egui::Ui, label: &str, kind: theme::ButtonKind) -> egui::Response {
+    theme::button(ui, label, kind, is_dark())
+}
+
+/// 带禁用态的按钮：禁用时置灰但不改变布局水位。
+fn btn_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    kind: theme::ButtonKind,
+) -> egui::Response {
+    theme::button_sized(
+        ui,
+        enabled,
+        label,
+        kind,
+        theme::ButtonSize::Normal,
+        is_dark(),
+    )
+}
+
+/// 紧凑按钮：表格行、内嵌工具栏用。
+fn btn_small(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    kind: theme::ButtonKind,
+) -> egui::Response {
+    theme::button_sized(
+        ui,
+        enabled,
+        label,
+        kind,
+        theme::ButtonSize::Small,
+        is_dark(),
+    )
+}
+
+/// 方形图标按钮（侧边栏收起、主题快切、声音设置这类轻量入口）。
+/// 点击区域 26×26 比图形本身大一圈；悬停浮出一层极淡的底色，不画描边、不抢视线。
+fn icon_button(
+    ui: &mut egui::Ui,
+    icon: crate::icons::Icon,
+    tint: Color32,
+    tip: &str,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
+    let dt = ui.input(|i| i.stable_dt).clamp(0.0, 0.1);
+    let hover_target = if resp.hovered() { 1.0 } else { 0.0 };
+    let hover = theme::spring(ui.ctx(), (resp.id, "icon-hover"), hover_target, dt);
+    if hover > 0.01 {
+        let fill = if is_dark() {
+            Color32::from_white_alpha((11.0 * hover).round() as u8)
+        } else {
+            Color32::from_black_alpha((9.0 * hover).round() as u8)
+        };
+        ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
+    }
+    crate::icons::paint(
+        &ui.painter().with_clip_rect(rect),
+        rect.shrink(6.5),
+        icon,
+        if resp.hovered() { palette().text } else { tint },
+        1.45,
+    );
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, icon.label()));
+    resp.on_hover_text(tip)
+}
+
 /// 固定宽度的药丸标签：宽度写死，内容居中，不随文字伸缩。
 fn pill(ui: &mut egui::Ui, text: &str, bg: Color32, width: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 22.0), Sense::hover());
@@ -200,7 +293,7 @@ fn pill(ui: &mut egui::Ui, text: &str, bg: Color32, width: f32) {
     painter.galley(pos, galley, fg);
 }
 
-/// 小圆圈「?」：hover 才显示完整说明（说明不再常驻占位）。
+/// 小圆圈「i」：hover 才显示完整说明（说明不再常驻占位）。
 fn help(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
     if ui.is_rect_visible(rect) {
@@ -210,12 +303,12 @@ fn help(ui: &mut egui::Ui, text: &str) -> egui::Response {
             8.0,
             Stroke::new(1.0_f32, palette().accent.gamma_multiply(0.8)),
         );
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "?",
-            FontId::proportional(11.0),
+        crate::icons::paint(
+            painter,
+            rect.shrink(4.5),
+            crate::icons::Icon::Info,
             palette().accent,
+            1.3,
         );
     }
     response.on_hover_text(text)
@@ -373,17 +466,17 @@ fn muted(text: impl Into<String>) -> RichText {
 
 /// 诊断条里的小状态点：绿 = 正常，黄 = 注意。
 fn status_dot(ui: &mut egui::Ui, ok: bool, ok_text: &str, bad_text: &str, tip: &str) {
-    let (text, color) = if ok {
-        (ok_text, palette().ok)
+    let (text, color, icon) = if ok {
+        (ok_text, palette().ok, crate::icons::Icon::Check)
     } else {
-        (bad_text, palette().warn)
+        (bad_text, palette().warn, crate::icons::Icon::Cross)
     };
     ui.add_space(6.0);
-    ui.add(
-        egui::Label::new(RichText::new(format!("● {text}")).size(12.0).color(color))
-            .selectable(false),
-    )
-    .on_hover_text(tip);
+    let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
+    crate::icons::paint(ui.painter(), icon_rect.shrink(1.0), icon, color, 1.7);
+    ui.add_space(3.0);
+    ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).selectable(false))
+        .on_hover_text(tip);
     ui.add_space(10.0);
 }
 
@@ -538,7 +631,8 @@ struct Hint {
 }
 
 impl Hint {
-    fn icon(&self) -> &'static str {
+    /// 复制到剪贴板时用的纯文本标记：图标是画出来的，没法进文本。
+    fn glyph(&self) -> &'static str {
         match self.tone {
             Tone::Ok => "√",
             Tone::Warn => "!",
@@ -578,13 +672,13 @@ impl Page {
         }
     }
 
-    /// 收起侧边栏时显示的单字图标（用中文字，避免符号字体缺字）。
-    fn icon(self) -> &'static str {
+    /// 导航栏图标：手绘线性图标（见 `crate::icons`），不再用中文字代替。
+    fn icon(self) -> crate::icons::Icon {
         match self {
-            Page::Routing => "路",
-            Page::Capture => "源",
-            Page::Devices => "设",
-            Page::Log => "志",
+            Page::Routing => crate::icons::Icon::Route,
+            Page::Capture => crate::icons::Icon::Capture,
+            Page::Devices => crate::icons::Icon::Devices,
+            Page::Log => crate::icons::Icon::Log,
         }
     }
 }
@@ -602,7 +696,10 @@ pub struct StereoLinkApp {
     endpoints: Vec<EndpointInfo>,
     endpoints_error: Option<String>,
     log: LogBuffer,
-    notice: Option<(String, Instant)>,
+    /// 右下角浮层提示：真正的 toast（淡入淡出、可叠 3 条），取代原来那格固定宽度文字。
+    toasts: crate::toast::Toasts,
+    /// 本帧要弹出的提示文案：`toast()` 在任意时刻都能调，累到 `update()` 里再入队。
+    pending_toast: Option<String>,
     font: Option<String>,
     /// 默认输出（每 ~1s 实时探测；引擎快照里的值只是启动时的静态值）。
     live_default_output: Option<String>,
@@ -697,6 +794,8 @@ pub struct StereoLinkApp {
     wave_l: theme::WaveBuf,
     /// 右声道行内波形/频谱。
     wave_r: theme::WaveBuf,
+    /// 行内波形是否被点停：`[左, 右]`。暂停只是定格动画，不影响音频与电平表。
+    wave_paused: [bool; 2],
     /// 上一帧时间：给波形/频谱算 dt。
     last_frame_at: Instant,
     /// 临时诊断开关（`STEREOLINK_LEVEL_LOG=1`）：把引擎上报的电平周期性写进日志。
@@ -733,7 +832,8 @@ impl StereoLinkApp {
             endpoints: Vec::new(),
             endpoints_error: None,
             log,
-            notice: None,
+            toasts: crate::toast::Toasts::new(),
+            pending_toast: None,
             font,
             live_default_output: None,
             live_default_is_capture: false,
@@ -783,6 +883,7 @@ impl StereoLinkApp {
             log_autoscroll: true,
             wave_l: theme::WaveBuf::new(),
             wave_r: theme::WaveBuf::new(),
+            wave_paused: [false, false],
             last_frame_at: Instant::now(),
             level_log: std::env::var_os("STEREOLINK_LEVEL_LOG").is_some(),
             last_level_log: None,
@@ -877,8 +978,13 @@ impl StereoLinkApp {
             .route_of(RouteChannel::Right)
             .map(|r| r.level)
             .unwrap_or(0.0);
-        self.wave_l.advance(dt, l);
-        self.wave_r.advance(dt, r);
+        // 暂停的那一路不推进：波形会定格在最后一帧（点一下行内波形即可暂停）。
+        if !self.wave_paused[0] {
+            self.wave_l.advance(dt, l);
+        }
+        if !self.wave_paused[1] {
+            self.wave_r.advance(dt, r);
+        }
         if self.level_log
             && self
                 .last_level_log
@@ -966,12 +1072,6 @@ impl StereoLinkApp {
             self.auto_started = true;
             if self.cfg.auto_start && self.engine.is_none() {
                 self.start_routing(false);
-            }
-        }
-
-        if let Some((_, at)) = &self.notice {
-            if at.elapsed() > Duration::from_secs(8) {
-                self.notice = None;
             }
         }
     }
@@ -1966,8 +2066,10 @@ impl StereoLinkApp {
         crate::endpoint_poll::restore_volumes_blocking(&saved);
     }
 
+    /// 记一条右下角浮层提示。这里不直接 push（`toast()` 常常在 `&mut self` 的
+    /// 深层调用里、拿不到 `ctx`），先攒成一条待发文案，`update()` 尾巴统一入队。
     fn toast(&mut self, text: impl Into<String>) {
-        self.notice = Some((text.into(), Instant::now()));
+        self.pending_toast = Some(text.into());
     }
 
     fn route_label(&self, channel: RouteChannel) -> String {
@@ -2133,55 +2235,25 @@ impl StereoLinkApp {
     fn routing_actions(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if self.engine.is_some() {
-                if ui.button("停止路由").clicked() {
+                if btn(ui, "停止路由", theme::ButtonKind::Danger).clicked() {
                     self.stop_routing(true);
                     self.toast("已停止路由并恢复默认输出");
                 }
-                if ui.button("重启路由").clicked() {
+                if btn(ui, "重启路由", theme::ButtonKind::Secondary).clicked() {
                     self.restart_routing();
                     self.toast("路由已重启");
                 }
-            } else if ui
-                .add(
-                    egui::Button::new(
-                        RichText::new("开始路由")
-                            .color(text_on(palette().accent))
-                            .strong(),
-                    )
-                    .fill(palette().accent),
-                )
-                .clicked()
-            {
+            } else if btn(ui, "开始路由", theme::ButtonKind::Primary).clicked() {
                 self.start_routing(true);
             }
-            if ui
-                .button("左右自检音")
+            if btn(ui, "左右自检音", theme::ButtonKind::Ghost)
                 .on_hover_text("向两台音箱分别放一声测试音，快速确认左右没接反")
                 .clicked()
             {
                 self.play_test_tone();
             }
-            // 提示条占固定宽度：出现/消失都不挤动按钮。
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let notice = self.notice.as_ref().map(|(text, _)| text.clone());
-                match &notice {
-                    Some(text) => {
-                        text_cell(
-                            ui,
-                            320.0,
-                            24.0,
-                            text,
-                            FontId::proportional(13.0),
-                            palette().accent,
-                            true,
-                        )
-                        .on_hover_text(text.clone());
-                    }
-                    None => {
-                        ui.allocate_exact_size(Vec2::new(320.0, 24.0), Sense::hover());
-                    }
-                }
-            });
+            // 操作结果不再占一行固定宽度的文字格，改由右下角 toast 浮层提示：
+            // 成功/失败只在发生的瞬间出现，不挤动按钮，也不留下过期文案。
         });
     }
 
@@ -2286,23 +2358,12 @@ impl StereoLinkApp {
                                 );
                             }
                             let (collapsed_icon, tip) = if self.sidebar_open {
-                                ("«", "收起侧边栏")
+                                (crate::icons::Icon::ChevronLeft, "收起侧边栏")
                             } else {
-                                ("»", "展开侧边栏")
+                                (crate::icons::Icon::ChevronRight, "展开侧边栏")
                             };
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            RichText::new(collapsed_icon)
-                                                .size(15.0)
-                                                .color(palette().muted),
-                                        )
-                                        .frame(false),
-                                    )
-                                    .on_hover_text(tip)
-                                    .clicked()
-                                {
+                                if icon_button(ui, collapsed_icon, palette().muted, tip).clicked() {
                                     self.sidebar_open = !self.sidebar_open;
                                     self.cfg.save();
                                 }
@@ -2312,11 +2373,6 @@ impl StereoLinkApp {
                         let mut target: Option<Page> = None;
                         for page in Page::ALL {
                             let selected = self.page == page;
-                            let text = if self.sidebar_open {
-                                page.label().to_string()
-                            } else {
-                                page.icon().to_string()
-                            };
                             let color = if selected {
                                 palette().accent
                             } else {
@@ -2343,13 +2399,30 @@ impl StereoLinkApp {
                                     palette().hover.gamma_multiply(0.75),
                                 );
                             }
-                            ui.painter().text(
-                                rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                text,
-                                FontId::proportional(13.0),
-                                color,
-                            );
+                            // 展开：图标 + 文字左对齐；收起：只有居中图标。
+                            let painter = ui.painter().with_clip_rect(rect);
+                            if self.sidebar_open {
+                                let icon_rect = egui::Rect::from_min_size(
+                                    egui::pos2(rect.left() + 12.0, rect.center().y - 9.0),
+                                    Vec2::splat(18.0),
+                                );
+                                crate::icons::paint(&painter, icon_rect, page.icon(), color, 1.5);
+                                painter.text(
+                                    egui::pos2(icon_rect.right() + 9.0, rect.center().y),
+                                    egui::Align2::LEFT_CENTER,
+                                    page.label(),
+                                    FontId::proportional(13.5),
+                                    color,
+                                );
+                            } else {
+                                crate::icons::paint(
+                                    &painter,
+                                    egui::Rect::from_center_size(rect.center(), Vec2::splat(18.0)),
+                                    page.icon(),
+                                    color,
+                                    1.5,
+                                );
+                            }
                             let response = response.on_hover_text(page.label());
                             if response.clicked() {
                                 target = Some(page);
@@ -2430,14 +2503,25 @@ impl StereoLinkApp {
 
     /// 主题切换：展开时是下拉框，收起时是循环按钮（跟随系统 → 浅色 → 深色）。
     fn theme_selector(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // 当前模式的图标：跟随系统 / 深色 / 浅色各一个。展开时放在「主题」左边，
+        // 收起时它就是唯一的控件（点一下循环到下一个模式）。
+        let mode_icon = match self.cfg.theme {
+            ThemeMode::System => crate::icons::Icon::Auto,
+            ThemeMode::Dark => crate::icons::Icon::Moon,
+            ThemeMode::Light => crate::icons::Icon::Sun,
+        };
         if self.sidebar_open {
             ui.horizontal(|ui| {
+                let _ = crate::icons::show(ui, mode_icon, 13.0, palette().muted);
                 ui.label(RichText::new("主题").size(11.0).color(palette().muted));
                 let mut chosen = self.cfg.theme;
                 egui::ComboBox::from_id_salt("theme_mode")
                     .selected_text(chosen.label())
-                    .width(92.0)
+                    .width(84.0)
                     .show_ui(ui, |ui| {
+                        let enter = theme::popup_enter(ui.ctx(), "theme_mode");
+                        ui.set_opacity(enter);
+                        ui.add_space((1.0 - enter) * 4.0);
                         for mode in ThemeMode::ALL {
                             if ui.selectable_label(chosen == mode, mode.label()).clicked() {
                                 chosen = mode;
@@ -2450,14 +2534,7 @@ impl StereoLinkApp {
             });
         } else {
             let tip = format!("主题：{}（点击切换）", self.cfg.theme.label());
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("色").size(13.0).color(palette().muted))
-                        .frame(false),
-                )
-                .on_hover_text(tip)
-                .clicked()
-            {
+            if icon_button(ui, mode_icon, palette().muted, &tip).clicked() {
                 let next = self.cfg.theme.next();
                 self.set_theme(ctx, next);
             }
@@ -2484,19 +2561,20 @@ impl StereoLinkApp {
 
     /// 侧边栏底部的「系统声音设置」入口。
     fn sound_settings_button(&mut self, ui: &mut egui::Ui) {
-        let label = if self.sidebar_open {
-            "系统声音设置"
+        let clicked = if self.sidebar_open {
+            btn(ui, "系统声音设置", theme::ButtonKind::Ghost)
+                .on_hover_text("打开 Windows 声音设置")
+                .clicked()
         } else {
-            "音"
-        };
-        if ui
-            .add(
-                egui::Button::new(RichText::new(label).size(12.0).color(palette().muted))
-                    .frame(false),
+            icon_button(
+                ui,
+                crate::icons::Icon::Gear,
+                palette().muted,
+                "打开 Windows 声音设置",
             )
-            .on_hover_text("打开 Windows 声音设置")
             .clicked()
-        {
+        };
+        if clicked {
             let _ = std::process::Command::new("cmd")
                 .args(["/c", "start", "ms-settings:sound"])
                 .spawn();
@@ -2512,7 +2590,7 @@ impl StereoLinkApp {
         let uu_present = devices.iter().any(|ep| ep.name.contains("UU远程"));
         let mut chosen_id: Option<String> = None;
 
-        card_frame().show(ui, |ui| {
+        card(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.set_min_height(268.0);
             ui.horizontal(|ui| {
@@ -2542,8 +2620,16 @@ impl StereoLinkApp {
                 ),
             };
             let width = ui.available_width().max(120.0);
-            text_cell(ui, width, 26.0, &name, FontId::proportional(17.0), palette().text, false)
-                .on_hover_text(full_name);
+            text_cell(
+                ui,
+                width,
+                26.0,
+                &name,
+                FontId::proportional(17.0),
+                palette().text,
+                false,
+            )
+            .on_hover_text(full_name);
             ui.add_space(2.0);
 
             // Windows 默认输出现在是不是采集端点（不是就采不到声）。
@@ -2573,7 +2659,11 @@ impl StereoLinkApp {
                     20.0,
                     &text,
                     FontId::proportional(12.5),
-                    if self.live_default_is_capture { palette().ok } else { palette().warn },
+                    if self.live_default_is_capture {
+                        palette().ok
+                    } else {
+                        palette().warn
+                    },
                     false,
                 )
                 .on_hover_text(current_full);
@@ -2602,9 +2692,14 @@ impl StereoLinkApp {
                         kind.short_label()
                     ))
                     .size(12.5),
-                    _ => RichText::new("（未选择采集源）").color(palette().muted).size(12.5),
+                    _ => RichText::new("（未选择采集源）")
+                        .color(palette().muted)
+                        .size(12.5),
                 })
                 .show_ui(ui, |ui| {
+                    let enter = theme::popup_enter(ui.ctx(), "capture_source");
+                    ui.set_opacity(enter);
+                    ui.add_space((1.0 - enter) * 4.0);
                     for ep in &devices {
                         let kind = capture_kind(&ep.name);
                         let selected = capture_id
@@ -2642,12 +2737,11 @@ impl StereoLinkApp {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button("切为默认输出").clicked() {
+                if btn(ui, "切为默认输出", theme::ButtonKind::Secondary).clicked() {
                     self.switch_default_to_capture();
                 }
                 let has_previous = self.cfg.capture.previous_output.is_some();
-                if ui
-                    .add_enabled(has_previous, egui::Button::new("恢复原输出"))
+                if btn_enabled(ui, has_previous, "恢复原输出", theme::ButtonKind::Ghost)
                     .on_hover_text("切回开始路由前的默认输出")
                     .clicked()
                 {
@@ -2664,10 +2758,12 @@ impl StereoLinkApp {
                     .and_then(|ep| ep.mix_format.as_ref())
                     .map(|f| f.describe())
                     .unwrap_or_else(|| "未知".to_string());
-                ui.label(RichText::new(format!("混音 {fmt}")).size(12.0).color(palette().text))
-                    .on_hover_text(
-                        "采集端点的混音格式：路由引擎的采样率跟随它（零重采样）。",
-                    );
+                ui.label(
+                    RichText::new(format!("混音 {fmt}"))
+                        .size(12.0)
+                        .color(palette().text),
+                )
+                .on_hover_text("采集端点的混音格式：路由引擎的采样率跟随它（零重采样）。");
             });
 
             // 系统音量联动（从声道路由页挪过来：它只和采集源有关）。
@@ -2679,6 +2775,9 @@ impl StereoLinkApp {
                     .width(150.0)
                     .selected_text(follow.label())
                     .show_ui(ui, |ui| {
+                        let enter = theme::popup_enter(ui.ctx(), "volume_follow");
+                        ui.set_opacity(enter);
+                        ui.add_space((1.0 - enter) * 4.0);
                         for option in [VolumeFollow::Auto, VolumeFollow::On, VolumeFollow::Off] {
                             ui.selectable_value(&mut follow, option, option.label());
                         }
@@ -2820,7 +2919,7 @@ impl StereoLinkApp {
     }
 
     fn routing_card(&mut self, ui: &mut egui::Ui) {
-        card_frame().show(ui, |ui| {
+        card(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(RichText::new("声道路由").size(16.0).strong());
@@ -2891,6 +2990,15 @@ impl StereoLinkApp {
                     );
                     text_cell(
                         ui,
+                        ROUTE_COL_WAVE,
+                        18.0,
+                        "波形",
+                        header_font.clone(),
+                        palette().muted,
+                        false,
+                    );
+                    text_cell(
+                        ui,
                         ROUTE_COL_LEVEL,
                         18.0,
                         "电平",
@@ -2925,7 +3033,15 @@ impl StereoLinkApp {
                         palette().muted,
                         false,
                     );
-                    text_cell(ui, ROUTE_COL_INV, 18.0, "反相", header_font, palette().muted, false);
+                    text_cell(
+                        ui,
+                        ROUTE_COL_INV,
+                        18.0,
+                        "反相",
+                        header_font,
+                        palette().muted,
+                        false,
+                    );
                 });
             }
             ui.add_space(2.0);
@@ -3004,6 +3120,14 @@ impl StereoLinkApp {
             ui.add_space(6.0);
             ui.separator();
             ui.horizontal(|ui| {
+                let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(17.0), Sense::hover());
+                crate::icons::paint(
+                    ui.painter(),
+                    icon_rect.shrink(0.5),
+                    crate::icons::Icon::Mic,
+                    palette().muted,
+                    1.5,
+                );
                 ui.label(RichText::new("声学自校验").size(14.0).strong());
                 help(
                     ui,
@@ -3041,6 +3165,9 @@ impl StereoLinkApp {
                                     .color(palette().text)
                             })
                             .show_ui(ui, |ui| {
+                                let enter = theme::popup_enter(ui.ctx(), "sync_mic");
+                                ui.set_opacity(enter);
+                                ui.add_space((1.0 - enter) * 4.0);
                                 for m in &self.sync_mics {
                                     let id = m.id().to_string();
                                     let text = format!(
@@ -3060,39 +3187,40 @@ impl StereoLinkApp {
                             });
                     },
                 );
-                if ui.button("刷新").clicked() {
+                if btn(ui, "刷新", theme::ButtonKind::Ghost).clicked() {
                     action = Some("refresh");
                 }
                 // 体检在后台线程跑（界面不再僵住），体检期间禁止重复点击，也禁止同时开校准——
                 // 两者都会短暂独占麦克风。
                 let check_busy = self.check_rx.is_some();
-                if ui
-                    .add_enabled(
-                        !check_busy,
-                        egui::Button::new(if check_busy { "体检中…" } else { "体检" }),
-                    )
-                    .clicked()
+                if btn_enabled(
+                    ui,
+                    !check_busy,
+                    if check_busy { "体检中…" } else { "体检" },
+                    theme::ButtonKind::Secondary,
+                )
+                .clicked()
                 {
                     action = Some("check");
                 }
-                if ui
-                    .add_enabled(
-                        !self.sync_busy && !check_busy && !self.sync_mic.is_empty(),
-                        egui::Button::new(if self.sync_busy {
-                            "校准中…"
-                        } else {
-                            "校准延迟并平衡音量"
-                        }),
-                    )
-                    .on_hover_text(
-                        "一次完成：量两台音箱的真实时差并自动垫延迟，再分别量左右电平、给出音量平衡建议（约 8 秒）",
-                    )
-                    .clicked()
+                if btn_enabled(
+                    ui,
+                    !self.sync_busy && !check_busy && !self.sync_mic.is_empty(),
+                    if self.sync_busy {
+                        "校准中…"
+                    } else {
+                        "校准延迟并平衡音量"
+                    },
+                    theme::ButtonKind::Primary,
+                )
+                .on_hover_text(
+                    "一次完成：量两台音箱的真实时差并自动垫延迟，再分别量左右电平、给出音量平衡建议（约 8 秒）",
+                )
+                .clicked()
                 {
                     action = Some("sync");
                 }
-                if ui
-                    .add_enabled(!self.clicks_busy, egui::Button::new("点击串试听"))
+                if btn_enabled(ui, !self.clicks_busy, "点击串试听", theme::ButtonKind::Ghost)
                     .on_hover_text("不需要麦克风：按当前延迟值同时放点击串，听到两下就手动微调")
                     .clicked()
                 {
@@ -3187,16 +3315,12 @@ impl StereoLinkApp {
                         let within = report.delta_db.abs() <= BALANCE_DEADBAND_DB;
                         if !within {
                             let low_confidence = report.confidence < 0.5;
-                            let button = egui::Button::new(RichText::new("应用并复测").color(
-                                if low_confidence {
-                                    text_on(palette().warn)
-                                } else {
-                                    palette().text
-                                },
-                            ));
-                            let button = if low_confidence { button.fill(palette().warn) } else { button };
-                            if ui
-                                .add(button)
+                            let kind = if low_confidence {
+                                theme::ButtonKind::Danger
+                            } else {
+                                theme::ButtonKind::Secondary
+                            };
+                            if btn(ui, "应用并复测", kind)
                                 .on_hover_text(if low_confidence {
                                     "置信度偏低：把麦克风放到两箱之间的听音位置、关掉音乐并保持安静后再测。\n点一次会按建议值调音量并自动复测（蓝牙音箱通常 2～3 轮收敛）"
                                 } else {
@@ -3219,7 +3343,11 @@ impl StereoLinkApp {
                             report.confidence * 100.0
                         );
                         ui.label(RichText::new(text).size(12.0).color(
-                            if report.confidence < 0.5 { palette().warn } else { palette().text },
+                            if report.confidence < 0.5 {
+                                palette().warn
+                            } else {
+                                palette().text
+                            },
                         ));
                     });
                 }
@@ -3338,6 +3466,9 @@ impl StereoLinkApp {
                                 .size(13.0)
                         })
                         .show_ui(ui, |ui| {
+                            let enter = theme::popup_enter(ui.ctx(), ("route", label));
+                            ui.set_opacity(enter);
+                            ui.add_space((1.0 - enter) * 4.0);
                             if ui
                                 .selectable_label(
                                     current.is_empty(),
@@ -3369,25 +3500,66 @@ impl StereoLinkApp {
 
             // 行内「波形 + 频谱」装饰：幅度取这一路的真实电平（波形形状是合成的，
             // 见 theme::WaveBuf 的说明）。左侧声道蓝、右侧声道琥珀。
-            let wave = if channel == RouteChannel::Left {
-                &self.wave_l
+            // 悬停出读数（峰值 dBFS），点一下定格/恢复这一路的动画——只停画面，不影响声音。
+            let (wave, wave_idx) = if channel == RouteChannel::Left {
+                (&self.wave_l, 0usize)
             } else {
-                &self.wave_r
+                (&self.wave_r, 1usize)
             };
             let wave_peak = wave.peak();
             let wave_level = wave.level();
+            let wave_paused = self.wave_paused[wave_idx];
             let dark = is_dark();
+            let peak_db = if wave_peak > 1.0e-6 {
+                20.0 * wave_peak.log10()
+            } else {
+                -120.0
+            };
+            let chan_name = channel_label(channel);
+            let mut toggle_wave_pause = false;
             cell(
                 ui,
                 ROUTE_COL_WAVE,
                 ROUTE_ROW_H,
                 Layout::left_to_right(Align::Center),
                 |ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(Vec2::new(104.0, 30.0), Sense::hover());
+                    let (rect, resp) =
+                        ui.allocate_exact_size(Vec2::new(104.0, 30.0), Sense::click());
                     wave.paint(ui, rect, color, dark);
+                    // 暂停时常驻一个播放三角（提示"点一下继续"）；没暂停则只在悬停时
+                    // 浮出一个淡淡的暂停标记，平时完全不挡波形。
+                    let hovered = resp.hovered();
+                    if wave_paused || hovered {
+                        let painter = ui.painter().with_clip_rect(rect);
+                        painter.rect_filled(
+                            rect,
+                            CornerRadius::same(8),
+                            Color32::from_black_alpha(if wave_paused { 56 } else { 26 }),
+                        );
+                        let glyph = if wave_paused {
+                            crate::icons::Icon::Play
+                        } else {
+                            crate::icons::Icon::Pause
+                        };
+                        let tint = if wave_paused {
+                            palette().text
+                        } else {
+                            palette().muted
+                        };
+                        crate::icons::paint(&painter, rect.shrink(9.0), glyph, tint, 1.6);
+                    }
+                    if resp.clicked() {
+                        toggle_wave_pause = true;
+                    }
+                    resp.on_hover_text(format!(
+                        "{chan_name}声道 · 峰值 {peak_db:.1} dBFS\n点击{}波形动画（不影响声音）",
+                        if wave_paused { "恢复" } else { "暂停" }
+                    ));
                 },
             );
+            if toggle_wave_pause {
+                self.wave_paused[wave_idx] = !wave_paused;
+            }
 
             // 电平：分段电平条（12 段绿→黄→红 + 峰值保持线）+ 右对齐百分比。
             let linear = route.as_ref().map(|route| route.level).unwrap_or(0.0);
@@ -3562,7 +3734,7 @@ impl StereoLinkApp {
         let mut probe_one: Option<String> = None;
         let mut fix_format: Option<(String, String, EndpointFormat)> = None;
 
-        card_frame().show(ui, |ui| {
+        card(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(
@@ -3602,15 +3774,63 @@ impl StereoLinkApp {
             let col_action = 190.0;
             let col_role = 140.0;
             let col_device = 230.0;
-            let col_format = (available - col_device - col_role - col_action - spacing * 3.0).max(150.0);
+            let col_format =
+                (available - col_device - col_role - col_action - spacing * 3.0).max(150.0);
 
             {
                 let header_font = FontId::proportional(12.0);
                 ui.horizontal(|ui| {
-                    text_cell(ui, col_device, 18.0, "设备", header_font.clone(), palette().muted, false);
-                    text_cell(ui, col_format, 18.0, "格式", header_font.clone(), palette().muted, false);
-                    text_cell(ui, col_role, 18.0, "角色", header_font.clone(), palette().muted, false);
-                    text_cell(ui, col_action, 18.0, "操作", header_font, palette().muted, false);
+                    // 「设备」列表头：在列宽内画一个喇叭图标 + 文字，不改列宽，
+                    // 避免表头和数据行错位。
+                    {
+                        let (cell_rect, _) =
+                            ui.allocate_exact_size(Vec2::new(col_device, 18.0), Sense::hover());
+                        let painter = ui.painter();
+                        crate::icons::paint(
+                            painter,
+                            Rect::from_min_size(
+                                cell_rect.left_top() + Vec2::new(1.0, 2.0),
+                                Vec2::splat(14.0),
+                            ),
+                            crate::icons::Icon::Speaker,
+                            palette().muted,
+                            1.3,
+                        );
+                        painter.text(
+                            cell_rect.left_center() + Vec2::new(19.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            "设备",
+                            header_font.clone(),
+                            palette().muted,
+                        );
+                    }
+                    text_cell(
+                        ui,
+                        col_format,
+                        18.0,
+                        "格式",
+                        header_font.clone(),
+                        palette().muted,
+                        false,
+                    );
+                    text_cell(
+                        ui,
+                        col_role,
+                        18.0,
+                        "角色",
+                        header_font.clone(),
+                        palette().muted,
+                        false,
+                    );
+                    text_cell(
+                        ui,
+                        col_action,
+                        18.0,
+                        "操作",
+                        header_font,
+                        palette().muted,
+                        false,
+                    );
                 });
             }
             ui.add_space(2.0);
@@ -3700,6 +3920,9 @@ impl StereoLinkApp {
                                         RichText::new(clip_text(&selected, 26)).size(12.0),
                                     )
                                     .show_ui(ui, |ui| {
+                                        let enter = theme::popup_enter(ui.ctx(), ("fmt", &ep.id));
+                                        ui.set_opacity(enter);
+                                        ui.add_space((1.0 - enter) * 4.0);
                                         for f in list {
                                             ui.selectable_value(
                                                 choice,
@@ -3742,16 +3965,19 @@ impl StereoLinkApp {
                                 );
                             }
                             (None, false) => {
-                                if ui
-                                    .add_sized(
-                                        [(col_format - 8.0).max(120.0), 20.0],
-                                        egui::Button::new(RichText::new("探测格式").size(12.0)),
-                                    )
-                                    .on_hover_text("用独占模式逐个试探这个端点支持的格式")
-                                    .clicked()
-                                {
-                                    probe_one = Some(ep.id.clone());
-                                }
+                                let cell_w = (col_format - 8.0).max(120.0);
+                                ui.allocate_ui_with_layout(
+                                    Vec2::new(cell_w, 22.0),
+                                    Layout::left_to_right(Align::Center),
+                                    |ui| {
+                                        if btn_small(ui, true, "探测格式", theme::ButtonKind::Secondary)
+                                            .on_hover_text("用独占模式逐个试探这个端点支持的格式")
+                                            .clicked()
+                                        {
+                                            probe_one = Some(ep.id.clone());
+                                        }
+                                    },
+                                );
                             }
                         },
                     );
@@ -3816,21 +4042,18 @@ impl StereoLinkApp {
                                     false,
                                 );
                             } else {
-                                if ui
-                                    .add_enabled(!is_left, egui::Button::new("设为左").small())
+                                if btn_small(ui, !is_left, "设为左", theme::ButtonKind::Secondary)
                                     .clicked()
                                 {
                                     set_left = Some(ep.name.clone());
                                 }
-                                if ui
-                                    .add_enabled(!is_right, egui::Button::new("设为右").small())
+                                if btn_small(ui, !is_right, "设为右", theme::ButtonKind::Secondary)
                                     .clicked()
                                 {
                                     set_right = Some(ep.name.clone());
                                 }
                                 if let Some(t) = &fixed {
-                                    if ui
-                                        .add(egui::Button::new("修正").small())
+                                    if btn_small(ui, true, "修正", theme::ButtonKind::Ghost)
                                         .on_hover_text(format!("改成 {}", t.describe()))
                                         .clicked()
                                     {
@@ -3879,7 +4102,7 @@ impl StereoLinkApp {
         let mut clear = false;
         let mut copy_diag = false;
         let mut copy_log = false;
-        card_frame().show(ui, |ui| {
+        card(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(RichText::new("日志").size(16.0).strong());
@@ -3962,7 +4185,7 @@ impl StereoLinkApp {
             let text = self
                 .hints()
                 .iter()
-                .map(|hint| format!("{} {}", hint.icon(), hint.text))
+                .map(|hint| format!("{} {}", hint.glyph(), hint.text))
                 .collect::<Vec<_>>()
                 .join("\n");
             ui.ctx().copy_text(text);
@@ -4076,8 +4299,12 @@ impl eframe::App for StereoLinkApp {
         // 只有这一页、只有引擎在跑时才加速，其它情况维持 250ms。
         let routing_animating =
             !self.window_hidden && self.page == Page::Routing && self.engine.is_some();
+        // toast 有存活项时用 16ms 心跳，让淡入淡出按 60fps 走；否则回落到常规心跳。
+        let toast_animating = !self.toasts.is_empty();
         ctx.request_repaint_after(if self.window_hidden {
             Duration::from_secs(1)
+        } else if toast_animating {
+            Duration::from_millis(16)
         } else if routing_animating {
             Duration::from_millis(100)
         } else {
@@ -4103,6 +4330,12 @@ impl eframe::App for StereoLinkApp {
         // 顶栏已取消：身份/状态在侧边栏底部，诊断徽章在路由页顶部。
         self.sidebar(ctx);
         self.main_panel(ctx);
+
+        // 浮层提示：先入队本帧攒下的文案，再画到右下角（最上层，不参与布局）。
+        if let Some(text) = self.pending_toast.take() {
+            self.toasts.push(ctx, text);
+        }
+        self.toasts.show(ctx, is_dark());
 
         if self.frame_log > 0 {
             let total_ms = frame_start.elapsed().as_secs_f32() * 1000.0;

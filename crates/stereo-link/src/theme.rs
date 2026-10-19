@@ -44,6 +44,10 @@ pub struct Tokens {
     pub glass_raised: Color32,
     /// 侧边栏底色。
     pub sidebar: Color32,
+    /// 正文文字色。
+    pub text: Color32,
+    /// 弱化文字色（说明、占位、次要标签）。
+    pub text_weak: Color32,
     /// 1px 玻璃描边。
     pub stroke: Color32,
     /// 顶部内高光。
@@ -83,6 +87,9 @@ pub const DARK_TOKENS: Tokens = Tokens {
     glass_base: Color32::from_rgba_premultiplied(14, 17, 23, 150),
     glass_raised: Color32::from_rgba_premultiplied(22, 26, 34, 190),
     sidebar: Color32::from_rgba_premultiplied(11, 14, 19, 170),
+    // 文字色与 `app.rs` 的 Palette 保持一致（`tests::text_tokens_match_app_palette` 会查）。
+    text: Color32::from_rgb(232, 236, 244),
+    text_weak: Color32::from_rgb(132, 142, 158),
     // 白描边/内高光：预乘色必须 RGB == alpha，写 (255,255,255,38) 会变成纯白实线。
     stroke: Color32::from_rgba_premultiplied(38, 38, 38, 38),
     highlight: Color32::from_rgba_premultiplied(46, 46, 46, 46),
@@ -112,6 +119,9 @@ pub const LIGHT_TOKENS: Tokens = Tokens {
     glass_raised: Color32::from_rgba_premultiplied(214, 214, 214, 214),
     // (248,251,255) @ 76.9% → (191,193,196,196)。
     sidebar: Color32::from_rgba_premultiplied(191, 193, 196, 196),
+    // 文字色与 `app.rs` 的 Palette 保持一致（`tests::text_tokens_match_app_palette` 会查）。
+    text: Color32::from_rgb(23, 32, 45),
+    text_weak: Color32::from_rgb(90, 104, 121),
     // 浅色主题的描边是「深蓝 + 低 alpha」：预乘值 = 各通道 × alpha/255。
     // (15,23,42) @ 13.3% → (2,3,6,34)。写原始色会过冲成一条发亮的蓝灰实线。
     stroke: Color32::from_rgba_premultiplied(2, 3, 6, 34),
@@ -339,6 +349,32 @@ pub fn paint_background(ctx: &egui::Context, rect: Rect, dark: bool, time: f64) 
         let drift = Vec2::new(phase.cos(), (phase * 0.77).sin()) * (r * 0.045);
         push_blob(&mut mesh, *spot + drift, r, blobs[i], t.blob_alpha, 48, 8);
     }
+
+    // 2.5) 鼠标跟随柔光（P2.13）：一团跟着指针走的极淡强调色光，带惯性。
+    //      只在还没追上指针时请求重绘 —— 停住之后就不再叫醒渲染循环，
+    //      不会因为鼠标停在窗口里就一直满速空转。
+    if let Some(target) = ctx.input(|i| i.pointer.hover_pos()) {
+        let key = egui::Id::new("stereo-link-pointer-glow");
+        let mut pos = ctx
+            .data(|d| d.get_temp::<egui::Pos2>(key))
+            .unwrap_or(target);
+        let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
+        let k = 1.0 - (-dt / 0.18).exp();
+        pos += (target - pos) * k;
+        ctx.data_mut(|d| d.insert_temp(key, pos));
+        push_blob(
+            &mut mesh,
+            pos,
+            r * 0.62,
+            t.accent,
+            (t.blob_alpha as f32 * 0.5) as u8,
+            40,
+            7,
+        );
+        if (target - pos).length() > 0.5 {
+            ctx.request_repaint();
+        }
+    }
     painter.add(mesh);
 
     // 3) 极淡噪点：打散渐变的「塑料感」，也让玻璃的透光有颗粒。
@@ -553,6 +589,423 @@ pub fn nav_capsule(ui: &egui::Ui, rect: Rect, dark: bool, glow: f32) {
         Vec2::new(3.0, 18.0),
     );
     painter.rect_filled(bar, CornerRadius::same(2), t.accent);
+}
+
+// ---- 交互原语（P1.7 按钮/卡片反馈、P2.12 弹簧、P2.13 扫光/流光）----
+
+/// 弹簧：给开关、胶囊、折叠这类「有惯性」的动效用，比线性插值更像真实手感。
+///
+/// 默认参数 ω²=180、2ζω=26（ω≈13.4 rad/s、ζ≈0.97）：约 220 ms 到位、几乎不过冲。
+/// 用半隐式欧拉推进，`dt` 夹在 50 ms 以内，掉帧时也不会发散。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Spring {
+    value: f32,
+    velocity: f32,
+}
+
+impl Spring {
+    /// 以 `value` 为静止位置新建（首帧不会从 0 弹起来）。
+    pub fn new(value: f32) -> Self {
+        Self {
+            value,
+            velocity: 0.0,
+        }
+    }
+
+    /// 当前值。
+    #[allow(dead_code)] // 目前调用方只用 `tick` 的返回值；留给需要单独读值的场景。
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+
+    /// 直接落到目标（跳过动画：主题硬切、控件首次出现时用）。
+    #[allow(dead_code)] // 同上：先保留对称的 API，避免每个调用点都自己造一个。
+    pub fn snap(&mut self, value: f32) {
+        self.value = value;
+        self.velocity = 0.0;
+    }
+
+    /// 推进一帧，返回新值。
+    pub fn tick(&mut self, target: f32, dt: f32) -> f32 {
+        self.tick_with(target, dt, 180.0, 26.0)
+    }
+
+    /// 自定义刚度/阻尼推进一帧（`stiffness` = ω²，`damping` = 2ζω）。
+    pub fn tick_with(&mut self, target: f32, dt: f32, stiffness: f32, damping: f32) -> f32 {
+        let dt = dt.clamp(0.0, 0.05);
+        if dt <= 0.0 {
+            return self.value;
+        }
+        let accel = (target - self.value) * stiffness - self.velocity * damping;
+        self.velocity += accel * dt;
+        self.value += self.velocity * dt;
+        // 足够接近就直接吸附，免得永远差一点点、还得一直请求重绘。
+        if (target - self.value).abs() < 1e-3 && self.velocity.abs() < 1e-2 {
+            self.value = target;
+            self.velocity = 0.0;
+        }
+        self.value
+    }
+}
+
+/// 取（或新建）一条存在 egui 临时内存里的弹簧并推进一帧。
+///
+/// `salt` 区分不同控件，通常直接传 `response.id`，或 `("nav", page)` 这种元组。
+pub fn spring(ctx: &egui::Context, salt: impl std::hash::Hash, target: f32, dt: f32) -> f32 {
+    let id = egui::Id::new(("stereo-link-spring", salt));
+    let mut s = ctx
+        .data(|d| d.get_temp::<Spring>(id))
+        .unwrap_or_else(|| Spring::new(target));
+    let v = s.tick(target, dt);
+    ctx.data_mut(|d| d.insert_temp(id, s));
+    v
+}
+
+/// 缓出（起步快、收尾慢）：`t` 0..1 映射到 0..1。
+pub fn ease_out(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// 下拉浮层「从原点展开」的进度（0..1，弹簧缓动）。
+///
+/// egui 0.31 的下拉浮层由内置 popup 系统画，**没有整块缩放的能力**
+/// （没有 subtree transform），所以这里用「淡入 + 从锚点方向收拢几像素」
+/// 近似原型里的 origin 缩放：内容先透明、略向上/向下收 4px，再弹到原位。
+///
+/// 每次重新打开都要从头演：用 `ctx.cumulative_frame_nr()` 判断这一帧和上一帧
+/// 是否连续（不连续 = 浮层中间被关过，视为新开）。
+pub fn popup_enter(ctx: &egui::Context, salt: impl std::hash::Hash) -> f32 {
+    let id = egui::Id::new(("stereo-link-popup-enter", salt));
+    let frame = ctx.cumulative_pass_nr();
+    let far = id.with("frame");
+    let prev: Option<u64> = ctx.data_mut(|d| d.get_temp(far));
+    let fresh = prev.map_or(true, |f| frame.saturating_sub(f) > 1);
+    let mut s: Spring = ctx
+        .data_mut(|d| d.get_temp::<Spring>(id))
+        .unwrap_or_else(|| Spring::new(0.0));
+    if fresh {
+        s = Spring::new(0.0);
+    }
+    let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
+    let v = s.tick(1.0, dt);
+    ctx.data_mut(|d| {
+        d.insert_temp(id, s);
+        d.insert_temp(far, frame);
+    });
+    if v < 1.0 {
+        ctx.request_repaint();
+    }
+    ease_out(v)
+}
+
+/// 在彩色底上挑可读的文字色（与 `app.rs` 的同名逻辑一致，独立实现避免循环依赖）。
+fn ink_on(bg: Color32) -> Color32 {
+    let lum = 0.299 * bg.r() as f32 + 0.587 * bg.g() as f32 + 0.114 * bg.b() as f32;
+    if lum > 120.0 {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    }
+}
+
+/// 把一段竖直方向的光带做成网格：左透明 → 中间 `alpha` → 右透明。
+fn sweep_band_mesh(rect: Rect, alpha: u8) -> egui::Mesh {
+    let mut mesh = egui::Mesh::default();
+    let uv = egui::Pos2::ZERO;
+    let v = |pos: egui::Pos2, color: Color32| egui::epaint::Vertex { pos, uv, color };
+    let mid = Color32::from_white_alpha(alpha);
+    let clear = Color32::from_white_alpha(0);
+    let cx = rect.center().x;
+    mesh.vertices.push(v(rect.left_top(), clear));
+    mesh.vertices.push(v(rect.left_bottom(), clear));
+    mesh.vertices.push(v(egui::pos2(cx, rect.top()), mid));
+    mesh.vertices.push(v(egui::pos2(cx, rect.bottom()), mid));
+    mesh.vertices.push(v(rect.right_top(), clear));
+    mesh.vertices.push(v(rect.right_bottom(), clear));
+    mesh.indices
+        .extend_from_slice(&[0, 2, 1, 1, 2, 3, 2, 4, 3, 3, 4, 5]);
+    mesh
+}
+
+/// 圆角矩形的周长采样点（顺时针，从左上角的上边开始）。
+fn rounded_rect_perimeter(rect: Rect, radius: u8, seg_per_corner: usize) -> Vec<egui::Pos2> {
+    let r = (radius as f32)
+        .min(rect.width() * 0.5)
+        .min(rect.height() * 0.5);
+    let mut pts: Vec<egui::Pos2> = Vec::with_capacity(seg_per_corner * 4 + 8);
+    let corner = |cx: f32, cy: f32, start: f32, pts: &mut Vec<egui::Pos2>| {
+        for i in 0..=seg_per_corner {
+            let a = start + std::f32::consts::FRAC_PI_2 * (i as f32 / seg_per_corner as f32);
+            pts.push(egui::pos2(cx + r * a.cos(), cy + r * a.sin()));
+        }
+    };
+    pts.push(egui::pos2(rect.left() + r, rect.top()));
+    pts.push(egui::pos2(rect.right() - r, rect.top()));
+    corner(
+        rect.right() - r,
+        rect.top() + r,
+        -std::f32::consts::FRAC_PI_2,
+        &mut pts,
+    );
+    pts.push(egui::pos2(rect.right(), rect.bottom() - r));
+    corner(rect.right() - r, rect.bottom() - r, 0.0, &mut pts);
+    pts.push(egui::pos2(rect.left() + r, rect.bottom()));
+    corner(
+        rect.left() + r,
+        rect.bottom() - r,
+        std::f32::consts::FRAC_PI_2,
+        &mut pts,
+    );
+    pts.push(egui::pos2(rect.left(), rect.top() + r));
+    corner(
+        rect.left() + r,
+        rect.top() + r,
+        std::f32::consts::PI,
+        &mut pts,
+    );
+    pts
+}
+
+/// 按钮语义（只决定配色与描边，不决定尺寸）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonKind {
+    /// 主操作：强调色实心。
+    Primary,
+    /// 次要操作：玻璃底 + 描边。
+    Secondary,
+    /// 轻量操作：无底色，悬停才浮出。
+    Ghost,
+    /// 停止 / 破坏性操作：红。
+    Danger,
+}
+
+/// 按钮尺寸档位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonSize {
+    /// 常规：正文按钮。
+    Normal,
+    /// 紧凑：表格行里的小控件。
+    Small,
+}
+
+/// 统一按钮：悬停上浮 1px + 底色/描边提亮 + 一道 1.4 s 循环扫光，按下回弹。
+///
+/// 外观全部手绘（不用 `egui::Button` 的默认框），但交互语义仍走 `Sense::click()`：
+/// 悬停、点击、Tab 聚焦都在；键盘激活由 egui 自己处理（有焦点时按空格/回车会置
+/// `FAKE_PRIMARY_CLICKED`），所以调用点照旧写 `.clicked()`。
+/// 扫光那条带子被裁剪在按钮内部，不会糊到旁边的控件上。
+pub fn button(ui: &mut egui::Ui, label: &str, kind: ButtonKind, dark: bool) -> egui::Response {
+    button_sized(ui, true, label, kind, ButtonSize::Normal, dark)
+}
+
+/// 带 `enabled` 与尺寸档位的完整版本（禁用时置灰、不响应点击，但保留占位）。
+pub fn button_sized(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    kind: ButtonKind,
+    size: ButtonSize,
+    dark: bool,
+) -> egui::Response {
+    // 禁用态交给 egui：`add_enabled_ui(false, ..)` 里的控件不 hover、不点击，
+    // 但 `allocate_exact_size` 占的位子还在，布局不会因为置灰而跳动。
+    ui.add_enabled_ui(enabled, |ui| button_inner(ui, label, kind, size, dark))
+        .inner
+}
+
+fn button_inner(
+    ui: &mut egui::Ui,
+    label: &str,
+    kind: ButtonKind,
+    size: ButtonSize,
+    dark: bool,
+) -> egui::Response {
+    let t = tokens(dark);
+    let on = ui.is_enabled();
+    let font = match size {
+        ButtonSize::Normal => egui::TextStyle::Button.resolve(ui.style()),
+        ButtonSize::Small => egui::FontId::proportional(12.0),
+    };
+    let base_fg = match kind {
+        ButtonKind::Primary => ink_on(t.accent),
+        ButtonKind::Danger => t.meter_high,
+        _ => t.text,
+    };
+    let fg = if on { base_fg } else { t.text_weak };
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, fg));
+    let pad = match (kind, size) {
+        (ButtonKind::Ghost, ButtonSize::Small) => Vec2::new(6.0, 3.0),
+        (ButtonKind::Ghost, _) => Vec2::new(10.0, 5.0),
+        (_, ButtonSize::Small) => Vec2::new(9.0, 4.0),
+        (_, _) => Vec2::new(14.0, 7.0),
+    };
+    let (rect, resp) = ui.allocate_exact_size(galley.size() + pad * 2.0, egui::Sense::click());
+    let dt = ui.input(|i| i.stable_dt).clamp(0.0, 0.1);
+    let hover_target = if on && resp.hovered() { 1.0 } else { 0.0 };
+    let press_target = if on && resp.is_pointer_button_down_on() {
+        1.0
+    } else {
+        0.0
+    };
+    let hover = spring(ui.ctx(), (resp.id, "hover"), hover_target, dt);
+    let press = spring(ui.ctx(), (resp.id, "press"), press_target, dt);
+    // 悬停上浮、按下回弹：位移控制在 2px 内，不晃眼。
+    let offset = Vec2::new(0.0, -1.2 * hover + 1.6 * press);
+    let r = rect.translate(offset);
+    let radius = CornerRadius::same(match size {
+        ButtonSize::Normal => (t.radius * 3 / 5).max(7),
+        ButtonSize::Small => 6,
+    });
+    let painter = ui.painter();
+    let dim = if on { 1.0 } else { 0.45 };
+    let (fill, edge) = match kind {
+        ButtonKind::Primary => (
+            t.accent
+                .gamma_multiply((0.86 + 0.14 * hover - 0.08 * press) * dim),
+            t.accent.gamma_multiply(dim),
+        ),
+        ButtonKind::Danger => (
+            t.meter_high.gamma_multiply((0.10 + 0.12 * hover) * dim),
+            t.meter_high.gamma_multiply((0.32 + 0.30 * hover) * dim),
+        ),
+        ButtonKind::Secondary => (
+            if dark {
+                Color32::from_white_alpha(((9.0 + 8.0 * hover) * dim) as u8)
+            } else {
+                Color32::from_black_alpha(((7.0 + 5.0 * hover) * dim) as u8)
+            },
+            t.stroke.gamma_multiply((1.3 + 0.7 * hover) * dim),
+        ),
+        ButtonKind::Ghost => (
+            if dark {
+                Color32::from_white_alpha((10.0 * hover * dim) as u8)
+            } else {
+                Color32::from_black_alpha((7.0 * hover * dim) as u8)
+            },
+            Color32::TRANSPARENT,
+        ),
+    };
+    if fill.a() > 0 {
+        painter.rect_filled(r, radius, fill);
+    }
+    if edge.a() > 0 {
+        painter.rect_stroke(
+            r,
+            radius,
+            Stroke::new(1.0_f32, edge),
+            egui::StrokeKind::Inside,
+        );
+    }
+    // 扫光：悬停时一条柔光带从左掠到右，1.4 s 一轮；不悬停就完全不画。
+    if hover > 0.01 {
+        let time = ui.input(|i| i.time) as f32;
+        let phase = (time / 1.4).rem_euclid(1.0);
+        let cx = r.left() + r.width() * (phase * 1.5 - 0.25);
+        let half = (r.width() * 0.22).max(12.0);
+        let band = Rect::from_min_max(
+            egui::pos2(cx - half, r.top() + 1.0),
+            egui::pos2(cx + half, r.bottom() - 1.0),
+        );
+        let alpha = (hover * (std::f32::consts::PI * phase).sin().abs() * 30.0).round() as u8;
+        if alpha > 0 && band.width() > 1.0 {
+            let clipped = painter.with_clip_rect(r.intersect(ui.clip_rect()));
+            clipped.add(egui::Shape::mesh(sweep_band_mesh(band, alpha)));
+        }
+        // 扫光正在跑，必须持续重绘，否则会一格一格地跳。
+        ui.ctx().request_repaint();
+    }
+    // 焦点环：让键盘用户看得见自己在哪。
+    if resp.has_focus() {
+        painter.rect_stroke(
+            r.expand(1.5),
+            radius,
+            Stroke::new(1.0_f32, t.accent.gamma_multiply(0.55)),
+            egui::StrokeKind::Outside,
+        );
+    }
+    painter.galley(r.center() - galley.size() * 0.5, galley, fg);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, label));
+    resp
+}
+
+/// 卡片悬停装饰：边框整体提亮 + 沿轮廓跑一段流光。
+///
+/// 只画在**边框那一圈**，不往内容区里画，所以不会影响任何文字的可读性。
+/// `hover` 是 0..1 的弹簧值；`phase` 用来错开多张卡片的流光（避免整页同步闪）。
+pub fn card_border_flow(ui: &egui::Ui, rect: Rect, hover: f32, dark: bool, phase: f32) {
+    if hover <= 0.01 || rect.width() < 8.0 || rect.height() < 8.0 {
+        return;
+    }
+    let t = tokens(dark);
+    let hover = hover.clamp(0.0, 1.0);
+    let painter = ui.painter();
+    // 1) 整圈描边提亮一点：悬停的卡片轮廓更清楚。
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(t.radius),
+        Stroke::new(1.0_f32, t.stroke.gamma_multiply(1.0 + 0.9 * hover)),
+        egui::StrokeKind::Inside,
+    );
+    // 2) 沿轮廓跑一段高光：把圆角矩形周长采样成折线，画其中一小段，越靠尾越淡。
+    let pts = rounded_rect_perimeter(rect, t.radius, 4);
+    let n = pts.len();
+    if n < 8 {
+        return;
+    }
+    let time = ui.input(|i| i.time) as f32;
+    let head = ((time * 0.35 + phase).rem_euclid(1.0) * n as f32) as usize % n;
+    let span = (n / 6).max(4);
+    for k in 0..span {
+        let a = pts[(head + k) % n];
+        let b = pts[(head + k + 1) % n];
+        let alpha = (hover * ease_out(1.0 - k as f32 / span as f32) * 95.0).round() as u8;
+        if alpha == 0 {
+            continue;
+        }
+        painter.line_segment(
+            [a, b],
+            Stroke::new(1.0_f32, t.accent.gamma_multiply(alpha as f32 / 255.0)),
+        );
+    }
+    ui.ctx().request_repaint();
+}
+
+/// 弹窗外框：比卡片更实、圆角更大、投影更重，让它明确「浮在最上层」。
+pub fn modal_frame(dark: bool) -> egui::Frame {
+    let t = tokens(dark);
+    let fill = if dark {
+        Color32::from_rgba_premultiplied(26, 30, 38, 246)
+    } else {
+        Color32::from_rgba_premultiplied(250, 251, 253, 250)
+    };
+    egui::Frame::default()
+        .fill(fill)
+        .stroke(Stroke::new(1.0_f32, t.stroke.gamma_multiply(1.6)))
+        .inner_margin(Margin::symmetric(20, 18))
+        .corner_radius(CornerRadius::same(16))
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 18],
+            blur: 48,
+            spread: 0,
+            color: Color32::from_black_alpha(if dark { 150 } else { 60 }),
+        })
+}
+
+/// 模态背景压暗：在整屏之上铺一层 scrim，让弹窗从背景里「脱开」。
+///
+/// 只负责视觉，不吞点击（与改造前行为一致，避免把用户关进死路）。
+pub fn modal_scrim(ctx: &egui::Context, rect: Rect, dark: bool) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Middle,
+        egui::Id::new("stereo-link-modal-scrim"),
+    ));
+    let color = if dark {
+        Color32::from_black_alpha(120)
+    } else {
+        Color32::from_black_alpha(44)
+    };
+    painter.rect_filled(rect, CornerRadius::ZERO, color);
 }
 
 // ---- 颜色工具 ----
