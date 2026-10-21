@@ -44,6 +44,12 @@ jobs:
       - name: cargo build (release)
         run: cargo build --workspace --release
 
+      # CLI 冒烟：控制台入口在 CI 里也要能起来（不碰音频端点，只验版本/帮助）。
+      - name: CLI smoke
+        run: |
+          ./target/release/stereo-link-cli.exe --version
+          ./target/release/stereo-link-cli.exe --help
+
       # 内核驱动（drivers/）不在这里构建：需要 WDK + 自签名 + 测试签名模式，
       # 见 drivers/REPORT.md。发布产物见 GitHub Releases。
 

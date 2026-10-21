@@ -1,12 +1,14 @@
 //! StereoLink 立体声链 —— 桌面面板。
 //!
-//! 界面按「左侧可收起侧边栏 + 四个页面」组织：
-//! - 侧边栏：导航（声道路由 / 采集源 / 本机播放设备 / 日志，可收起成图标条）+ 底部身份、
-//!   运行状态徽章、主题切换、系统声音设置；
+//! 界面按「左侧可收起侧边栏 + 五个页面」组织：
+//! - 侧边栏：导航（声道路由 / 采集源 / 本机播放设备 / 手机投放 / 日志，可收起成图标条）
+//!   + 底部身份、运行状态徽章、主题切换、系统声音设置；
 //! - 声道路由页：操作按钮（开始 / 停止 / 重启路由、左右自检音）、三项诊断徽章、
 //!   路由表（每路音量条 + 反相开关）、高级（增益 / 抖动缓冲 / 左右微调延迟）、声学自校验；
 //! - 采集源页：采集端点选择、默认输出联动、采集电平与音量；
 //! - 本机播放设备页：设备表（格式下拉、探测、刷新设备）；
+//! - 手机投放页：AirPlay / 小米妙播接收端的开关与状态（设备名固定 StereoLink，
+//!   声音直接进 Windows 当前默认输出声卡）；
 //! - 日志页：运行日志（自动滚动、复制诊断、复制全部、清空）。
 //!
 //! 设计要点：
@@ -27,17 +29,20 @@ use eframe::egui::{
     Align, Color32, CornerRadius, FontId, Layout, Margin, Rect, RichText, Sense, Stroke, Vec2,
 };
 use stereo_audio::{
-    BalanceReport, DataFlow, EndpointFormat, EndpointInfo, EndpointVolume, MicCandidate, MicHealth,
-    PcmFormat, RouteChannel, RouteConfig, RouteEngineConfig, RouteEngineHandle, RouteEngineStats,
-    RouteStats, SyncConfig, SyncMethod, SyncResult, BALANCE_DEADBAND_DB,
+    BalanceCalibration, BalanceCalibrationOutcome, BalanceReport, DataFlow, EndpointFormat,
+    EndpointInfo, EndpointVolume, MicCandidate, MicHealth, PcmFormat, RouteChannel, RouteConfig,
+    RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats, SyncConfig, SyncMethod,
+    SyncResult, BALANCE_ANCHOR_SCALARS, BALANCE_GAIN_DEADBAND_DB,
 };
 
 use crate::audio_default;
 use crate::close_flow::{self, CloseOutcome, CloseState};
-use crate::config::{AppConfig, ThemeMode, VolumeFollow};
+use crate::config::{AppConfig, BalanceCalConfig, ThemeMode, VolumeFollow};
+use crate::control::{self, ControlServer};
 use crate::endpoint_poll::{EndpointPoll, PollInput};
 use crate::fonts;
 use crate::logbuf::{LogBuffer, LogLine};
+use crate::receiver::{CastKind, CastStatus, ReceiverManager};
 use crate::theme::{self, GlassLevel};
 use crate::tray::{Tray, TrayEvent};
 
@@ -383,7 +388,10 @@ const ROUTE_COL_CH: f32 = 52.0;
 /// 行内「波形 + 频谱」装饰列（真实电平驱动，见 `theme::WaveBuf`）。
 const ROUTE_COL_WAVE: f32 = 112.0;
 const ROUTE_COL_LEVEL: f32 = 92.0;
-/// 每路音量条：占用原先「已发流 / 欠载」两列的位置。
+/// 每路「实机输出」音量条：占用原先「已发流 / 欠载」两列的位置。
+///
+/// 显示和拖动都按「实机输出」= 端点音量 + 引擎补偿（dB 域相加）算，见
+/// StereoLinkApp::actual_output_scalar。
 const ROUTE_COL_VOL: f32 = 150.0;
 const ROUTE_COL_BUF: f32 = 72.0;
 const ROUTE_COL_PATH: f32 = 44.0;
@@ -626,7 +634,7 @@ impl Hint {
 // 应用
 // ---------------------------------------------------------------------------
 
-/// 左侧导航的四个页面。
+/// 左侧导航的五个页面。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
     /// 声道路由（主页）：左右设备、每路音量、反相、校准与音量平衡、高级。
@@ -635,13 +643,21 @@ enum Page {
     Capture,
     /// 本机播放设备：格式 / 角色 / 设为左 / 设为右。
     Devices,
+    /// 手机投放：AirPlay / 小米妙播接收端开关（声音直接进本机默认声卡）。
+    Cast,
     /// 日志：运行日志（默认关闭，只在点进来时渲染）。
     Log,
 }
 
 impl Page {
     /// 导航栏里的全部页面（顺序即显示顺序）。
-    const ALL: [Page; 4] = [Page::Routing, Page::Capture, Page::Devices, Page::Log];
+    const ALL: [Page; 5] = [
+        Page::Routing,
+        Page::Capture,
+        Page::Devices,
+        Page::Cast,
+        Page::Log,
+    ];
 
     /// 导航栏里的中文标题。
     fn label(self) -> &'static str {
@@ -649,6 +665,7 @@ impl Page {
             Page::Routing => "声道路由",
             Page::Capture => "采集源",
             Page::Devices => "本机播放设备",
+            Page::Cast => "手机投放",
             Page::Log => "日志",
         }
     }
@@ -659,15 +676,16 @@ impl Page {
             Page::Routing => crate::icons::Icon::Route,
             Page::Capture => crate::icons::Icon::Capture,
             Page::Devices => crate::icons::Icon::Devices,
+            Page::Cast => crate::icons::Icon::Cast,
             Page::Log => crate::icons::Icon::Log,
         }
     }
 }
 
-/// 后台校准线程的返回值：延迟对齐 + 音量平衡（平衡失败不拖累对齐结果）。
+/// 后台校准线程的返回值：延迟对齐 + 音量平衡校准（平衡失败不拖累对齐结果）。
 struct CalibrateOutcome {
     sync: Result<SyncResult, String>,
-    balance: Result<BalanceReport, String>,
+    calibration: Result<BalanceCalibrationOutcome, String>,
 }
 
 pub struct StereoLinkApp {
@@ -684,6 +702,8 @@ pub struct StereoLinkApp {
     font: Option<String>,
     /// 默认输出（每 ~1s 实时探测；引擎快照里的值只是启动时的静态值）。
     live_default_output: Option<String>,
+    /// 默认输出的端点 id：WASAPI 里好几块声卡都叫「扬声器」，判断「有没有换声卡」得看 id。
+    live_default_output_id: Option<String>,
     /// 当前 Windows 默认输出是不是采集端点（不是就采不到声）。
     live_default_is_capture: bool,
     auto_started: bool,
@@ -769,6 +789,18 @@ pub struct StereoLinkApp {
     balance_error: Option<String>,
     /// 音量平衡的状态说明。
     balance_status: String,
+    /// 当前生效的音量平衡校准（启动时从配置加载；左右端点换了就作废）。
+    balance_cal: BalanceCalibration,
+    /// 是否正在做音量平衡校准：期间暂停音量跟随，免得跟随线程把校准锚点音量覆盖掉。
+    calibrating: bool,
+    /// 上一次写进引擎的平衡补偿（dB，左/右），用来避免每帧重复写引擎原子量。
+    last_balance_gains: [f32; 2],
+    /// 上一次写进引擎的「数字静音」状态：系统静音时让引擎直接把输出推 0。
+    ///
+    /// 端点静音靠不住：实测 Xiaomi Sound（蓝牙声卡）上 `SetMute(true)` 会被驱动折算成
+    /// 「把端点音量压到最低可用档（约 8%）」并立刻读回「未静音」，物理音箱仍会漏出小声音。
+    /// 所以系统静音时同时在引擎侧推 0（精确数字静音），不依赖端点/驱动行为。
+    last_engine_muted: bool,
     /// 日志页是否自动滚动到最新一行。
     log_autoscroll: bool,
     /// 左声道行内波形/频谱（幅度来自真实 `RouteStats.level`）。
@@ -783,6 +815,14 @@ pub struct StereoLinkApp {
     level_log: bool,
     /// 上一次电平诊断日志的时间。
     last_level_log: Option<Instant>,
+    /// 手机投放接收端（AirPlay / 小米妙播）：只管子进程，不碰音频数据。
+    cast: ReceiverManager,
+    /// 命令行控制面：`stereo-link-cli` 靠它读状态、发命令（开发规范：不用点按钮测试）。
+    control: Option<ControlServer>,
+    /// 启动时刻（`status` 里的 uptime）。
+    started_at: Instant,
+    /// 命令行发了 `quit`：下一帧关窗口（走正常退出流程，保存配置、停引擎）。
+    pending_quit: bool,
 }
 
 impl StereoLinkApp {
@@ -804,6 +844,8 @@ impl StereoLinkApp {
         }
 
         let cfg_sync_mic = cfg.sync_mic.clone();
+        // 配置里的平衡校准直接转成运行时可用的形式（端点没换就一直有效）。
+        let cfg_balance = cfg.balance.to_calibration();
         // 后台轮询线程尽量先出第一份快照（最多等 800 ms），首帧就有设备列表。
         let poll = EndpointPoll::spawn(cc.egui_ctx.clone(), Duration::from_millis(800));
         let mut app = Self {
@@ -817,6 +859,7 @@ impl StereoLinkApp {
             pending_toast: None,
             font,
             live_default_output: None,
+            live_default_output_id: None,
             live_default_is_capture: false,
             auto_started: false,
             exit_handled: false,
@@ -861,6 +904,10 @@ impl StereoLinkApp {
             balance_result: None,
             balance_error: None,
             balance_status: String::new(),
+            balance_cal: cfg_balance,
+            calibrating: false,
+            last_balance_gains: [0.0, 0.0],
+            last_engine_muted: false,
             log_autoscroll: true,
             wave_l: theme::WaveBuf::new(),
             wave_r: theme::WaveBuf::new(),
@@ -868,12 +915,264 @@ impl StereoLinkApp {
             last_frame_at: Instant::now(),
             level_log: std::env::var_os("STEREOLINK_LEVEL_LOG").is_some(),
             last_level_log: None,
+            cast: ReceiverManager::new(),
+            control: None,
+            started_at: Instant::now(),
+            pending_quit: false,
         };
         // 首帧直接用第一份快照（触点、采集源、默认输出都在里面）。
+        if !app.balance_cal.is_empty() {
+            tracing::info!("[音量平衡] 已加载校准：{}", app.balance_cal.describe());
+        }
         app.apply_endpoint_snapshot();
         app.refresh_mics();
+        // 上次被强杀时子进程会留下（占着 5000/8899），先清掉再把新的拉起来。
+        crate::receiver::kill_stale();
+        // 手机投放：配置里勾了「随面板启动」就把对应接收端拉起来。
+        // 低延迟开关要在自动拉起之前生效，否则第一次启动还是按默认 800 ms 起。
+        app.cast.set_low_latency(app.cfg.cast.low_latency);
+        for kind in CastKind::ALL {
+            let auto = match kind {
+                CastKind::AirPlay => app.cfg.cast.auto_airplay,
+                CastKind::MiPlay => app.cfg.cast.auto_miplay,
+            };
+            if auto {
+                let _ = app.cast.start(kind);
+            }
+        }
         tracing::info!("StereoLink 面板启动");
+        // 命令行控制面：起在 127.0.0.1 的随机端口，地址写进 control.json。
+        // 起不来（端口耗尽/权限异常）不影响界面，只是 CLI 连不上。
+        match ControlServer::start("gui") {
+            Ok(server) => {
+                tracing::info!(
+                    "控制面已就绪：127.0.0.1:{}（{}）",
+                    server.info().port,
+                    control::control_path().display()
+                );
+                app.control = Some(server);
+            }
+            Err(error) => tracing::warn!("控制面启动失败，命令行将连不上：{error}"),
+        }
         app
+    }
+
+    // ---------------------------------------------------------------------
+    // 命令行控制面：界面能做的动作这里都要有同名入口（docs/dev-conventions.md）
+    // ---------------------------------------------------------------------
+
+    /// 处理一条控制面请求，返回 `{ok, data|error}`。
+    fn handle_control(&mut self, request: &serde_json::Value) -> serde_json::Value {
+        let Some(cmd) = control::str_field(request, "cmd") else {
+            return control::err("请求缺少 cmd 字段");
+        };
+        match cmd {
+            "ping" => control::ok(serde_json::json!({
+                "pong": true,
+                "mode": "gui",
+                "version": env!("CARGO_PKG_VERSION"),
+                "pid": std::process::id(),
+            })),
+            "status" => control::ok(self.control_status_json()),
+            "log" => {
+                let lines = request
+                    .get("lines")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(100)
+                    .min(2000) as usize;
+                let all = self.log.lines();
+                let items: Vec<serde_json::Value> = all
+                    .into_iter()
+                    .rev()
+                    .take(lines)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .map(|line| {
+                        serde_json::json!({
+                            "at_ms": line.at.as_millis() as u64,
+                            "level": format!("{}", line.level),
+                            "text": line.text,
+                        })
+                    })
+                    .collect();
+                control::ok(serde_json::json!({ "count": items.len(), "lines": items }))
+            }
+            "routing" => {
+                let action = control::str_field(request, "action").unwrap_or("status");
+                match action {
+                    "status" => control::ok(serde_json::json!({
+                        "running": self.engine.is_some(),
+                        "engine": control::engine_json(self.stats.as_ref()),
+                    })),
+                    "start" => {
+                        let started = self.start_routing(false);
+                        if started {
+                            control::ok(serde_json::json!({ "running": true }))
+                        } else {
+                            control::err("启动失败：还没有为左/右声道选好输出设备，或找不到采集源")
+                        }
+                    }
+                    "stop" => {
+                        self.stop_routing(true);
+                        control::ok(serde_json::json!({ "running": false }))
+                    }
+                    "restart" => {
+                        self.restart_routing();
+                        control::ok(serde_json::json!({ "running": self.engine.is_some() }))
+                    }
+                    "mute" | "unmute" => {
+                        let Some(engine) = &self.engine else {
+                            return control::err("路由没在跑");
+                        };
+                        let muted = action == "mute";
+                        if !engine.set_muted(muted) {
+                            return control::err("切换静音失败（引擎可能已经停了）");
+                        }
+                        self.last_engine_muted = muted;
+                        control::ok(serde_json::json!({ "muted": engine.muted() }))
+                    }
+                    other => control::err(format!("routing 不支持 action={other}")),
+                }
+            }
+            "receiver" => {
+                let action = control::str_field(request, "action").unwrap_or("list");
+                let kind = control::str_field(request, "kind").unwrap_or("all");
+                let kinds: Vec<CastKind> = if kind == "all" {
+                    CastKind::ALL.to_vec()
+                } else {
+                    match kind {
+                        "airplay" => vec![CastKind::AirPlay],
+                        "miplay" => vec![CastKind::MiPlay],
+                        other => {
+                            return control::err(format!(
+                                "kind 只支持 airplay / miplay / all，收到 {other}"
+                            ));
+                        }
+                    }
+                };
+                match action {
+                    "list" => control::ok(control::receivers_json(&self.cast)),
+                    "start" | "restart" => {
+                        let mut errors = Vec::new();
+                        for kind in kinds {
+                            if action == "restart" {
+                                self.cast.stop(kind);
+                            }
+                            if let Err(error) = self.cast.start(kind) {
+                                errors.push(format!("{}：{error}", kind.label()));
+                            }
+                        }
+                        if errors.is_empty() {
+                            control::ok(control::receivers_json(&self.cast))
+                        } else {
+                            control::err(errors.join("；"))
+                        }
+                    }
+                    "stop" => {
+                        for kind in kinds {
+                            self.cast.stop(kind);
+                        }
+                        control::ok(control::receivers_json(&self.cast))
+                    }
+                    other => control::err(format!("receiver 不支持 action={other}")),
+                }
+            }
+            "endpoints" => control::ok(control::endpoints_json(&self.endpoints)),
+            "config" => {
+                let action = control::str_field(request, "action").unwrap_or("show");
+                match action {
+                    "path" => control::ok(serde_json::json!({
+                        "path": AppConfig::path().display().to_string(),
+                        "log_path": control::log_path().display().to_string(),
+                    })),
+                    "show" => control::ok(
+                        serde_json::to_value(&self.cfg).unwrap_or(serde_json::Value::Null),
+                    ),
+                    "get" => {
+                        let key = control::str_field(request, "key").unwrap_or("");
+                        match control::config_get(&self.cfg, key) {
+                            Ok(value) => {
+                                control::ok(serde_json::json!({ "key": key, "value": value }))
+                            }
+                            Err(error) => control::err(error),
+                        }
+                    }
+                    "set" => {
+                        let key = control::str_field(request, "key").unwrap_or("");
+                        let Some(value) = request.get("value") else {
+                            return control::err("config set 需要 value 字段");
+                        };
+                        match control::config_set(&mut self.cfg, key, value.clone()) {
+                            Ok(updated) => {
+                                self.cfg.save();
+                                self.cast.set_low_latency(self.cfg.cast.low_latency);
+                                tracing::info!("[配置] {key} = {value}");
+                                control::ok(
+                                    serde_json::json!({ "updated": updated, "saved": true }),
+                                )
+                            }
+                            Err(error) => control::err(error),
+                        }
+                    }
+                    "reload" => {
+                        self.cfg = AppConfig::load();
+                        control::ok(serde_json::json!({ "reloaded": true }))
+                    }
+                    other => control::err(format!("config 不支持 action={other}")),
+                }
+            }
+            "tone" => {
+                let freq = request
+                    .get("freq")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(440.0);
+                let seconds = request
+                    .get("seconds")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(1.0);
+                let selector = match control::str_field(request, "device") {
+                    Some(device) if !device.is_empty() && device != "default" => {
+                        stereo_audio::DeviceSelector::name_contains(device)
+                    }
+                    _ => stereo_audio::DeviceSelector::Default,
+                };
+                match stereo_audio::play_sine(&selector, freq, seconds, 0.25) {
+                    Ok(info) => control::ok(serde_json::json!({
+                        "played": true,
+                        "device": info.device_name,
+                        "seconds": info.seconds,
+                    })),
+                    Err(error) => control::err(format!("播放测试音失败：{error}")),
+                }
+            }
+            "doctor" => control::ok(crate::serve::doctor_json()),
+            "quit" => {
+                self.pending_quit = true;
+                control::ok(serde_json::json!({ "stopping": true }))
+            }
+            other => control::err(format!("未知命令：{other}")),
+        }
+    }
+
+    /// `status` 命令的 JSON（形状与无头模式共用，见 `control::status_json`）。
+    fn control_status_json(&self) -> serde_json::Value {
+        control::status_json(
+            "gui",
+            self.started_at.elapsed().as_secs_f64(),
+            self.engine.is_some(),
+            control::engine_json(self.stats.as_ref()),
+            control::receivers_json(&self.cast),
+            control::endpoints_json(&self.endpoints),
+            control::config_summary(&self.cfg),
+            serde_json::json!({
+                "page": self.page.label(),
+                "window_hidden": self.window_hidden,
+                "live_default_output": self.live_default_output,
+                "live_default_output_id": self.live_default_output_id,
+                "log_path": control::log_path().display().to_string(),
+            }),
+        )
     }
 
     fn setup_style(ctx: &egui::Context) {
@@ -1006,9 +1305,20 @@ impl StereoLinkApp {
         self.poll_format_probe();
         self.poll_sync();
         self.poll_check();
+        // 手机投放：转发接收端输出到日志、刷新存活状态，并让它们跟着系统默认声卡走。
+        // 接收端打开的是 Windows 默认**输出**设备，所以这里用 render 方向上标了
+        // `is_default` 的端点（`live_default_output` 走回环采集解析，可能是采集端点）。
+        self.cast.poll();
+        let default_output = match (&self.live_default_output_id, &self.live_default_output) {
+            (Some(id), Some(name)) => Some((id.as_str(), name.as_str())),
+            _ => None,
+        };
+        self.cast.sync_default_output(default_output);
         // 把「要看什么」推给后台轮询线程，再把它的最新快照应用到界面。
         self.sync_poll_input();
         self.apply_endpoint_snapshot();
+        // 主音量变了就重新算平衡补偿（实时改引擎每路数字增益，不重启引擎）。
+        self.refresh_balance_gains();
 
         if self.clicks_busy
             && self
@@ -1116,7 +1426,10 @@ impl StereoLinkApp {
                 .as_ref()
                 .map(|ep| capture_selector_for(ep, &self.render_devices()))
         });
-        let follow_active = self.engine.is_some() && self.volume_follow_active();
+        // 校准期间必须暂停跟随：校准会主动把两端写到手选的锚点音量，跟随线程若同时
+        // 把采集源标量镜像回两端，锚点就不是我们以为的那个音量了，测出来的差会错。
+        let follow_active =
+            self.engine.is_some() && self.volume_follow_active() && !self.calibrating;
         let follow_targets = if follow_active {
             self.target_endpoints()
         } else {
@@ -1181,6 +1494,7 @@ impl StereoLinkApp {
 
         // ---- 默认输出 ----
         self.live_default_output = snap.default_output.as_ref().map(|ep| ep.name.clone());
+        self.live_default_output_id = snap.default_output.as_ref().map(|ep| ep.id.clone());
         self.live_default_is_capture = snap.default_is_capture;
         // 记住最后一次见到的「真实」默认输出：即使启动时默认已经是采集端点
         // （上次被强杀没来得及恢复），退出时也能切回去。
@@ -1202,10 +1516,14 @@ impl StereoLinkApp {
         self.volume_error = snap.follow_error;
 
         // ---- 每路输出音量（设备回读；拖动后的 600 ms 内不覆盖用户输入） ----
+        // 校准期间更不能覆盖：两端音量正被校准流程按锚点写入，界面显示以校准为准。
         for (index, channel) in [RouteChannel::Left, RouteChannel::Right]
             .into_iter()
             .enumerate()
         {
+            if self.calibrating {
+                continue;
+            }
             let Some(scalar) = snap.route_volumes[index] else {
                 continue;
             };
@@ -1494,6 +1812,11 @@ impl StereoLinkApp {
             Ok(handle) => {
                 self.stats = Some(handle.stats());
                 self.engine = Some(handle);
+                // 新引擎的两路增益都从 0 dB 起、也未静音：立刻把平衡补偿和静音状态补上，
+                // 避免重启后短暂失衡 / 系统本来就静音却又漏出声音。
+                self.last_balance_gains = [0.0, 0.0];
+                self.last_engine_muted = false;
+                self.refresh_balance_gains();
                 tracing::info!("[路由] 已启动：{summary}");
                 if from_ui {
                     self.toast("已开始路由");
@@ -1790,13 +2113,13 @@ impl StereoLinkApp {
         }
     }
 
-    /// 后台跑一次「延迟对齐 + 音量平衡」：先量两台箱的到达时差，再分别量左右电平。
+    /// 后台跑一次「延迟对齐 + 音量平衡校准」：先量两台箱的到达时差，再扫端点曲线 +
+    /// 多档主音量下的声学锚点，算出「只压不抬」的数字增益存进配置。
     fn start_sync(&mut self) {
         if self.sync_busy {
             return;
         }
         // 体检线程正在采麦（独占模式优先），此刻开校准必然抢不到设备。
-        // 界面上的「校准」按钮在体检期间本来就是禁用的，这里兜住「应用并复测」那条路。
         if self.check_rx.is_some() {
             self.sync_status = "正在体检麦克风，等体检结束再校准。".to_string();
             return;
@@ -1816,6 +2139,15 @@ impl StereoLinkApp {
             self.sync_status = "麦克风列表里找不到这个设备，先点「刷新」。".to_string();
             return;
         };
+        // 校准结束把两端写回什么：
+        // * 跟随生效 → 写回主音量（维持「两端 = 系统音量」的不变量，校准不该改变响度）；
+        // * 跟随关闭 → 恢复校准前的原值（用户自己拧的音量别动）。
+        let following = self.engine.is_some() && self.volume_follow_active();
+        let restore_scalar = if following {
+            self.volume_source.map(|v| v.scalar)
+        } else {
+            None
+        };
         let (tx, rx) = std::sync::mpsc::channel();
         let mic_t = mic.clone();
         let (left_t, right_t) = (left.clone(), right.clone());
@@ -1823,23 +2155,36 @@ impl StereoLinkApp {
             let cfg = SyncConfig::new(mic_t.clone(), left_t.clone());
             let sync = stereo_audio::calibrate_pair(&mic_t, &left_t, &right_t, &cfg)
                 .map_err(|e| e.to_string());
-            // 延迟对齐之后，接着用同一个麦克风量左右两路的电平，算音量平衡建议。
-            let balance =
-                stereo_audio::sync::measure_balance(&mic_candidate, &left_t, &right_t, &cfg)
-                    .map_err(|e| e.to_string());
-            let _ = tx.send(CalibrateOutcome { sync, balance });
+            // 延迟对齐之后接着校准平衡：扫两端曲线 + 三个音量锚点，一次性把
+            // 「音箱灵敏度差随音量变化」测全，运行时就不再需要麦克风、不需要再校准。
+            let calibration = stereo_audio::calibrate_balance_with_progress(
+                &mic_candidate,
+                &left_t,
+                &right_t,
+                &cfg,
+                &BALANCE_ANCHOR_SCALARS,
+                restore_scalar,
+                |step| {
+                    tracing::info!("[音量平衡] [{}/{}] {}", step.done, step.total, step.message);
+                },
+            )
+            .map_err(|e| e.to_string());
+            let _ = tx.send(CalibrateOutcome { sync, calibration });
         });
         self.sync_rx = Some(rx);
         self.sync_busy = true;
+        self.calibrating = true;
         self.balance_result = None;
         self.balance_error = None;
         self.balance_status = String::new();
         self.sync_status = if self.engine.is_some() {
-            "正在测量延迟并平衡音量（约 8 秒）… 提示：路由正在运行，若此刻正在放音乐请先「停止」，否则麦克风会同时收到音乐、测量会不准。".to_string()
+            "正在标定延迟并校准音量平衡（约 30 秒）… 会依次在两台音箱上放 1 kHz 测试音、并短暂把音量拉到 30%/60%/90%；请先「停止」正在播放的音乐，期间别调系统音量，保持环境安静。".to_string()
         } else {
-            "正在测量延迟并平衡音量（约 8 秒）… 请保持环境安静。".to_string()
+            "正在标定延迟并校准音量平衡（约 30 秒）… 会依次在两台音箱上放 1 kHz 测试音、并短暂调整音量；请保持环境安静。".to_string()
         };
-        tracing::info!("[自校验] 开始标定 + 平衡：mic={mic} left={left} right={right}");
+        tracing::info!(
+            "[自校验] 开始标定 + 平衡校准：mic={mic} left={left} right={right} restore_scalar={restore_scalar:?}"
+        );
     }
 
     /// 收后台结果：延迟写进两条路由（运行中实时生效），音量平衡结果留待用户确认。
@@ -1853,11 +2198,14 @@ impl StereoLinkApp {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.sync_rx = None;
                 self.sync_busy = false;
+                // 线程不正常退出时也要放开跟随，否则音量联动会一直停着。
+                self.calibrating = false;
                 self.sync_status = "标定线程异常退出。".to_string();
             }
-            Ok(CalibrateOutcome { sync, balance }) => {
+            Ok(CalibrateOutcome { sync, calibration }) => {
                 self.sync_rx = None;
                 self.sync_busy = false;
+                self.calibrating = false;
                 match sync {
                     Ok(result) => {
                         let (l, r) = result.delays();
@@ -1885,65 +2233,282 @@ impl StereoLinkApp {
                         tracing::warn!("[自校验] 测量失败：{e}");
                     }
                 }
-                match balance {
-                    Ok(report) => {
-                        self.balance_status = format!(
-                            "音量平衡：{}  → 点「应用建议」按建议百分比写回左右端点音量",
-                            report.describe()
-                        );
-                        tracing::info!("[音量平衡] {}", report.describe());
-                        self.balance_result = Some(report);
+                match calibration {
+                    Ok(outcome) => {
+                        let cal = outcome.calibration;
+                        self.balance_result = outcome.last_report;
                         self.balance_error = None;
+                        self.balance_cal = cal.clone();
+                        self.cfg.balance = BalanceCalConfig::from(&cal);
+                        self.save();
+                        // 立刻把补偿写进引擎（不等下一帧），校准结束的瞬间也不要失衡。
+                        self.refresh_balance_gains();
+                        let gains = self.last_balance_gains;
+                        self.balance_status = format!(
+                            "已校准：{}；当前补偿 左 {:.1} dB / 右 {:.1} dB",
+                            cal.describe(),
+                            gains[0],
+                            gains[1]
+                        );
+                        tracing::info!("[音量平衡] {}", self.balance_status);
+                        for warning in &outcome.warnings {
+                            tracing::warn!("[音量平衡] {warning}");
+                        }
+                        if outcome.warnings.is_empty() {
+                            self.toast("已校准音量平衡：以后调系统音量会保持平衡");
+                        } else {
+                            self.toast(format!(
+                                "已校准音量平衡（{} 条提醒见日志）",
+                                outcome.warnings.len()
+                            ));
+                        }
                     }
                     Err(e) => {
-                        self.balance_status = format!("音量平衡测量失败（延迟对齐不受影响）：{e}");
-                        tracing::warn!("[音量平衡] 测量失败：{e}");
+                        self.balance_status = format!("音量平衡校准失败（延迟对齐不受影响）：{e}");
+                        tracing::warn!("[音量平衡] 校准失败：{e}");
                         self.balance_result = None;
                         self.balance_error = Some(e);
+                        self.toast("音量平衡校准失败，详见日志");
                     }
                 }
             }
         }
     }
 
-    /// 把音量平衡建议写回左右端点音量（不改延迟；可反复应用）。
-    fn apply_balance(&mut self) {
-        let Some(report) = self.balance_result else {
-            return;
-        };
-        let left = self.cfg.split.left_endpoint.clone();
-        let right = self.cfg.split.right_endpoint.clone();
-        let targets = [
-            (
-                RouteChannel::Left,
-                left.as_str(),
-                report.suggested_left_percent,
-            ),
-            (
-                RouteChannel::Right,
-                right.as_str(),
-                report.suggested_right_percent,
-            ),
-        ];
-        // 写回通过后台线程做（不阻塞 UI；写成功后线程会把新音量回读到快照里）。
-        for (channel, endpoint, percent) in targets {
-            if endpoint.is_empty() {
-                continue;
-            }
-            let scalar = percent as f32 / 100.0;
-            self.poll
-                .request_set_route_volume(endpoint.to_string(), scalar);
-            self.route_volumes.insert(channel, scalar);
-            self.route_volume_at.insert(channel, Instant::now());
+    /// 当前生效的平衡校准：没校准过、或左右端点换过 → None（旧校准不能套到别的设备上）。
+    fn active_balance(&self) -> Option<&BalanceCalibration> {
+        let cal = &self.balance_cal;
+        if cal.anchors.is_empty() {
+            return None;
         }
-        self.toast(format!(
-            "已应用音量平衡：左 {}% / 右 {}%",
-            report.suggested_left_percent, report.suggested_right_percent
-        ));
-        self.balance_status = format!(
-            "已应用：左 {}% / 右 {}%（可再点「测量并对齐」复测）",
-            report.suggested_left_percent, report.suggested_right_percent
-        );
+        let left = self.cfg.split.left_endpoint.trim();
+        let right = self.cfg.split.right_endpoint.trim();
+        if cal.left_endpoint.trim() != left || cal.right_endpoint.trim() != right {
+            return None;
+        }
+        Some(cal)
+    }
+
+    /// 当前主音量（系统音量 = 采集源标量）：插值「灵敏度差随音量变化」要用它。
+    fn balance_master(&self) -> Option<f32> {
+        self.volume_source
+            .map(|v| v.scalar)
+            .or_else(|| self.route_volumes.get(&RouteChannel::Left).copied())
+    }
+
+    /// 当前应该给两路的补偿增益（dB，均 ≤ 0，只压不抬，以较安静一侧为基准）。
+    ///
+    /// 跟随生效时两端标量都等于主音量；用户手动拧过某一路时用各自的实际音量。
+    fn desired_balance_gains(&self) -> [f32; 2] {
+        let (Some(cal), Some(master)) = (self.active_balance(), self.balance_master()) else {
+            return [0.0, 0.0];
+        };
+        if self.engine.is_some() && self.volume_follow_active() {
+            return cal.gains_following(master);
+        }
+        let left = self
+            .route_volumes
+            .get(&RouteChannel::Left)
+            .copied()
+            .unwrap_or(master);
+        let right = self
+            .route_volumes
+            .get(&RouteChannel::Right)
+            .copied()
+            .unwrap_or(master);
+        cal.gains_at(left, right, master)
+    }
+
+    /// 把平衡补偿 + 系统静音实时写进引擎（每路数字增益 / 引擎级数字静音，都是原子量；
+    /// 不重启引擎、不断音）。
+    ///
+    /// 每帧调用；增益变化小于 1/4 死区（0.05 dB）**且**静音状态没变就什么都不写，免得每帧
+    /// 都去碰音频线程的共享内存。
+    ///
+    /// 为什么静音也要写引擎：端点静音不是所有设备都支持 —— 实测蓝牙端点（Xiaomi Sound）
+    /// 上 `SetMute(true)` 会被驱动折算成「把端点音量压到最低可用档（约 8%）」并立刻读回
+    /// 「未静音」，系统静音后物理音箱还会漏出小声音。引擎侧推 0 才是确定的数字静音。
+    fn refresh_balance_gains(&mut self) {
+        let gains = self.desired_balance_gains();
+        // 采集源 = 用户眼里的「系统音量」；它静音了就代表系统静音。
+        let muted = self
+            .volume_source
+            .map(|volume| volume.muted)
+            .unwrap_or(false);
+        let threshold = BALANCE_GAIN_DEADBAND_DB * 0.25;
+        let gains_changed = (gains[0] - self.last_balance_gains[0]).abs() >= threshold
+            || (gains[1] - self.last_balance_gains[1]).abs() >= threshold;
+        let mute_changed = muted != self.last_engine_muted;
+        if !gains_changed && !mute_changed {
+            return;
+        }
+        let before = self.last_balance_gains;
+        let loud = (gains[0] - before[0]).abs() >= 1.0 || (gains[1] - before[1]).abs() >= 1.0;
+        self.last_balance_gains = gains;
+        self.last_engine_muted = muted;
+        if let Some(engine) = self.engine.as_ref() {
+            if gains_changed {
+                engine.set_route_gains_db(&gains);
+            }
+            if mute_changed {
+                engine.set_muted(muted);
+                tracing::info!(
+                    "[音量] 系统{} → 引擎输出{}",
+                    if muted { "静音" } else { "取消静音" },
+                    if muted {
+                        "已推 0（数字静音）"
+                    } else {
+                        "恢复"
+                    }
+                );
+            }
+        }
+        // 变化超过 1 dB 才记一行：拖音量时每帧都在变，全记会把日志刷满；
+        // 「调音量后补偿跟着变、有效差仍为 0」这条证据只在这几行里有。
+        if loud && self.engine.is_some() {
+            let master = self.balance_master().unwrap_or(0.0);
+            let residual = self
+                .active_balance()
+                .map(|cal| {
+                    let left = self
+                        .route_volumes
+                        .get(&RouteChannel::Left)
+                        .copied()
+                        .unwrap_or(master);
+                    let right = self
+                        .route_volumes
+                        .get(&RouteChannel::Right)
+                        .copied()
+                        .unwrap_or(master);
+                    cal.residual_db(left, right, master)
+                })
+                .unwrap_or(0.0);
+            tracing::info!(
+                "[音量平衡] 主音量 {:.0}% → 补偿 左 {:+.1} dB / 右 {:+.1} dB（有效差 {:+.1} dB）",
+                master * 100.0,
+                gains[0],
+                gains[1],
+                residual
+            );
+        }
+    }
+
+    /// 这一路的端点音量标量（还没回读到就用主音量/100% 兜底）。
+    fn route_volume_scalar(&self, channel: RouteChannel) -> f32 {
+        self.route_volumes
+            .get(&channel)
+            .copied()
+            .or_else(|| self.balance_master())
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0)
+    }
+
+    /// 某一路在给定端点标量下、端点自己报的 dB（校准时扫过曲线就用它，否则用典型曲线）。
+    fn endpoint_db_of(&self, channel: RouteChannel, scalar: f32) -> f32 {
+        let curve = self.active_balance().map(|cal| match channel {
+            RouteChannel::Right => &cal.right_curve,
+            // Both 只出现在「两路一起」的 UI 路径里，拿左曲线当代表足够。
+            RouteChannel::Left | RouteChannel::Both => &cal.left_curve,
+        });
+        match curve {
+            Some(curve) if !curve.is_empty() => curve.db_at(scalar),
+            _ => stereo_audio::taper_db(scalar) as f32,
+        }
+    }
+
+    /// 这一路的补偿增益（dB，均 ≤ 0）。
+    fn channel_gain_db(&self, channel: RouteChannel) -> f32 {
+        match channel {
+            RouteChannel::Right => self.last_balance_gains[1],
+            RouteChannel::Left | RouteChannel::Both => self.last_balance_gains[0],
+        }
+    }
+
+    /// 这一路「实机输出」的 dB：端点 dB + 引擎补偿，左路再加校准出的音箱灵敏度差。
+    ///
+    /// 灵敏度差 S 定义为「扣掉端点电平后两台音箱天生的响度差」：Δ = c_L − c_R + S。
+    /// 所以左路声学电平要再加 S —— 只有这样残差为 0 时两路显示才真的一致。
+    fn channel_output_db(&self, channel: RouteChannel) -> f32 {
+        let db = self.endpoint_db_of(channel, self.route_volume_scalar(channel))
+            + self.channel_gain_db(channel);
+        match channel {
+            RouteChannel::Right => db,
+            // Both 只出现在「两路一起」的 UI 路径里，按左路显示。
+            RouteChannel::Left | RouteChannel::Both => {
+                db + self
+                    .active_balance()
+                    .map(|cal| cal.sens_at(self.balance_master().unwrap_or(1.0)))
+                    .unwrap_or(0.0)
+            }
+        }
+    }
+
+    /// 「实机输出」音量：声学电平（端点 + 补偿 + 灵敏度差）折回 0..=1 标量。
+    ///
+    /// 路由表里那一列显示的就是它 —— 跟随生效时两端端点音量会被镜像成同一个值，
+    /// 那个数字完全看不出两台音箱响度差多少；实机输出才是用户耳朵听到的量。
+    fn actual_output_scalar(&self, channel: RouteChannel) -> f32 {
+        if self
+            .volume_source
+            .map(|volume| volume.muted)
+            .unwrap_or(false)
+        {
+            return 0.0;
+        }
+        stereo_audio::taper_scalar(self.channel_output_db(channel) as f64).clamp(0.0, 1.0)
+    }
+
+    /// 反解：想让这一路「实机输出」达到 target，端点音量该写多少（没有校准的普通路径用）。
+    fn endpoint_scalar_for_output(&self, channel: RouteChannel, target: f32) -> f32 {
+        let target_db = stereo_audio::taper_db(target.clamp(0.0, 1.0)) as f32;
+        let db = target_db - self.channel_gain_db(channel);
+        stereo_audio::taper_scalar(db as f64).clamp(0.0, 1.0)
+    }
+
+    /// 反解：跟随生效时想让这一路「实机输出」达到 target，系统音量（主音量标量）该是多少。
+    ///
+    /// 跟随下两端端点音量都等于主音量，实机输出 = 端点曲线(m) + 补偿(m)，随 m 单调递增，
+    /// 直接二分反解（24 次精度足够，只有拖动的那几帧会算）。
+    fn master_for_output(&self, channel: RouteChannel, target: f32) -> f32 {
+        let target_db = stereo_audio::taper_db(target.clamp(0.0, 1.0)) as f32;
+        let Some(cal) = self.active_balance() else {
+            return target.clamp(0.0, 1.0);
+        };
+        let index = usize::from(channel == RouteChannel::Right);
+        let (mut lo, mut hi) = (0.0f32, 1.0f32);
+        for _ in 0..24 {
+            let mid = 0.5 * (lo + hi);
+            let sens = if index == 0 { cal.sens_at(mid) } else { 0.0 };
+            let output_db =
+                self.endpoint_db_of(channel, mid) + cal.gains_following(mid)[index] + sens;
+            if output_db < target_db {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+
+    /// 平衡校准生效时两路是一体的：把整对音箱的实机输出抬/降到 target，
+    /// 保持相对平衡不变，返回左、右端点该写的标量。
+    ///
+    /// 校准生效时补偿永远把两端拉回等响，单独改一侧端点音量只会被补偿吃掉（界面看起来
+    /// 就是拖不动），所以这里按「整对」调：两端端点音量同加一个 dB 偏移。
+    fn balanced_pair_scalars(&self, target: f32) -> [f32; 2] {
+        let target_db = stereo_audio::taper_db(target.clamp(0.0, 1.0)) as f32;
+        let mut out = [0.0f32; 2];
+        for (index, channel) in [RouteChannel::Left, RouteChannel::Right]
+            .into_iter()
+            .enumerate()
+        {
+            let scalar = self.route_volume_scalar(channel);
+            let endpoint_db = self.endpoint_db_of(channel, scalar);
+            let current_db = self.channel_output_db(channel);
+            let shifted = endpoint_db + (target_db - current_db);
+            out[index] = stereo_audio::taper_scalar(shifted as f64).clamp(0.0, 1.0);
+        }
+        out
     }
 
     /// 手动对齐：按当前左右延迟值同时向两台音箱放点击串，人耳听是否重合成一下。
@@ -2882,6 +3447,7 @@ impl StereoLinkApp {
                         Page::Routing => self.routing_card(ui),
                         Page::Capture => self.capture_card(ui),
                         Page::Devices => self.devices_card(ui),
+                        Page::Cast => self.cast_card(ui),
                         Page::Log => {}
                     });
                 ui.add_space(10.0);
@@ -2980,7 +3546,7 @@ impl StereoLinkApp {
                         ui,
                         ROUTE_COL_VOL,
                         18.0,
-                        "音量",
+                        "实机输出",
                         header_font.clone(),
                         palette().muted,
                         false,
@@ -3227,43 +3793,62 @@ impl StereoLinkApp {
             )
             .on_hover_text(status);
 
-            // 音量平衡：与延迟对齐同一次测量完成；结果展示测量值 + 建议值，可反复迭代复测。
-            if self.balance_result.is_some()
+            // 音量平衡：一次校准（两端音量曲线 + 3 档声学锚点）存进配置；运行时只按当前
+            // 主音量重算「每路数字增益」，所以调系统音量不会再破坏平衡 —— 这是这个 bug 的
+            // 结构性修复：平衡不再是「两个端点的音量差」，跟随怎么镜像都不会把它抹掉。
+            let balance_ready = !self.balance_cal.is_empty();
+            let balance_stale = balance_ready && self.active_balance().is_none();
+            if self.calibrating
                 || self.balance_error.is_some()
                 || !self.balance_status.is_empty()
+                || balance_ready
             {
                 ui.add_space(2.0);
-                let mut apply_and_retest = false;
+                let mut recalc = false;
+                let gains = self.last_balance_gains;
+                // 当前「有效差」= 实测差 + 补偿后还剩多少；应用补偿后应落在死区内。
+                let residual = self.active_balance().and_then(|cal| {
+                    let master = self.balance_master()?;
+                    let left = self
+                        .route_volumes
+                        .get(&RouteChannel::Left)
+                        .copied()
+                        .unwrap_or(master);
+                    let right = self
+                        .route_volumes
+                        .get(&RouteChannel::Right)
+                        .copied()
+                        .unwrap_or(master);
+                    Some(cal.residual_db(left, right, master))
+                });
                 ui.horizontal(|ui| {
                     ui.label(muted("音量平衡"));
-                    let (text, color) = if let Some(report) = &self.balance_result {
-                        let within = report.delta_db.abs() <= BALANCE_DEADBAND_DB;
-                        let text = if within {
-                            format!(
-                                "左 {:.1} dB / 右 {:.1} dB → 已平衡（差 {:.1} dB 在 ±{:.0} dB 内）",
-                                report.left_db,
-                                report.right_db,
-                                report.delta_db.abs(),
-                                BALANCE_DEADBAND_DB
-                            )
-                        } else if report.delta_db < 0.0 {
-                            format!(
-                                "左 {:.1} dB / 右 {:.1} dB → 右边轻了 {:.1} dB",
-                                report.left_db,
-                                report.right_db,
-                                report.delta_db.abs()
-                            )
-                        } else {
-                            format!(
-                                "左 {:.1} dB / 右 {:.1} dB → 左边轻了 {:.1} dB",
-                                report.left_db,
-                                report.right_db,
-                                report.delta_db.abs()
-                            )
-                        };
-                        (text, if within { palette().ok } else { palette().accent })
+                    let (text, color) = if self.calibrating {
+                        (self.sync_status.clone(), palette().muted)
                     } else if let Some(err) = &self.balance_error {
-                        (format!("测量失败：{err}"), palette().warn)
+                        (format!("校准失败：{err}"), palette().warn)
+                    } else if balance_stale {
+                        (
+                            "校准记录已失效（左右端点换过），请重新校准".to_string(),
+                            palette().warn,
+                        )
+                    } else if balance_ready {
+                        let mut text =
+                            format!("当前补偿 左 {:.1} dB / 右 {:.1} dB", gains[0], gains[1]);
+                        if let Some(residual) = residual {
+                            text.push_str(&format!("（有效差 {residual:+.1} dB）"));
+                        }
+                        let balanced = residual
+                            .map(|r| r.abs() <= BALANCE_GAIN_DEADBAND_DB)
+                            .unwrap_or(false);
+                        (
+                            text,
+                            if balanced {
+                                palette().ok
+                            } else {
+                                palette().accent
+                            },
+                        )
                     } else {
                         (self.balance_status.clone(), palette().muted)
                     };
@@ -3278,48 +3863,53 @@ impl StereoLinkApp {
                         false,
                     )
                     .on_hover_text(tip);
-                    if let Some(report) = &self.balance_result {
-                        let within = report.delta_db.abs() <= BALANCE_DEADBAND_DB;
-                        if !within {
-                            let low_confidence = report.confidence < 0.5;
-                            let kind = if low_confidence {
-                                theme::ButtonKind::Danger
-                            } else {
-                                theme::ButtonKind::Secondary
-                            };
-                            if btn(ui, "应用并复测", kind)
-                                .on_hover_text(if low_confidence {
-                                    "置信度偏低：把麦克风放到两箱之间的听音位置、关掉音乐并保持安静后再测。\n点一次会按建议值调音量并自动复测（蓝牙音箱通常 2～3 轮收敛）"
-                                } else {
-                                    "按建议值调两台音箱的音量，然后自动复测一轮；蓝牙音箱自报音量与实际声学衰减有偏差，迭代 2～3 轮更准"
-                                })
-                                .clicked()
-                            {
-                                apply_and_retest = true;
-                            }
-                        }
+                    let label = if balance_ready {
+                        "重新校准"
+                    } else {
+                        "校准音量平衡"
+                    };
+                    if btn(ui, label, theme::ButtonKind::Secondary)
+                        .on_hover_text(
+                            "一次校准做完所有事：先标定延迟，再静音扫描两台音箱各自的音量曲线，\
+                             然后在 30%/60%/90% 三档音量各放一次 1 kHz 测试音测左右电平，\
+                             算出「只压不抬」的补偿增益存进配置。约 30 秒。\n\
+                             校准一次就够：以后调系统音量只会按当前音量重算补偿，不需要再校准、\
+                             也不需要麦克风。",
+                        )
+                        .clicked()
+                    {
+                        recalc = true;
                     }
                 });
-                if let Some(report) = &self.balance_result {
+                if balance_ready && !self.calibrating {
                     ui.horizontal(|ui| {
-                        ui.label(muted("建议音量"));
-                        let text = format!(
-                            "左 {}% / 右 {}%（置信度 {:.0}%）",
-                            report.suggested_left_percent,
-                            report.suggested_right_percent,
-                            report.confidence * 100.0
+                        ui.label(muted("校准数据"));
+                        let mut text = format!(
+                            "灵敏度差 {:+.1} dB（左−右）· {} 个锚点",
+                            self.balance_cal.sens_diff_db,
+                            self.balance_cal.anchors.len()
                         );
-                        ui.label(RichText::new(text).size(12.0).color(
-                            if report.confidence < 0.5 {
-                                palette().warn
-                            } else {
-                                palette().text
-                            },
-                        ));
+                        if !self.balance_cal.left_curve.is_empty()
+                            && !self.balance_cal.right_curve.is_empty()
+                        {
+                            text.push_str(" · 端点曲线已扫描");
+                        }
+                        let tip = match &self.balance_result {
+                            Some(report) => format!(
+                                "{}\n上次实测：左 {:.1} dB / 右 {:.1} dB，差 {:+.1} dB，置信度 {:.0}%",
+                                self.balance_cal.describe(),
+                                report.left_db,
+                                report.right_db,
+                                report.delta_db,
+                                report.confidence * 100.0
+                            ),
+                            None => self.balance_cal.describe(),
+                        };
+                        ui.label(RichText::new(text).size(12.0).color(palette().text))
+                            .on_hover_text(tip);
                     });
                 }
-                if apply_and_retest {
-                    self.apply_balance();
+                if recalc {
                     self.start_sync();
                 }
             }
@@ -3369,7 +3959,11 @@ impl StereoLinkApp {
         let mut chosen = current.clone();
         let label = channel_label(channel);
         let route = self.route_of(channel).cloned();
-        let current_volume = self.route_volumes.get(&channel).copied().unwrap_or(1.0);
+        // 这一行显示的是「实机输出」音量：端点音量 + 引擎补偿。跟随生效时两端端点音量会被
+        // 镜像成同一个值，那个数字看不出两台音箱的响度差，实机输出才是用户耳朵听到的量。
+        let current_volume = self.actual_output_scalar(channel);
+        let following = self.engine.is_some() && self.volume_follow_active();
+        let balanced = self.active_balance().is_some();
         let current_invert = match channel {
             RouteChannel::Left => self.cfg.split.invert_left,
             RouteChannel::Right => self.cfg.split.invert_right,
@@ -3549,14 +4143,38 @@ impl StereoLinkApp {
                 },
             );
 
-            // 音量列：每路输出设备的音量条（替代原先的「已发流」列）。
-            // 拖动时即时更新内存值；节流写回端点音量，避免拖动中频繁调用 WASAPI。
+            // 「实机输出」音量列：百分比 = 端点音量 × 引擎补偿后的实际响度。
+            // 拖动也按实机输出调：跟随生效时改系统音量（两端本来就被镜像成同一个值）；
+            // 平衡校准生效时两端一起按比例变（保持平衡）；都没有时才写单侧端点音量。
+            // 写回走后台线程并节流，避免拖动中频繁调 WASAPI。
             let mut volume = current_volume;
             let volume_ready = self
                 .route_volume_at
                 .get(&channel)
                 .map(|at| at.elapsed() >= Duration::from_millis(250))
                 .unwrap_or(true);
+            let endpoint_scalar = self.route_volume_scalar(channel);
+            let gain_db = self.channel_gain_db(channel);
+            let muted_now = self
+                .volume_source
+                .map(|source| source.muted)
+                .unwrap_or(false);
+            let volume_tip = if muted_now {
+                "系统静音中：引擎输出已经推 0，这台音箱现在不出声（端点音量仍保留，取消静音即恢复）。"
+                    .to_string()
+            } else {
+                format!(
+                    "实机输出：端点 {:.0}% ＋ 引擎补偿 {gain_db:+.1} dB。\n拖动直接按「实机输出」调节：{}。",
+                    endpoint_scalar * 100.0,
+                    if following {
+                        "跟随中，改的是系统音量（两端一起变）"
+                    } else if balanced {
+                        "平衡校准生效中，两端一起变（保持平衡）"
+                    } else {
+                        "写回这台设备的端点音量"
+                    }
+                )
+            };
             cell(
                 ui,
                 ROUTE_COL_VOL,
@@ -3577,7 +4195,20 @@ impl StereoLinkApp {
                         true,
                     );
                     if slider.changed() {
-                        self.route_volumes.insert(channel, volume);
+                        if following {
+                            let master = self.master_for_output(channel, volume);
+                            if let Some(source) = self.volume_source.as_mut() {
+                                source.scalar = master;
+                            }
+                        } else if balanced {
+                            // 平衡生效时按「整对」调，单独改一侧会被补偿吃回去。
+                            let scalars = self.balanced_pair_scalars(volume);
+                            self.route_volumes.insert(RouteChannel::Left, scalars[0]);
+                            self.route_volumes.insert(RouteChannel::Right, scalars[1]);
+                        } else {
+                            let endpoint = self.endpoint_scalar_for_output(channel, volume);
+                            self.route_volumes.insert(channel, endpoint);
+                        }
                         if (volume_ready || slider.drag_stopped()) && !current.is_empty() {
                             commit_volume = Some(volume);
                         }
@@ -3585,7 +4216,7 @@ impl StereoLinkApp {
                     slider
                 },
             )
-            .on_hover_text("这台音箱的输出音量（直接写回它的音量端点）；拖动结束自动生效。");
+            .on_hover_text(volume_tip);
 
             let buffered = route
                 .as_ref()
@@ -3661,12 +4292,34 @@ impl StereoLinkApp {
             );
         });
 
-        // 音量写回端点走后台轮询线程（节流：拖动中不频繁调 WASAPI，松手或间隔够了再写）。
-        if let Some(volume) = commit_volume {
+        // 音量写回：跟随生效时改系统音量（端点会被镜像，改端点毫无意义），
+        // 否则把「实机输出」换算回端点音量再写回设备（节流：拖动中不频繁调 WASAPI）。
+        if let Some(actual) = commit_volume {
             if !current.is_empty() {
-                self.route_volumes.insert(channel, volume);
-                self.route_volume_at.insert(channel, Instant::now());
-                self.poll.request_set_route_volume(current.clone(), volume);
+                if following {
+                    let master = self.master_for_output(channel, actual);
+                    self.poll.request_set_source_volume(master);
+                } else if balanced {
+                    let scalars = self.balanced_pair_scalars(actual);
+                    for (index, side) in [RouteChannel::Left, RouteChannel::Right]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let endpoint = self.configured_endpoint(side).to_string();
+                        if endpoint.is_empty() {
+                            continue;
+                        }
+                        self.route_volumes.insert(side, scalars[index]);
+                        self.route_volume_at.insert(side, Instant::now());
+                        self.poll.request_set_route_volume(endpoint, scalars[index]);
+                    }
+                } else {
+                    let endpoint = self.endpoint_scalar_for_output(channel, actual);
+                    self.route_volumes.insert(channel, endpoint);
+                    self.route_volume_at.insert(channel, Instant::now());
+                    self.poll
+                        .request_set_route_volume(current.clone(), endpoint);
+                }
             }
         }
         // 反相立即生效：存配置并重启路由（sink 线程按新配置重开，延迟线会重建）。
@@ -4057,6 +4710,173 @@ impl StereoLinkApp {
         }
     }
 
+    /// 手机投放页：AirPlay / 小米妙播接收端的开关、状态与手机端操作提示。
+    ///
+    /// 两个接收端都是独立 exe，声音直接写进 Windows 当前默认输出声卡；本页只负责
+    /// 拉起/停止子进程，以及默认声卡变化时让它们跟着重启（见 [`ReceiverManager`]）。
+    fn cast_card(&mut self, ui: &mut egui::Ui) {
+        card(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("手机投放").size(16.0).strong());
+                ui.add_space(6.0);
+                let running = self.cast.running();
+                if !self.cast.is_any_running() {
+                    pill(ui, "未接收", Color32::from_rgb(120, 128, 142), 84.0);
+                } else {
+                    pill(ui, "接收中", palette().ok, 72.0);
+                }
+                help(
+                    ui,
+                    "手机把音乐直接投到这台电脑：手机与电脑连同一个 Wi-Fi，在手机的隔空播放 / 小米妙播里选设备名 StereoLink。\n声音走 Windows 当前默认播放设备，和「声道路由」的左右分声道互不影响。",
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if !running.is_empty() && btn(ui, "全部停止", theme::ButtonKind::Ghost).clicked()
+                    {
+                        self.cast.stop_all();
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(muted("设备名"));
+                ui.label(RichText::new(crate::receiver::DEVICE_NAME).strong());
+                ui.add_space(12.0);
+                ui.label(muted("输出声卡"));
+                match self.cast.output_device() {
+                    Some(name) => ui.label(RichText::new(name).strong()),
+                    None if self.cast.is_any_running() => ui.label(muted("读取中…")),
+                    None => ui.label(muted("系统默认（接收端启动时读取）")),
+                };
+                ui.add_space(8.0);
+                ui.label(muted("（跟随系统默认，切换后会自动重启接收端）"));
+            });
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                let mut low_latency = self.cfg.cast.low_latency;
+                if ui
+                    .checkbox(
+                        &mut low_latency,
+                        RichText::new("妙播低延迟（约 0.2 秒）").size(12.0),
+                    )
+                    .on_hover_text(
+                        "妙播 SDK 默认要攒 0.65~0.8 秒才出声（为了和小米「全屋播放」对齐），勾上后压到约 0.22 秒，只投本机时明显更跟手。\n代价：和小米音箱一起全屋播放时会和它们不同步。",
+                    )
+                    .changed()
+                {
+                    self.cfg.cast.low_latency = low_latency;
+                    self.cfg.save();
+                    self.cast.set_low_latency(low_latency);
+                    self.toast(if low_latency {
+                        "妙播已切到低延迟模式（约 0.2 秒）"
+                    } else {
+                        "妙播已恢复标准延迟（约 0.8 秒）"
+                    });
+                }
+                ui.add_space(8.0);
+                ui.label(muted("只影响小米妙播，AirPlay 不受影响"));
+            });
+            if self
+                .cast
+                .last_follow()
+                .is_some_and(|at| at.elapsed().as_secs() < 90)
+            {
+                ui.label(muted("刚跟着系统默认声卡重启过一次接收端。"));
+            }
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            for kind in CastKind::ALL {
+                self.cast_receiver_row(ui, kind);
+            }
+
+            ui.separator();
+            ui.add_space(6.0);
+            ui.label(muted(
+                "第一次跑如果手机里看不到 StereoLink：让 Windows 防火墙放行接收端程序（首次启动会弹窗，选「允许」）。",
+            ));
+            ui.label(muted(
+                "为什么是独立进程：AirPlay 接收端基于 LGPL-3.0 的 shairplay、妙播接收端基于 AGPL-3.0 的 FusionPlay SDK，都不能链接进主程序；独立 exe 运行，许可互不影响。",
+            ));
+        });
+    }
+
+    /// 手机投放页里的一行：状态、开始/停止、随面板启动开关、手机端操作提示。
+    fn cast_receiver_row(&mut self, ui: &mut egui::Ui, kind: CastKind) {
+        let status = self.cast.status(kind).clone();
+        let exe = self.cast.exe(kind).map(|path| path.to_path_buf());
+        let running = status.is_running();
+        let mut toggle = false;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(kind.label()).size(14.0).strong());
+            ui.add_space(6.0);
+            let (color, text) = match status {
+                CastStatus::Running => (palette().ok, status.text()),
+                CastStatus::Failed(_) => (palette().err, status.text()),
+                CastStatus::Stopped => (palette().muted, status.text()),
+            };
+            pill(ui, text, color, 72.0);
+            if let Some(error) = status.error() {
+                help(ui, error);
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let button_kind = if running {
+                    theme::ButtonKind::Danger
+                } else {
+                    theme::ButtonKind::Primary
+                };
+                let button_label = if running { "停止" } else { "开始" };
+                if btn_enabled(ui, running || exe.is_some(), button_label, button_kind).clicked() {
+                    toggle = true;
+                }
+                ui.add_space(10.0);
+                let mut auto = match kind {
+                    CastKind::AirPlay => self.cfg.cast.auto_airplay,
+                    CastKind::MiPlay => self.cfg.cast.auto_miplay,
+                };
+                if ui
+                    .checkbox(&mut auto, RichText::new("随面板启动").size(12.0))
+                    .on_hover_text("勾选后 StereoLink 一启动就把这个接收端拉起来")
+                    .changed()
+                {
+                    match kind {
+                        CastKind::AirPlay => self.cfg.cast.auto_airplay = auto,
+                        CastKind::MiPlay => self.cfg.cast.auto_miplay = auto,
+                    }
+                    self.cfg.save();
+                }
+            });
+        });
+        if let Some(error) = status.error() {
+            ui.label(RichText::new(error).size(12.0).color(palette().err));
+        }
+        ui.label(muted(kind.phone_hint()));
+        match &exe {
+            Some(path) => ui.label(
+                RichText::new(format!("接收端：{}", path.display()))
+                    .size(11.5)
+                    .color(palette().muted),
+            ),
+            None => ui.label(
+                RichText::new(format!(
+                    "还没找到 {}：{}",
+                    kind.exe_name(),
+                    crate::receiver::BUILD_HINT
+                ))
+                .size(12.0)
+                .color(palette().warn),
+            ),
+        };
+        if toggle {
+            match self.cast.toggle(kind) {
+                Ok(()) => {}
+                Err(error) => self.toast(error),
+            }
+        }
+        ui.add_space(10.0);
+    }
+
     fn log_card(&mut self, ui: &mut egui::Ui) {
         let count = self.log.len();
         let lines = self.log.lines();
@@ -4255,6 +5075,28 @@ fn log_line(ui: &mut egui::Ui, line: &LogLine) {
 impl eframe::App for StereoLinkApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let frame_start = Instant::now();
+        // 命令行控制面：把排队的请求处理掉（纯内存操作，几十微秒）。
+        // 「取出→处理→放回」是为了在闭包里能可变借用 self。
+        if let Some(mut server) = self.control.take() {
+            server.drain(|request| self.handle_control(request));
+            self.control = Some(server);
+        }
+        if self.pending_quit {
+            self.pending_quit = false;
+            tracing::info!("收到命令行退出请求，立即退出");
+            // 给控制面线程一点时间把 {"stopping":true} 写回客户端，
+            // 否则脚本看到的是「连接被重置」而不是正常应答。
+            std::thread::sleep(Duration::from_millis(150));
+            // 不能只发 ViewportCommand::Close：关闭行为可能是「缩小至托盘」，
+            // 命令行部署的退出必须真退出（systemd/launchd 停服务同理）。
+            self.stop_routing(true);
+            self.cast.stop_all();
+            self.restore_target_volumes_blocking();
+            self.cfg.save();
+            // `process::exit` 不跑析构：控制文件得自己删，否则下一条命令看到陈文件。
+            control::clear_control_file();
+            std::process::exit(0);
+        }
         // 帧率上限（60 fps）。
         //
         // winit 每收到一个鼠标移动事件就请求一次重绘，鼠标快速扫过时实测能跑到 170~200 fps。
@@ -4343,6 +5185,8 @@ impl eframe::App for StereoLinkApp {
         }
         self.exit_handled = true;
         self.stop_routing(true);
+        // 手机投放接收端是子进程，面板退出时要一起收掉，否则会留下占着端口的孤儿进程。
+        self.cast.stop_all();
         // 进程马上要退出：后台线程可能来不及再跑一次 tick，这里同步兜底还原音量。
         self.restore_target_volumes_blocking();
         self.cfg.save();

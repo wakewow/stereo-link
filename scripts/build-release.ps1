@@ -58,24 +58,30 @@ try {
 
 $exe = Join-Path $root 'target\release\stereo-link.exe'
 if (-not (Test-Path $exe)) { throw "找不到产物 $exe" }
+# 同一包还会产出控制台程序（CLI / 无头 serve / 自动化测试都靠它）
+$exeCli = Join-Path $root 'target\release\stereo-link-cli.exe'
+if (-not (Test-Path $exeCli)) { throw "找不到产物 $exeCli" }
 
 # 自检：产物里不应再出现构建机的用户名 / 仓库路径
-$bytes = [System.IO.File]::ReadAllBytes($exe)
-$text  = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)   # ISO-8859-1：逐字节映射，便于在二进制里找 ASCII 路径
 $needles = @($root, $env:USERNAME, $cargoHome, $rustupHome) | Where-Object { $_ }
-$bad = @()
-foreach ($n in $needles) { if ($text.Contains($n)) { $bad += $n } }
 Write-Host ''
-Write-Host ("产物: $exe  (" + $bytes.Length + " B)")
-if ($bad.Count -gt 0) {
-    Write-Host ("[警告] 产物里仍能看到: " + ($bad -join ', ')) -ForegroundColor Yellow
-} else {
-    Write-Host '[OK] 产物里没有构建机路径 / 用户名' -ForegroundColor Green
+foreach ($file in @($exe, $exeCli)) {
+    $bytes = [System.IO.File]::ReadAllBytes($file)
+    $text  = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)   # ISO-8859-1：逐字节映射，便于在二进制里找 ASCII 路径
+    $bad = @()
+    foreach ($n in $needles) { if ($text.Contains($n)) { $bad += $n } }
+    Write-Host ("产物: $file  (" + $bytes.Length + " B)")
+    if ($bad.Count -gt 0) {
+        Write-Host ("[警告] 产物里仍能看到: " + ($bad -join ', ')) -ForegroundColor Yellow
+    } else {
+        Write-Host '[OK] 产物里没有构建机路径 / 用户名' -ForegroundColor Green
+    }
 }
 
 if ($CopyToDist) {
     $dist = Join-Path $root 'dist'
     New-Item -ItemType Directory -Force -Path $dist | Out-Null
     Copy-Item $exe (Join-Path $dist 'stereo-link.exe') -Force
-    Write-Host ("已复制到 " + (Join-Path $dist 'stereo-link.exe'))
+    Copy-Item $exeCli (Join-Path $dist 'stereo-link-cli.exe') -Force
+    Write-Host ("已复制到 " + $dist + "（stereo-link.exe / stereo-link-cli.exe）")
 }

@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>两两校准 · 播放同步模拟</title>
+<style>
+  :root{
+    --bg:#060a12; --panel:#0b1322; --line:#1e293b; --text:#e6edf7; --muted:#8fa3bf;
+    --cyan:#38bdf8; --violet:#a78bfa; --green:#34d399; --amber:#fbbf24; --red:#f87171;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:radial-gradient(1200px 600px at 20% -10%,#0d1a30 0%,#060a12 55%) fixed,var(--bg);
+    color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .app{max-width:1560px;margin:0 auto;padding:16px 20px 0;display:flex;flex-direction:column;gap:14px;min-height:100vh}
+  header.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(135deg,#0ea5e9,#8b5cf6);
+    font-size:18px;color:#fff;box-shadow:0 6px 20px rgba(56,189,248,.25)}
+  h1{font-size:18px;margin:0;letter-spacing:.01em}
+  .sub{margin:2px 0 0;color:var(--muted);font-size:12px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{font-size:11px;color:var(--muted);border:1px solid var(--line);padding:4px 10px;border-radius:999px;background:rgba(13,20,36,.6)}
+  main{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(330px,410px);gap:16px;align-items:start}
+  .stage{position:relative;border:1px solid var(--line);border-radius:18px;overflow:hidden;background:#070d18;box-shadow:0 20px 60px rgba(0,0,0,.45)}
+  .stage svg{display:block;width:100%;height:auto}
+  .stage-note{position:absolute;right:14px;bottom:10px;font-size:10.5px;color:#5b6b85;letter-spacing:.06em}
+  aside.panel{background:linear-gradient(180deg,#0c1526,#0a1220);border:1px solid var(--line);border-radius:18px;padding:16px 16px 18px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+  .stepper{display:flex;gap:6px;margin-bottom:12px}
+  .step{flex:1;display:flex;align-items:center;gap:6px;font-size:11px;color:#64748b;border:1px solid #1c2a44;border-radius:9px;padding:6px 8px;background:#0a1220}
+  .step .num{width:18px;height:18px;border-radius:6px;display:grid;place-items:center;background:#16223a;font-size:10px;color:#94a3b8}
+  .step.active{color:#e2e8f0;border-color:#2c4a74;background:#0f1d33}
+  .step.active .num{background:linear-gradient(135deg,#0ea5e9,#8b5cf6);color:#fff}
+  .step.done{color:#94a3b8;border-color:#1e293b}
+  h2#scene-title{font-size:15px;margin:2px 0 6px;line-height:1.45}
+  p.desc{margin:0 0 12px;color:#a7b6cd;font-size:12.5px;line-height:1.65}
+  .live{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.7;background:#070d18;
+    border:1px solid #182642;border-radius:12px;padding:12px 12px;min-height:150px;color:#c7d2e4;overflow-wrap:anywhere}
+  .live p{margin:0 0 4px}
+  .live .formula{color:#7dd3fc}
+  .live b{color:#fde68a;font-weight:600}
+  .live .muted,.muted{color:#7f92ad;font-size:11.5px}
+  .live .hint{color:#34d399}
+  .live ol.steps{margin:6px 0 8px;padding-left:18px}
+  .live ol.steps li{margin:3px 0}
+  table.kv{width:100%;border-collapse:collapse;margin:6px 0 10px;font-size:11.5px}
+  table.kv th,table.kv td{border-bottom:1px solid #16233b;padding:4px 6px;text-align:left;font-weight:400}
+  table.kv th{color:#7f92ad;font-size:10.5px}
+  table.kv td:not(:first-child),table.kv th:not(:first-child){text-align:right}
+  .matrix{width:100%;border-collapse:collapse;margin:6px 0 10px;font-size:11.5px}
+  .matrix th,.matrix td{border:1px solid #16233b;padding:4px 6px;text-align:center}
+  .matrix th{color:#7f92ad;font-size:10.5px}
+  .matrix .neg{color:#fca5a5}.matrix .pos{color:#6ee7b7}
+  .bars{margin:8px 0 10px}
+  .bar-row{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:11px}
+  .bar-row .bl{width:52px;color:#93a6c0;font-family:ui-monospace,monospace}
+  .bar-row .track{flex:1;height:7px;background:#101c32;border-radius:99px;overflow:hidden;border:1px solid #182642}
+  .bar-row .fill{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#0ea5e9,#6366f1)}
+  .bar-row .fill.alt{background:linear-gradient(90deg,#7c3aed,#a78bfa)}
+  .bar-row .fill.diff{background:linear-gradient(90deg,#f59e0b,#f97316)}
+  .bar-row .bv{width:52px;text-align:right;color:#c7d2e4;font-family:ui-monospace,monospace}
+  footer.controls{position:sticky;bottom:0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 4px 14px;
+    background:linear-gradient(180deg,rgba(6,10,18,0),rgba(6,10,18,.92) 35%);backdrop-filter:blur(6px)}
+  button{appearance:none;border:1px solid #24344f;background:#0f1a2e;color:#dbe6f7;font-size:12px;padding:8px 13px;border-radius:10px;cursor:pointer;transition:.15s}
+  button:hover{border-color:#3b5b8a;background:#132442}
+  button.primary{background:linear-gradient(135deg,#0ea5e9,#6366f1);border-color:transparent;color:#fff;font-weight:600}
+  select{background:#0f1a2e;color:#dbe6f7;border:1px solid #24344f;border-radius:10px;padding:8px 10px;font-size:12px}
+  .progress{flex:1;min-width:120px;height:6px;background:#13203a;border-radius:99px;overflow:hidden}
+  .progress .bar{height:100%;width:0;background:linear-gradient(90deg,#0ea5e9,#8b5cf6);border-radius:99px}
+  .scene-idx{font-size:11px;color:#7f92ad;font-variant-numeric:tabular-nums;white-space:nowrap}
+  svg text{font-family:inherit}
+  .stage-kicker{font-size:10.5px;letter-spacing:.14em;fill:#5b6b85}
+  .phone-name{font-size:12.5px;font-weight:600;letter-spacing:.02em}
+  .badge{font-size:10.5px;font-weight:600;letter-spacing:.02em}
+  .tl-title{font-size:11px;fill:#94a3b8}
+  .tl-side{font-size:10.5px;fill:#7f92ad}
+  .tl-tick{font-size:9.5px;fill:#64748b}
+  .tl-letter{font-size:10px;font-weight:700}
+  .sync-title{font-size:15px;font-weight:700;letter-spacing:.02em}
+  @media (max-width:1080px){main{grid-template-columns:1fr}aside.panel{order:2}footer.controls{position:static}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <div class="logo">◎</div>
+      <div>
+        <h1>两两校准 · 播放同步模拟</h1>
+        <p class="sub">共享时钟还不够：从互录测量到全局偏移，再到同时出声</p>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="chip">SVG + JS</span>
+      <span class="chip">无外部依赖</span>
+      <span class="chip">示意动画 · 时间已放慢</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="stage">
+      <svg id="stage" viewBox="0 0 1000 640" preserveAspectRatio="xMidYMid meet" aria-label="两两校准动画"></svg>
+      <div class="stage-note">示意动画 · 数值单位 ms</div>
+    </section>
+
+    <aside class="panel">
+      <div class="stepper" id="stepper"></div>
+      <h2 id="scene-title">加载中…</h2>
+      <p id="scene-desc" class="desc"></p>
+      <div class="live" id="live"></div>
+    </aside>
+  </main>
+
+  <footer class="controls">
+    <button id="playBtn" class="primary">⏸ 暂停</button>
+    <button id="prevBtn">← 上一步</button>
+    <button id="nextBtn">下一步 →</button>
+    <button id="restartBtn">⟲ 重播</button>
+    <select id="speedSel" title="播放速度">
+      <option value="0.5">0.5×</option>
+      <option value="1" selected>1×</option>
+      <option value="1.5">1.5×</option>
+      <option value="2">2×</option>
+      <option value="2.5">2.5×</option>
+    </select>
+    <div class="progress"><div class="bar" id="bar"></div></div>
+    <span class="scene-idx" id="sceneIdx">1 / 15</span>
+  </footer>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const $ = (id) => document.getElementById(id);
+  const svg = $('stage');
+
+  function E(tag, attrs = {}, parent) {
+    const el = document.createElementNS(NS, tag);
+    for (const k in attrs) {
+      if (k === 'text') el.textContent = attrs[k];
+      else el.setAttribute(k, attrs[k]);
+    }
+    if (parent) parent.appendChild(el);
+    return el;
+  }
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+  const fmt = (v, d = 2) => v.toFixed(d);
+  const nf = (v, d = 2) => (v < 0 ? '−' : '') + Math.abs(v).toFixed(d);
+  const pf = (v, d = 2) => (v < 0 ? '−' : '+') + Math.abs(v).toFixed(d);
+
+  /* ---------------- 数据 ---------------- */
+  const PH = [
+    { key:'A', x:180, y:300, L:18.40, M:4.20, color:'#38bdf8', label:'A · 手机 1' },
+    { key:'B', x:500, y:120, L:21.70, M:4.60, color:'#a78bfa', label:'B · 手机 2' },
+    { key:'C', x:820, y:300, L:16.90, M:4.00, color:'#34d399', label:'C · 手机 3' }
+  ];
+  const PHM = {}; PH.forEach(p => { PHM[p.key] = p; });
+  const D = { AB:1.07, AC:1.87, BC:1.07 };
+  const RV = {
+    AB: PHM.A.L + D.AB + PHM.B.M,
+    BA: PHM.B.L + D.AB + PHM.A.M,
+    AC: PHM.A.L + D.AC + PHM.C.M,
+    CA: PHM.C.L + D.AC + PHM.A.M,
+    BC: PHM.B.L + D.BC + PHM.C.M,
+    CB: PHM.C.L + D.BC + PHM.B.M
+  };
+  const DELTA = { AB: RV.AB - RV.BA, AC: RV.AC - RV.CA, BC: RV.BC - RV.CB };
+  const FIT = { A:0, B:-DELTA.AB, C:-DELTA.AC };
+  const MAXFIT = Math.max(FIT.A, FIT.B, FIT.C);
+  const TAU = { A: MAXFIT - FIT.A, B: MAXFIT - FIT.B, C: MAXFIT - FIT.C };
+  const TRUE_D = { A: PHM.A.L - PHM.A.M, B: PHM.B.L - PHM.B.M, C: PHM.C.L - PHM.C.M };
+  const EFF = { A: TRUE_D.A + TAU.A, B: TRUE_D.B + TAU.B, C: TRUE_D.C + TAU.C };
+
+  /* ---------------- 静态 SVG ---------------- */
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#081226"/><stop offset="0.55" stop-color="#060c17"/><stop offset="1" stop-color="#050810"/>
+      </linearGradient>
+      <linearGradient id="phoneBody" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#16233b"/><stop offset="1" stop-color="#0b1322"/>
+      </linearGradient>
+      <filter id="softGlow" x="-120%" y="-120%" width="340%" height="340%">
+        <feGaussianBlur stdDeviation="3.2" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="1" opacity="0.35"/>
+      </pattern>
+    </defs>
+    <rect width="1000" height="640" fill="url(#bgGrad)"/>
+    <rect width="1000" height="640" fill="url(#grid)" opacity="0.35"/>
+    <text x="30" y="42" class="stage-kicker">PAIRWISE CALIBRATION · SVG SIM</text>
+    <text x="970" y="42" text-anchor="end" class="stage-kicker" opacity="0.55">单位：ms · 声速 343 m/s</text>
+  `;
+
+  const linksG = E('g', {}, svg);
+  const phonesG = E('g', {}, svg);
+  const arcsG = E('g', {}, svg);
+  const travelG = E('g', { opacity:0 }, svg);
+  const timelineG = E('g', { opacity:0 }, svg);
+  const outroG = E('g', { opacity:0 }, svg);
+  const sceneG = E('g', {}, svg);
+
+  /* ---------------- 连线 ---------------- */
+  const links = {};
+  ['AB','AC','BC'].forEach(k => {
+    const a = PHM[k[0]], b = PHM[k[1]];
+    links[k] = E('line', {
+      x1:a.x, y1:a.y, x2:b.x, y2:b.y,
+      stroke:'#2b3a54', 'stroke-width':1.2, 'stroke-dasharray':'4 7', opacity:0.7
+    }, linksG);
+  });
+
+  /* ---------------- 手机 ---------------- */
+  const phones = {};
+  PH.forEach(p => {
+    const g = E('g', { transform:`translate(${p.x},${p.y})` }, phonesG);
+    const halo = E('circle', { r:66, fill:'none', stroke:p.color, 'stroke-width':1.4, opacity:0.12 }, g);
+    E('rect', { x:-41, y:-79, width:82, height:158, rx:17, fill:'url(#phoneBody)', stroke:'#31405a', 'stroke-width':1.4 }, g);
+    E('rect', { x:-32, y:-66, width:64, height:126, rx:8, fill:'#0a1220', stroke:'#1b2740', 'stroke-width':1 }, g);
+    E('rect', { x:-24, y:-54, width:48, height:5, rx:2.5, fill:p.color, opacity:0.22 }, g);
+    E('circle', { cx:0, cy:-64, r:2.6, fill:'#5b6b85' }, g);
+    E('circle', { cx:0, cy:64, r:2.6, fill:'#5b6b85' }, g);
+    const bars = [];
+    for (let i = 0; i < 7; i++) {
+      bars.push(E('rect', { x:-21 + i*6, y:-1, width:3.6, height:2, rx:1.8, fill:p.color, opacity:0.75 }, g));
+    }
+    const micflash = E('circle', { cx:0, cy:64, r:8, fill:'none', stroke:p.color, 'stroke-width':2, opacity:0 }, g);
+    E('text', { x:0, y:100, 'text-anchor':'middle', fill:p.color, class:'phone-name' }, g).textContent = p.label;
+    const badge = E('text', { x:0, y:134, 'text-anchor':'middle', fill:'#fbbf24', class:'badge', opacity:0 }, g);
+    phones[p.key] = { g, halo, bars, micflash, badge };
+  });
+
+  /* ---------------- 小工具 ---------------- */
+  const travelHalo = E('circle', { r:11, fill:'#38bdf8', opacity:0.22, filter:'url(#softGlow)' }, travelG);
+  const travelDot = E('circle', { r:4, fill:'#fff' }, travelG);
+
+  function setHalo(key, op) {
+    phones[key].halo.setAttribute('opacity', op);
+  }
+  function setBadge(key, text, color) {
+    const b = phones[key].badge;
+    b.textContent = text;
+    b.setAttribute('fill', color || '#fbbf24');
+    b.setAttribute('opacity', text ? 0.95 : 0);
+  }
+  function setEq(key, active, t) {
+    const bars = phones[key].bars;
+    for (let i = 0; i < bars.length; i++) {
+      const h = active ? 3 + Math.abs(Math.sin(t / 220 + i * 0.9)) * 13 : 2;
+      bars[i].setAttribute('height', h.toFixed(2));
+      bars[i].setAttribute('y', (-h / 2).toFixed(2));
+      bars[i].setAttribute('opacity', active ? 0.9 : 0.35);
+    }
+  }
+  function highlightLink(a, b) {
+    const k = a + b;
+    if (!links[k]) return;
+    links[k].setAttribute('stroke', PHM[a].color);
+    links[k].setAttribute('stroke-width', 2.2);
+    links[k].setAttribute('opacity', 1);
+    links[k].setAttribute('stroke-dasharray', '6 6');
+  }
+  function showTravel(a, b, pct, color) {
+    travelG.setAttribute('opacity', 1);
+    const x = a.x + (b.x - a.x) * pct;
+    const y = a.y + (b.y - a.y) * pct;
+    travelDot.setAttribute('cx', x); travelDot.setAttribute('cy', y);
+    travelHalo.setAttribute('cx', x); travelHalo.setAttribute('cy', y);
+    travelHalo.setAttribute('fill', color);
+  }
+  function emitPulses(p, color, t, delay = 0, maxR = 210) {
+    const n = 3, gap = 300, life = 1000;
+    for (let k = 0; k < n; k++) {
+      const age = t - delay - k * gap;
+      if (age < 0 || age > life) continue;
+      const r = 18 + (age / life) * maxR;
+      const op = (1 - age / life) * 0.55;
+      E('circle', { cx:p.x, cy:p.y, r:r.toFixed(2), fill:'none', stroke:color, 'stroke-width':1.8, opacity:op.toFixed(3) }, arcsG);
+    }
+  }
+  function flashRing(p, age) {
+    if (age < 0 || age > 720) return;
+    const r = 8 + (age / 720) * 58;
+    const op = (1 - age / 720) * 0.85;
+    E('circle', { cx:p.x, cy:p.y, r:r.toFixed(2), fill:'none', stroke:p.color, 'stroke-width':2.4, opacity:op.toFixed(3) }, arcsG);
+  }
+
+  /* ---------------- 验证时间轴（SVG） ---------------- */
+  (function buildTimeline() {
+    const g = timelineG;
+    E('text', { x:150, y:452, class:'tl-title' }, g).textContent = '听音点时间轴（同一脉冲的到达时刻）';
+    E('text', { x:24, y:487, class:'tl-side' }, g).textContent = '未校准';
+    E('text', { x:24, y:579, class:'tl-side' }, g).textContent = '校准后';
+
+    const X = (ms) => 150 + (ms / 25) * 760;
+    [500, 590].forEach((y) => {
+      E('line', { x1:150, y1:y, x2:930, y2:y, stroke:'#334155', 'stroke-width':1 }, g);
+      for (let ms = 0; ms <= 25; ms += 5) {
+        const x = X(ms);
+        E('line', { x1:x, y1:y-4, x2:x, y2:y+4, stroke:'#475569' }, g);
+        E('text', { x:x, y:y+18, class:'tl-tick', 'text-anchor':'middle' }, g).textContent = ms === 25 ? '25ms' : String(ms);
+      }
+    });
+
+    const alignX = X(EFF.A);
+    E('line', { x1:alignX, y1:438, x2:alignX, y2:622, stroke:'#34d399', 'stroke-width':1.2,
+      'stroke-dasharray':'3 6', opacity:0.45 }, g);
+    E('text', { x:alignX - 8, y:430, fill:'#6ee7b7', 'font-size':10, 'text-anchor':'end' }, g).textContent = '对齐 17.10';
+
+    function spike(tms, yBase, color, letter, dx = 0) {
+      const x = X(tms) + dx;
+      E('path', { d:`M ${x-7} ${yBase} L ${x} ${yBase-42} L ${x+7} ${yBase} Z`, fill:color, opacity:0.82 }, g);
+      E('text', { x:x, y:yBase-50, class:'tl-letter', fill:color, 'text-anchor':'middle' }, g).textContent = letter;
+    }
+    // 未校准：到达时刻分散
+    spike(TRUE_D.C, 500, PHM.C.color, 'C');
+    spike(TRUE_D.A, 500, PHM.A.color, 'A');
+    spike(TRUE_D.B, 500, PHM.B.color, 'B');
+    // 校准后：折叠到同一时刻（小幅错开绘制，避免完全重叠）
+    spike(EFF.A, 590, PHM.A.color, 'A', -14);
+    spike(EFF.B, 590, PHM.B.color, 'B', 0);
+    spike(EFF.C, 590, PHM.C.color, 'C', 14);
+
+    E('text', { x:X(TRUE_D.B) + 16, y:487, fill:'#fca5a5', 'font-size':10, 'text-anchor':'start' }, g).textContent = '跨度 4.20ms';
+    E('text', { x:X(EFF.A) + 30, y:560, fill:'#6ee7b7', 'font-size':10, 'text-anchor':'start' }, g).textContent = '跨度 0.00ms';
+  })();
+
+  /* ---------------- 总结文字 ---------------- */
+  const syncTitle = E('text', { x:500, y:470, 'text-anchor':'middle', class:'sync-title', fill:'#34d399' }, outroG);
+  syncTitle.textContent = 'δ + τ = 17.10 ms · 三台同刻';
+
+  /* ---------------- 面板 ---------------- */
+  const STEPS = [
+    { n:'1', t:'测量' }, { n:'2', t:'计算' }, { n:'3', t:'解算' }, { n:'4', t:'验证' }
+  ];
+  $('stepper').innerHTML = STEPS.map((s, i) =>
+    `<div class="step" data-step="${i+1}"><span class="num">${s.n}</span><span>${s.t}</span></div>`).join('');
+
+  const titleEl = $('scene-title'), descEl = $('scene-desc'), liveEl = $('live');
+  let liveCache = '';
+  function setLive(html) {
+    if (html !== liveCache) { liveEl.innerHTML = html; liveCache = html; }
+  }
+  function updateStepper(step) {
+    document.querySelectorAll('.step').forEach(el => {
+      const n = Number(el.dataset.step);
+      el.classList.toggle('active', n === step);
+      el.classList.toggle('done', step > 0 && n < step);
+    });
+  }
+  function setPanel(s) {
+    titleEl.textContent = s.title;
+    descEl.textContent = s.desc;
+    liveCache = ''; liveEl.innerHTML = '';
+    setLive(s.live(0));
+    updateStepper(s.step);
+  }
+
+  /* ---------------- 场景 ---------------- */
+  const SCENES = [];
+
+  function introScene() {
+    return {
+      title: '起点：每台的固定延迟都未知',
+      desc: '目标：三台手机同时出声。每台的输出延迟 L、录音链路 M 都不可见；而且系统时钟（NTP）不足以充当亚毫秒级公共时钟。',
+      step: 0, dur: 4200,
+      enter() {
+        PH.forEach(p => { setBadge(p.key, 'L = ?', '#fbbf24'); setEq(p.key, false, 0); });
+        E('text', { x:500, y:470, 'text-anchor':'middle', fill:'#cfe0ff', 'font-size':20,
+          'font-weight':600, 'font-family':"'Noto Sans SC',system-ui,sans-serif" }, sceneG)
+          .textContent = '目标：三台手机同时出声';
+        E('text', { x:500, y:498, 'text-anchor':'middle', fill:'#7f96b8', 'font-size':11.5,
+          class:'small' }, sceneG)
+          .textContent = '已知：相对位置、手机之间可以互相录音　未知：每台的 L 与 M';
+      },
+      frame(t) {
+        PH.forEach((p, i) => setHalo(p.key, 0.10 + 0.05 * Math.sin(t / 700 + i)));
+      },
+      live() {
+        return `
+          <p class="muted">系统不可见的真实值（仅演示标注）</p>
+          <table class="kv">
+            <tr><th>设备</th><th>L</th><th>M</th></tr>
+            <tr><td>A</td><td>18.40</td><td>4.20</td></tr>
+            <tr><td>B</td><td>21.70</td><td>4.60</td></tr>
+            <tr><td>C</td><td>16.90</td><td>4.00</td></tr>
+          </table>
+          <p>间距 → 空气传播：d_AB = 1.07 ms，d_AC = 1.87 ms，d_BC = 1.07 ms</p>
+          <p>手机之间可以互相录音：录音里能看到对方 chirp 的到达峰值。</p>
+          <p class="hint">▶ 播放动画；也可按“下一步”逐步查看。</p>`;
+      }
+    };
+  }
+
+  function measureScene(srcKey, dstKey, dist) {
+    const src = PHM[srcKey], dst = PHM[dstKey];
+    const rKey = srcKey + dstKey;
+    const rVal = RV[rKey];
+    const arrive = 1250, countDur = 900;
+    return {
+      title: `测量 ${srcKey} → ${dstKey}`,
+      desc: `${srcKey} 播放 chirp，${dstKey} 录音并检测峰值。发射与录音都排在同一条时间轴上；记录到达峰值时刻 r。`,
+      step: 1, dur: 3900,
+      enter() { resetStage(); highlightLink(srcKey, dstKey); },
+      frame(t) {
+        setHalo(srcKey, 0.5);
+        setEq(srcKey, true, t);
+        emitPulses(src, src.color, t, 80);
+        const pct = easeOut(clamp((t - 200) / 1000, 0, 1));
+        if (pct < 1) showTravel(src, dst, pct, src.color);
+        else travelG.setAttribute('opacity', 0);
+        if (t >= arrive) { flashRing(dst, t - arrive); setEq(dstKey, true, t); }
+        if (t < arrive) {
+          setBadge(srcKey, '▶ 播放 chirp', src.color);
+          setBadge(dstKey, '● 等待录音', '#94a3b8');
+        } else {
+          setBadge(srcKey, '▶ 发射完成', src.color);
+          setBadge(dstKey, '● 录到峰值', '#fbbf24');
+        }
+      },
+      live(t) {
+        const k = easeOut(clamp((t - arrive) / countDur, 0, 1));
+        const v = rVal * k;
+        const status = t < arrive ? '声波传播中…' : '峰值已记录 ✓';
+        const shown = t < arrive ? '—' : fmt(v) + ' ms';
+        return `
+          <p class="mono">p_${srcKey} = 0 ms</p>
+          <p class="mono formula">r_${rKey} = p_${srcKey} + L_${srcKey} + d_${srcKey}${dstKey} + M_${dstKey}</p>
+          <p class="mono">      = 0 + ${fmt(src.L)} + ${fmt(dist)} + ${fmt(dst.M)} = <b>${shown}</b></p>
+          <p class="muted">${status}</p>
+          <p class="muted">峰值 = 发射 + 本机输出延迟 + 空气传播 + 对方录音延迟</p>`;
+      }
+    };
+  }
+
+  function calcScene(aKey, bKey, r1, r2) {
+    const delta = r1 - r2;
+    return {
+      title: `计算 Δ_${aKey}${bKey}`,
+      desc: '正反两次测量相减：共同的调度起点与空气路径 d 抵消，只剩两台的固定延迟差。',
+      step: 2, dur: 3200,
+      enter() {
+        resetStage();
+        highlightLink(aKey, bKey);
+        highlightLink(bKey, aKey);
+        setHalo(aKey, 0.35); setHalo(bKey, 0.35);
+        setBadge(aKey, 'Δ', PHM[aKey].color);
+        setBadge(bKey, 'Δ', PHM[bKey].color);
+      },
+      frame(t) {
+        setHalo(aKey, 0.3 + 0.1 * Math.sin(t / 500));
+        setHalo(bKey, 0.3 + 0.1 * Math.sin(t / 500 + 1));
+      },
+      live(t) {
+        const k = easeOut(clamp((t - 400) / 900, 0, 1));
+        const w1 = (r1 / 30) * 100;
+        const w2 = (r2 / 30) * 100;
+        const wd = (Math.abs(delta * k) / 6) * 100;
+        return `
+          <p class="mono formula">Δ_${aKey}${bKey} = (r_${aKey}${bKey} − p_${aKey}) − (r_${bKey}${aKey} − p_${bKey})</p>
+          <p class="mono">      = (${fmt(r1)} − 0) − (${fmt(r2)} − 0) = <b>${nf(delta * k)} ms</b></p>
+          <div class="bars">
+            <div class="bar-row"><span class="bl">r_${aKey}${bKey}</span><span class="track"><span class="fill" style="width:${w1.toFixed(1)}%"></span></span><span class="bv">${fmt(r1)}</span></div>
+            <div class="bar-row"><span class="bl">r_${bKey}${aKey}</span><span class="track"><span class="fill alt" style="width:${w2.toFixed(1)}%"></span></span><span class="bv">${fmt(r2)}</span></div>
+            <div class="bar-row"><span class="bl">Δ</span><span class="track"><span class="fill diff" style="width:${wd.toFixed(1)}%"></span></span><span class="bv">${nf(delta)}</span></div>
+          </div>
+          <p class="muted">即 δ_${aKey} − δ_${bKey}，其中 δ = L − M</p>
+          <p class="muted">空气路径在正反方向几乎相同 → 抵消；残差只剩换能器位置差与测量噪声。</p>`;
+      }
+    };
+  }
+
+  function matrixScene() {
+    const cell = (i, j) => {
+      if (i === j) return '<td>0</td>';
+      const v = (i === 'A' && j === 'B') ? DELTA.AB
+        : (i === 'A' && j === 'C') ? DELTA.AC
+        : (i === 'B' && j === 'C') ? DELTA.BC
+        : (i === 'B' && j === 'A') ? -DELTA.AB
+        : (i === 'C' && j === 'A') ? -DELTA.AC
+        : -DELTA.BC;
+      return `<td class="${v < 0 ? 'neg' : 'pos'}">${pf(v)}</td>`;
+    };
+    return {
+      title: '三对测量与一致性',
+      desc: 'N 台设备需要 N−1 条独立的延迟差；全对测量是超定的。三台得到 3 条差值，但独立未知量只有 2 个（整体平移不可观测）。',
+      step: 2, dur: 4600,
+      enter() {
+        resetStage();
+        ['AB','AC','BC'].forEach(k => highlightLink(k[0], k[1]));
+        PH.forEach(p => setBadge(p.key, 'δ = ?', '#fbbf24'));
+      },
+      frame(t) {
+        PH.forEach((p, i) => setHalo(p.key, 0.16 + 0.06 * Math.sin(t / 600 + i)));
+      },
+      live() {
+        return `
+          <table class="matrix">
+            <tr><th></th><th>A</th><th>B</th><th>C</th></tr>
+            <tr><th>A</th>${cell('A','A')}${cell('A','B')}${cell('A','C')}</tr>
+            <tr><th>B</th>${cell('B','A')}${cell('B','B')}${cell('B','C')}</tr>
+            <tr><th>C</th>${cell('C','A')}${cell('C','B')}${cell('C','C')}</tr>
+          </table>
+          <p class="mono">环一致性：Δ_AB + Δ_BC − Δ_AC</p>
+          <p class="mono">= (${nf(DELTA.AB)}) + (${nf(DELTA.BC)}) − (${pf(DELTA.AC)}) = <b>0.00 ms</b> ✓</p>
+          <p class="muted">一致 → 可拟合。实际有噪声时，用三角环残差找坏测量。</p>`;
+      }
+    };
+  }
+
+  function fitScene() {
+    return {
+      title: '解算全局偏移 δ',
+      desc: '用最小二乘找一组 δᵢ，使所有两两差最一致。固定一台为参考后，只剩相对值——整体平移不影响听感。',
+      step: 3, dur: 5600,
+      enter() {
+        resetStage();
+        PH.forEach(p => setBadge(p.key, '拟合中…', '#94a3b8'));
+      },
+      frame(t) {
+        ['A','B','C'].forEach((k, i) => {
+          if (t > 500 + i * 500) setBadge(k, `δ ${pf(FIT[k])} ms`, ['#38bdf8','#a78bfa','#34d399'][i]);
+          setHalo(k, 0.3);
+        });
+      },
+      live(t) {
+        const lines = [];
+        if (t > 300) lines.push('<p class="mono">设 δ_A = 0（参考）</p>');
+        if (t > 1000) lines.push(`<p class="mono">δ_B = −Δ_AB = <b>${pf(FIT.B)} ms</b></p>`);
+        if (t > 1700) lines.push(`<p class="mono">δ_C = −Δ_AC = <b>${pf(FIT.C)} ms</b></p>`);
+        if (t > 2400) lines.push(`<p class="mono">校验：δ_B − δ_C = ${fmt(FIT.B - FIT.C)} = Δ_BC = ${fmt(DELTA.BC)} ✓</p>`);
+        if (t > 3200) lines.push('<p class="mono">残差 = 0.00 ms（本例示意；实际含测量噪声）</p>');
+        if (t > 4000) lines.push('<p class="muted">δ 只是相对量：整体加减同一常数不改变任何两两差。</p>');
+        return lines.join('') || '<p class="muted">开始拟合…</p>' +
+          '<p class="muted">最小二乘：min Σ (Δᵢⱼ − (δᵢ − δⱼ))²</p>';
+      }
+    };
+  }
+
+  function applyScene() {
+    const keys = ['A','B','C'];
+    return {
+      title: '施加补偿 τ',
+      desc: '把每台补到最慢的一台：τᵢ = max(δ) − δᵢ。整组延迟抬到最慢者，不能反过来。',
+      step: 3, dur: 4800,
+      enter() {
+        resetStage();
+        keys.forEach(k => setBadge(k, 'τ 计算中…', '#94a3b8'));
+      },
+      frame(t) {
+        keys.forEach((k, i) => {
+          if (t > 400 + i * 450) setBadge(k, `τ ${pf(TAU[k])} ms`, '#fbbf24');
+          setHalo(k, 0.22);
+        });
+      },
+      live(t) {
+        const show = t > 2600;
+        return `
+          <p class="mono">τᵢ = max(δ) − δᵢ，max(δ) = ${fmt(MAXFIT)}</p>
+          <p class="mono">τ_A = ${fmt(MAXFIT)} − 0.00 = <b>+${fmt(TAU.A)} ms</b></p>
+          <p class="mono">τ_B = ${fmt(MAXFIT)} − ${fmt(FIT.B)} = <b>${pf(TAU.B)} ms</b></p>
+          <p class="mono">τ_C = ${fmt(MAXFIT)} − (${nf(FIT.C)}) = <b>+${fmt(TAU.C)} ms</b></p>
+          ${show ? `
+          <table class="kv">
+            <tr><th>设备</th><th>δ</th><th>τ</th><th>真实 δ</th><th>δ+τ</th></tr>
+            <tr><td>A</td><td>0.00</td><td>+2.90</td><td>14.20</td><td><b>17.10</b></td></tr>
+            <tr><td>B</td><td>2.90</td><td>0.00</td><td>17.10</td><td><b>17.10</b></td></tr>
+            <tr><td>C</td><td>−1.30</td><td>+4.20</td><td>12.90</td><td><b>17.10</b></td></tr>
+          </table>
+          <p class="muted">所有设备有效延迟 = 17.10 ms：喇叭出声时刻对齐。</p>` : '<p class="muted">计算并下发补偿…</p>'}
+        `;
+      }
+    };
+  }
+
+  function verifyScene() {
+    return {
+      title: '同时播放验证',
+      desc: '三台同时播放同一脉冲。未校准到达时间相差 4.20 ms；施加 τ 后折叠到同一时刻。',
+      step: 4, dur: 6500,
+      enter() {
+        resetStage();
+        PH.forEach(p => setBadge(p.key, `τ ${pf(TAU[p.key])} ms`, '#fbbf24'));
+      },
+      frame(t) {
+        timelineG.setAttribute('opacity', clamp(t / 600, 0, 1).toFixed(3));
+        if (t < 1200) {
+          PH.forEach(p => {
+            setHalo(p.key, 0.42);
+            emitPulses(p, p.color, t, 0, 150);
+            setEq(p.key, true, t);
+          });
+        } else {
+          PH.forEach(p => { setHalo(p.key, 0.18); setEq(p.key, false, t); });
+        }
+      },
+      live(t) {
+        const stage = t > 2500;
+        return `
+          <p class="mono">未校准：C 12.90 · A 14.20 · B 17.10</p>
+          <p class="mono">跨度 = <b>4.20 ms</b>（听众听到三次错开的 click）</p>
+          ${stage ? `
+          <p class="mono" style="margin-top:8px">校准后：A 17.10 · B 17.10 · C 17.10</p>
+          <p class="mono">跨度 = <b>0.00 ms</b>（折叠成同一时刻）✓</p>
+          <p class="muted">注意：这里验证的是 δ+τ 的对齐；真实发声还受麦克风差异影响，混机型需外部参考麦。</p>` : '<p class="muted">观察下方时间轴…</p>'}
+          <p class="muted">τ 越大 = 该机被等得更久；整组延迟 = 最慢的那台。</p>`;
+      }
+    };
+  }
+
+  function outroScene() {
+    return {
+      title: '总结：校准只解决“固定差”',
+      desc: '即使系统时钟都准，也不知道每台从“该出声”到“真出声”的硬件延迟。校准测这部分，时钟同步让它长期保持。',
+      step: 4, dur: 6200,
+      enter() {
+        resetStage();
+        PH.forEach(p => { setBadge(p.key, `τ ${pf(TAU[p.key])} ms`, '#fbbf24'); setHalo(p.key, 0.2); });
+        outroG.setAttribute('opacity', 0);
+      },
+      frame(t) {
+        outroG.setAttribute('opacity', clamp((t - 300) / 700, 0, 1).toFixed(3));
+        PH.forEach((p, i) => setHalo(p.key, 0.16 + 0.06 * Math.sin(t / 700 + i)));
+      },
+      live() {
+        return `
+          <p><b>算法骨架</b></p>
+          <ol class="steps">
+            <li>统一时间轴：源端四时戳同步（不要依赖 NTP 绝对时间）。</li>
+            <li>每对互录 chirp → Δᵢⱼ（空气路径抵消）。</li>
+            <li>最小二乘拟合 δᵢ；τᵢ = max δ − δᵢ。</li>
+            <li>按 τᵢ 排期播放；用环一致性检查坏测量。</li>
+            <li>持续时钟 servo（丢/补样本或重采样）吸收 ppm 漂移。</li>
+          </ol>
+          <p class="muted">为什么“联网校时”不够：NTP 在 Wi-Fi 上只有 ms 级精度；而且它校准的是系统时间，不是 DAC/功放/扬声器的输出延迟。</p>
+          <p class="muted">本模拟忽略麦克风差异与时钟漂移（示意为 0）；真实系统要把这两项纳入预算。</p>`;
+      }
+    };
+  }
+
+  /* 顺序：intro → AB/BA/ΔAB → AC/CA/ΔAC → BC/CB/ΔBC → matrix → fit → apply → verify → outro */
+  SCENES.push(introScene());
+  SCENES.push(measureScene('A','B',D.AB), measureScene('B','A',D.AB), calcScene('A','B',RV.AB,RV.BA));
+  SCENES.push(measureScene('A','C',D.AC), measureScene('C','A',D.AC), calcScene('A','C',RV.AC,RV.CA));
+  SCENES.push(measureScene('B','C',D.BC), measureScene('C','B',D.BC), calcScene('B','C',RV.BC,RV.CB));
+  SCENES.push(matrixScene(), fitScene(), applyScene(), verifyScene(), outroScene());
+
+  /* ---------------- 重置 ---------------- */
+  function resetStage() {
+    arcsG.innerHTML = '';
+    sceneG.innerHTML = '';
+    travelG.setAttribute('opacity', 0);
+    timelineG.setAttribute('opacity', 0);
+    outroG.setAttribute('opacity', 0);
+    Object.values(links).forEach(l => {
+      l.setAttribute('stroke', '#2b3a54');
+      l.setAttribute('stroke-width', 1.2);
+      l.setAttribute('opacity', 0.7);
+      l.setAttribute('stroke-dasharray', '4 7');
+    });
+    PH.forEach(p => {
+      phones[p.key].halo.setAttribute('opacity', 0.12);
+      phones[p.key].micflash.setAttribute('opacity', 0);
+      phones[p.key].badge.setAttribute('opacity', 0);
+      phones[p.key].badge.textContent = '';
+      setEq(p.key, false, 0);
+    });
+  }
+
+  /* ---------------- 引擎 ---------------- */
+  let idx = 0, sceneT = 0, playing = true, speed = 1, last = 0;
+  const TOTAL = SCENES.reduce((a, s) => a + s.dur, 0);
+  const barEl = $('bar'), sceneIdxEl = $('sceneIdx');
+
+  function go(i) {
+    idx = clamp(i, 0, SCENES.length - 1);
+    sceneT = 0;
+    resetStage();
+    const s = SCENES[idx];
+    setPanel(s);
+    if (s.enter) s.enter();
+    updateControls();
+    try { history.replaceState(null, '', '#' + (idx + 1)); } catch (e) {}
+  }
+
+  function updateControls() {
+    $('playBtn').textContent = playing ? '⏸ 暂停' : '▶ 播放';
+  }
+
+  function render() {
+    const s = SCENES[idx];
+    arcsG.innerHTML = '';
+    if (s.frame) s.frame(sceneT);
+    setLive(s.live(sceneT));
+    const before = SCENES.slice(0, idx).reduce((a, x) => a + x.dur, 0);
+    barEl.style.width = clamp((before + sceneT) / TOTAL * 100, 0, 100).toFixed(2) + '%';
+    sceneIdxEl.textContent = (idx + 1) + ' / ' + SCENES.length;
+  }
+
+  function loop(now) {
+    const dt = Math.min(80, now - last);
+    last = now;
+    if (playing) {
+      sceneT += dt * speed;
+      const s = SCENES[idx];
+      if (sceneT >= s.dur) {
+        if (idx < SCENES.length - 1) {
+          go(idx + 1);
+        } else {
+          sceneT = s.dur;
+          playing = false;
+          updateControls();
+        }
+      }
+    }
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  function togglePlay() {
+    if (!playing && idx === SCENES.length - 1 && sceneT >= SCENES[idx].dur) {
+      go(0); playing = true; updateControls();
+      return;
+    }
+    playing = !playing;
+    updateControls();
+  }
+
+  $('playBtn').addEventListener('click', togglePlay);
+  $('nextBtn').addEventListener('click', () => { const t = Math.min(idx + 1, SCENES.length - 1); go(t); playing = true; updateControls(); });
+  $('prevBtn').addEventListener('click', () => { go(Math.max(idx - 1, 0)); playing = true; updateControls(); });
+  $('restartBtn').addEventListener('click', () => { go(0); playing = true; updateControls(); });
+  $('speedSel').addEventListener('change', (e) => { speed = parseFloat(e.target.value) || 1; });
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+    else if (e.code === 'ArrowRight') { e.preventDefault(); $('nextBtn').click(); }
+    else if (e.code === 'ArrowLeft') { e.preventDefault(); $('prevBtn').click(); }
+    else if (e.key === 'Home') { e.preventDefault(); $('restartBtn').click(); }
+  });
+
+  /* ---------------- 启动 ---------------- */
+  const initialHash = /^#(\d+)$/.exec(location.hash || '');
+  go(0);
+  playing = true;
+  updateControls();
+  if (initialHash) {
+    const n = Number(initialHash[1]);
+    if (n >= 1 && n <= SCENES.length) { go(n - 1); playing = false; updateControls(); }
+  }
+  // 调试/截图：?scene=14&at=3000 直接停在某一场景的某一时刻
+  const q = new URLSearchParams(location.search);
+  if (q.has('scene')) {
+    const n = Number(q.get('scene'));
+    if (n >= 1 && n <= SCENES.length) {
+      go(n - 1);
+      sceneT = clamp(Number(q.get('at') || 3000), 0, SCENES[n - 1].dur);
+      playing = false;
+      updateControls();
+    }
+  }
+
+  last = performance.now();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

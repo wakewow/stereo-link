@@ -1,0 +1,32 @@
+# 接收端独立工作区：把本机声卡"挂"到 AirPlay / 小米妙播的投放列表里。
+#
+# 与 StereoLink 主工作区（../Cargo.toml）刻意分开，原因有三：
+#   1. 许可：shairplay 是 LGPL-3.0-or-later，FusionPlay MiPlaySdk 是 AGPL-3.0-only，
+#      不能和 MIT OR Apache-2.0 的主程序链在一起；独立工作区 + 独立 exe 是干净的做法。
+#   2. MSRV：shairplay 0.10 要求 rustc 1.94 / edition 2024，主工作区是 1.88 / edition 2021。
+#   3. 依赖体量：接收端会拉进 tokio + mdns-sd + 解码器，不该拖慢主程序的日常构建。
+#
+# 用法：
+#   cd receiver
+#   cargo run --release -p airplay-recv -- --name "电脑（StereoLink）"
+#   cargo run --release -p miplay-recv  -- --name "电脑（StereoLink）"
+[workspace]
+resolver = "2"
+members = ["crates/airplay-recv", "crates/miplay-recv"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/wakewow/stereo-link"
+
+[workspace.dependencies]
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+cpal = "0.17"
+
+[profile.release]
+lto = "thin"
+strip = true

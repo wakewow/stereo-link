@@ -1,0 +1,20 @@
+[package]
+name = "airplay-recv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "把本机声卡变成 AirPlay（隔空播放）接收端：手机投放 → 本机声卡出声"
+
+[[bin]]
+name = "airplay-recv"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+cpal.workspace = true
+# 纯 Rust 的 AirPlay 1（RAOP）接收端；AP1 模式默认不启用 ap2 feature。
+shairplay = "0.10"

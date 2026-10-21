@@ -13,7 +13,12 @@ LICENSES/
   Ubuntu-font-1.0.txt       # 打包 exe/安装包时编入的 Ubuntu-Light 字体许可（UFL 1.0）
   Hack-MIT.txt              # 打包 exe/安装包时编入的 Hack 字体许可（MIT/Expat + Bitstream Vera）
   emoji-icon-font-MIT.txt   # 打包 exe/安装包时编入的 emoji-icon-font 许可（MIT）
+  LGPL-3.0-or-later.txt     # 接收端 airplay-recv 链接的 shairplay（LGPL-3.0-or-later）全文
+  AGPL-3.0-only.txt         # 接收端 miplay-recv 链接的 FusionPlay MiPlay SDK（AGPL-3.0-only）全文
 ```
+
+> 接收端（`receiver/`）是独立可执行文件，许可与主程序不同；来源与义务见
+> [`../receiver/THIRD-PARTY.md`](../receiver/THIRD-PARTY.md)。
 
 > 上面四个字体许可文本来自构建时实际链接的 `epaint_default_fonts 0.31.1`
 > （crates.io 包内 `fonts/` 目录的逐字副本），随 `stereo-link.exe` / 安装包一起分发。

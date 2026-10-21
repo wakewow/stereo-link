@@ -1,0 +1,31 @@
+[package]
+name = "miplay-recv"
+version.workspace = true
+edition.workspace = true
+# 这个 crate 直接链接 FusionPlay MiPlay SDK（AGPL-3.0-only），所以它整体按
+# AGPL-3.0-only 发布。StereoLink 主程序（MIT OR Apache-2.0）不链接它：
+# 两者只在"声音从本机声卡出来"这一点上解耦，进程之间没有任何 IPC。
+license = "AGPL-3.0-only"
+description = "把本机声卡变成小米妙播（MiPlay）投放目标的独立接收进程"
+
+[[bin]]
+name = "miplay-recv"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+cpal = { workspace = true }
+serde_json = "1"
+rand = "0.8"
+
+# 上游：https://github.com/rosienosiesie/FusionPlay-Android
+# 该仓库根目录没有 Cargo workspace，SDK 在 src/FusionPlay.MiPlaySdk，
+# 并 path 依赖同仓库的 src/FusionPlay.AndroidIfAddrs。
+#
+# 用 vendor 副本而不是 git 依赖：为了把「800/650 毫秒硬编码的目标延迟」改成可用
+# 环境变量配置（见 receiver/vendor/README.md，补丁处都有 StereoLink 标记）。
+# 补丁默认值等于上游值，行为与直接用上游一致。
+fusionplay-miplay-sdk = { path = "../../vendor/fusionplay/FusionPlay.MiPlaySdk" }

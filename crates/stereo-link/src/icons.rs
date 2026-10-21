@@ -52,12 +52,14 @@ pub enum Icon {
     Pause,
     /// 播放。
     Play,
+    /// 手机投放：手机轮廓 + 右侧两道投放波纹。
+    Cast,
 }
 
 impl Icon {
     /// 全部图标（测试用；也方便将来做「图标一览」调试页）。
     #[allow(dead_code)] // 只在测试里遍历；正式构建没有调用方。
-    pub const ALL: [Icon; 18] = [
+    pub const ALL: [Icon; 19] = [
         Icon::Route,
         Icon::Capture,
         Icon::Devices,
@@ -76,6 +78,7 @@ impl Icon {
         Icon::Speaker,
         Icon::Pause,
         Icon::Play,
+        Icon::Cast,
     ];
 
     /// 无障碍/调试用的中文名。
@@ -99,6 +102,7 @@ impl Icon {
             Icon::Speaker => "输出",
             Icon::Pause => "暂停",
             Icon::Play => "播放",
+            Icon::Cast => "手机投放",
         }
     }
 }
@@ -405,6 +409,24 @@ pub fn shapes(icon: Icon, rect: Rect, color: Color32, stroke_w: f32) -> Vec<Shap
             c.line(&[m1, b, m2]);
             c.line(&[m2, d, a, m1]);
         }
+        // 手机投放：左边手机轮廓（圆角用折线切角近似）+ 右边两道投放波纹。
+        Icon::Cast => {
+            c.closed(&[
+                (5.6, 4.4),
+                (9.6, 4.4),
+                (10.6, 5.4),
+                (10.6, 18.6),
+                (9.6, 19.6),
+                (5.6, 19.6),
+                (4.6, 18.6),
+                (4.6, 5.4),
+                (5.6, 4.4),
+            ]);
+            // 底部听筒横线：让轮廓一眼看出是手机而不是卡片。
+            c.seg((6.8, 17.4), (8.4, 17.4));
+            c.line(&arc((10.7, 12.0), 3.3, -52.0, 52.0, 6));
+            c.line(&arc((10.7, 12.0), 6.5, -52.0, 52.0, 8));
+        }
     }
 
     out
@@ -424,6 +446,83 @@ pub fn show(ui: &mut egui::Ui, icon: Icon, size: f32, color: Color32) -> egui::R
         paint(ui.painter(), rect, icon, color, 1.6);
     }
     response
+}
+
+/// 程序图标：深色圆角底 + 青/紫两道声道条（64×64，纯代码画，不依赖图片资源）。
+///
+/// 窗口图标和托盘图标共用这一份 RGBA（`egui::IconData` 的 `rgba` + 边长）。
+pub fn app_icon() -> egui::IconData {
+    const N: usize = 64;
+    const SS: usize = 3; // 每像素 3×3 超采样，边缘抗锯齿
+    let mut rgba = vec![0u8; N * N * 4];
+
+    // 单个采样点的颜色（None = 透明背景）
+    let sample = |px: f32, py: f32| -> Option<[f32; 3]> {
+        // 圆角方块（中心 32,32，半宽 28，圆角 12）
+        let (cx, cy, half, radius) = (32.0f32, 32.0f32, 28.0f32, 12.0f32);
+        let qx = (px - cx).abs() - (half - radius);
+        let qy = (py - cy).abs() - (half - radius);
+        let ax = qx.max(0.0);
+        let ay = qy.max(0.0);
+        let sd = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - radius;
+        if sd > 0.0 {
+            return None;
+        }
+
+        // 左声道：青色竖条（低）
+        if (16.0..=24.0).contains(&px) && (30.0..=46.0).contains(&py) {
+            return Some([56.0, 189.0, 248.0]);
+        }
+        // 右声道：紫色竖条（高）
+        if (30.0..=38.0).contains(&px) && (20.0..=46.0).contains(&py) {
+            return Some([167.0, 139.0, 250.0]);
+        }
+        // 中间连接线：把两路连起来（"Link"）
+        if (24.0..=30.0).contains(&px) && (36.0..=39.0).contains(&py) {
+            return Some([120.0, 200.0, 240.0]);
+        }
+
+        // 背景：上浅下深的石墨渐变
+        let t = (py / N as f32).clamp(0.0, 1.0);
+        Some([
+            30.0 + (11.0 - 30.0) * t,
+            34.0 + (13.0 - 34.0) * t,
+            43.0 + (17.0 - 43.0) * t,
+        ])
+    };
+
+    for y in 0..N {
+        for x in 0..N {
+            let mut acc = [0.0f32; 3];
+            let mut hits = 0.0f32;
+            for sy in 0..SS {
+                for sx in 0..SS {
+                    let px = x as f32 + (sx as f32 + 0.5) / SS as f32;
+                    let py = y as f32 + (sy as f32 + 0.5) / SS as f32;
+                    if let Some(c) = sample(px, py) {
+                        acc[0] += c[0];
+                        acc[1] += c[1];
+                        acc[2] += c[2];
+                        hits += 1.0;
+                    }
+                }
+            }
+            let total = (SS * SS) as f32;
+            let idx = (y * N + x) * 4;
+            if hits > 0.0 {
+                rgba[idx] = (acc[0] / hits).round().clamp(0.0, 255.0) as u8;
+                rgba[idx + 1] = (acc[1] / hits).round().clamp(0.0, 255.0) as u8;
+                rgba[idx + 2] = (acc[2] / hits).round().clamp(0.0, 255.0) as u8;
+                rgba[idx + 3] = (255.0 * hits / total).round() as u8;
+            }
+        }
+    }
+
+    egui::IconData {
+        rgba,
+        width: N as u32,
+        height: N as u32,
+    }
 }
 
 #[cfg(test)]

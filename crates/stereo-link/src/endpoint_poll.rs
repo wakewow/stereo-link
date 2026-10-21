@@ -215,6 +215,10 @@ fn run(inner: Arc<Inner>, initial_tx: Option<mpsc::Sender<()>>) {
     let mut last_source: Option<(f32, bool)> = None;
     let mut follow_error: Option<String> = None;
     let mut initial_sent = false;
+    // 上次应用跟随时的目标列表。目标从「空」变成「有值」（启动早期端点还没解析出来）
+    // 或换了端点时，要强制补一次跟随 —— 否则这一轮镜像会永远错过，
+    // 用户得手动动一下系统音量才同步（两端音量会一直差着）。
+    let mut followed_targets: Vec<String> = Vec::new();
     // 记录「最近一次写回」的时间，避免后台读回时把刚拖好的音量又覆盖掉。
     let mut written_at: [Option<Instant>; 2] = [None, None];
 
@@ -273,6 +277,7 @@ fn run(inner: Arc<Inner>, initial_tx: Option<mpsc::Sender<()>>) {
                         }
                         if input.follow_active {
                             apply_follow(&input, &volume, &mut saved, &mut follow_error);
+                            followed_targets = input.follow_targets.clone();
                         }
                         // 唤醒 UI：可见窗口靠重绘；隐藏到托盘的窗口靠 tray 的唤醒消息。
                         inner.ctx.request_repaint();
@@ -286,6 +291,23 @@ fn run(inner: Arc<Inner>, initial_tx: Option<mpsc::Sender<()>>) {
                         follow_error = Some(format!("读不到采集源音量：{err}"));
                     }
                 }
+            }
+        }
+
+        // ---- 2b) 跟随目标变了（启动早期解析不到 / 换端点）→ 立刻补一次镜像 ----
+        if !input.follow_active {
+            followed_targets.clear();
+        } else if followed_targets != input.follow_targets && !input.follow_targets.is_empty() {
+            if let Some(volume) = snapshot.source_volume {
+                follow_error = None;
+                apply_follow(&input, &volume, &mut saved, &mut follow_error);
+                followed_targets = input.follow_targets.clone();
+                inner.ctx.request_repaint();
+                tracing::info!(
+                    "[音量] 跟随目标已就绪 → 补一次镜像：{:.0}%{}",
+                    volume.scalar * 100.0,
+                    if volume.muted { "（静音）" } else { "" }
+                );
             }
         }
 

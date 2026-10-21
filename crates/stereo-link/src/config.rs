@@ -242,6 +242,143 @@ impl ThemeMode {
     }
 }
 
+/// 音量平衡校准的一个声学锚点（在某个主音量下测得的左右电平差）。
+///
+/// 与 [`stereo_audio::BalanceAnchor`] 一一对应；单独定义是因为 stereo-audio 不依赖 serde。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BalanceAnchorConfig {
+    /// 测量时的端点标量（两端相同，0..=1）。
+    pub master: f32,
+    /// `taper_db(master)`：插值在 dB 域做，比标量域更接近线性。
+    pub master_db: f32,
+    /// 实测电平差（dB，左 − 右）：正 = 左边更响。
+    pub delta_db: f32,
+    /// 实测左路电平（dBFS）。
+    pub left_db: f32,
+    /// 实测右路电平（dBFS）。
+    pub right_db: f32,
+    /// 这次测量的可信度（0..=1，由测试音信噪比决定）。
+    pub confidence: f32,
+}
+
+impl Default for BalanceAnchorConfig {
+    fn default() -> Self {
+        Self {
+            master: 0.0,
+            master_db: 0.0,
+            delta_db: 0.0,
+            left_db: 0.0,
+            right_db: 0.0,
+            confidence: 0.0,
+        }
+    }
+}
+
+impl From<&stereo_audio::BalanceAnchor> for BalanceAnchorConfig {
+    fn from(anchor: &stereo_audio::BalanceAnchor) -> Self {
+        Self {
+            master: anchor.master,
+            master_db: anchor.master_db,
+            delta_db: anchor.delta_db,
+            left_db: anchor.left_db,
+            right_db: anchor.right_db,
+            confidence: anchor.confidence,
+        }
+    }
+}
+
+impl From<&BalanceAnchorConfig> for stereo_audio::BalanceAnchor {
+    fn from(anchor: &BalanceAnchorConfig) -> Self {
+        Self {
+            master: anchor.master,
+            master_db: anchor.master_db,
+            delta_db: anchor.delta_db,
+            left_db: anchor.left_db,
+            right_db: anchor.right_db,
+            confidence: anchor.confidence,
+        }
+    }
+}
+
+/// 音量平衡校准（持久化部分）：校准一次存这里，之后调系统音量不再需要重测。
+///
+/// 为什么不再存「左右端点音量百分比」：那种做法把平衡信息编码在两端标量之差里，而音量联动
+/// 会把采集源标量原样镜像到每台目标设备 —— 差值瞬间归零，这就是旧版「平衡后一调音量就失衡」
+/// 的根因。现在存的是「响度差」，播放时由路由引擎给较响的一路乘数字增益（见
+/// [`stereo_audio::balance`]）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BalanceCalConfig {
+    /// 数据结构版本（见 [`stereo_audio::BALANCE_CAL_VERSION`]）。0 = 老配置/没校准过。
+    pub version: u32,
+    /// 校准时用的左端点选择串；与 `split.left_endpoint` 不一致即视为作废（换了音箱要重测）。
+    pub left_endpoint: String,
+    /// 校准时用的右端点选择串。
+    pub right_endpoint: String,
+    /// 声学锚点（按 master 升序）。
+    pub anchors: Vec<BalanceAnchorConfig>,
+    /// 左端点的「标量 → 端点自报 dB」曲线。
+    pub left_curve: Vec<(f32, f32)>,
+    /// 右端点的「标量 → 端点自报 dB」曲线。
+    pub right_curve: Vec<(f32, f32)>,
+    /// 满音量处的灵敏度差（dB，左 − 右）：扣掉端点电平后两台音箱本身的响度差。
+    pub sens_diff_db: f32,
+    /// 校准完成时间（Unix 秒；0 = 未知）。
+    pub calibrated_at: u64,
+}
+
+impl BalanceCalConfig {
+    /// 转成运行时可用的 [`stereo_audio::BalanceCalibration`]。
+    pub fn to_calibration(&self) -> stereo_audio::BalanceCalibration {
+        stereo_audio::BalanceCalibration {
+            version: if self.version == 0 {
+                stereo_audio::BALANCE_CAL_VERSION
+            } else {
+                self.version
+            },
+            left_endpoint: self.left_endpoint.clone(),
+            right_endpoint: self.right_endpoint.clone(),
+            anchors: self.anchors.iter().map(Into::into).collect(),
+            left_curve: stereo_audio::EndpointCurve::new(self.left_curve.clone()),
+            right_curve: stereo_audio::EndpointCurve::new(self.right_curve.clone()),
+            sens_diff_db: self.sens_diff_db,
+            calibrated_at: self.calibrated_at,
+        }
+    }
+}
+
+impl From<&stereo_audio::BalanceCalibration> for BalanceCalConfig {
+    fn from(cal: &stereo_audio::BalanceCalibration) -> Self {
+        Self {
+            version: cal.version,
+            left_endpoint: cal.left_endpoint.clone(),
+            right_endpoint: cal.right_endpoint.clone(),
+            anchors: cal.anchors.iter().map(Into::into).collect(),
+            left_curve: cal.left_curve.points.clone(),
+            right_curve: cal.right_curve.points.clone(),
+            sens_diff_db: cal.sens_diff_db,
+            calibrated_at: cal.calibrated_at,
+        }
+    }
+}
+
+/// 手机投放（AirPlay / 小米妙播）设置。
+///
+/// 只记「面板启动时要不要自动拉起接收端」；输出声卡固定跟随 Windows 默认播放
+/// 设备，不做持久化。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CastConfig {
+    /// 面板启动时自动拉起 AirPlay 接收端。
+    pub auto_airplay: bool,
+    /// 面板启动时自动拉起小米妙播接收端。
+    pub auto_miplay: bool,
+    /// 妙播低延迟模式：把目标延迟从 800 ms 压到 220 ms（代价：和小米音箱一起
+    /// 「全屋播放」时会和它们不同步）。
+    pub low_latency: bool,
+}
+
 /// 面板持久化配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -277,6 +414,12 @@ pub struct AppConfig {
     /// `#[serde(default)]`：老配置文件没有这个字段时按 [`ThemeMode::System`] 处理。
     #[serde(default)]
     pub theme: ThemeMode,
+    /// 音量平衡校准结果（端点曲线 + 声学锚点）；空 = 没校准过，不做平衡补偿。
+    #[serde(default)]
+    pub balance: BalanceCalConfig,
+    /// 手机投放接收端设置。
+    #[serde(default)]
+    pub cast: CastConfig,
 }
 
 fn default_auto_start() -> bool {
@@ -295,6 +438,8 @@ impl Default for AppConfig {
             volume_follow: VolumeFollow::Auto,
             close_behavior: CloseBehavior::Ask,
             theme: ThemeMode::System,
+            balance: BalanceCalConfig::default(),
+            cast: CastConfig::default(),
         }
     }
 }
@@ -451,6 +596,43 @@ mod tests {
         let cfg = AppConfig::default();
         assert!(cfg.split.left_endpoint.is_empty());
         assert!(cfg.split.right_endpoint.is_empty());
+    }
+
+    /// 音量平衡校准要能整份持久化：锚点/曲线/灵敏度差写出去再读回来必须一致；
+    /// 老配置（没有 `balance` 字段）必须回默认 —— 没校准过就等于不补偿。
+    #[test]
+    fn balance_calibration_round_trips_and_defaults_to_empty() {
+        let old: AppConfig = serde_json::from_str(r#"{"show_log": false}"#).expect("老配置");
+        assert!(old.balance.anchors.is_empty());
+        assert_eq!(old.balance.sens_diff_db, 0.0);
+
+        let cal = stereo_audio::BalanceCalibration {
+            version: stereo_audio::BALANCE_CAL_VERSION,
+            left_endpoint: "扬声器 (Xiaomi Sound-1695)".to_string(),
+            right_endpoint: "扬声器 (Xiaomi Speaker-4162)".to_string(),
+            anchors: vec![stereo_audio::BalanceAnchor {
+                master: 0.6,
+                master_db: -7.6,
+                delta_db: 4.25,
+                left_db: -22.5,
+                right_db: -26.75,
+                confidence: 0.92,
+            }],
+            left_curve: stereo_audio::EndpointCurve::new(vec![(0.3, -17.8), (1.0, 0.0)]),
+            right_curve: stereo_audio::EndpointCurve::new(vec![(0.3, -19.1), (1.0, 0.0)]),
+            sens_diff_db: 5.1,
+            calibrated_at: 1_760_000_000,
+        };
+        let cfg = BalanceCalConfig::from(&cal);
+        let json = serde_json::to_string(&cfg).expect("序列化");
+        let back: BalanceCalConfig = serde_json::from_str(&json).expect("反序列化");
+        let restored = back.to_calibration();
+        assert_eq!(restored.left_endpoint, cal.left_endpoint);
+        assert_eq!(restored.right_endpoint, cal.right_endpoint);
+        assert_eq!(restored.anchors, cal.anchors);
+        assert_eq!(restored.left_curve, cal.left_curve);
+        assert_eq!(restored.right_curve, cal.right_curve);
+        assert!((restored.sens_diff_db - cal.sens_diff_db).abs() < 1e-6);
     }
 
     /// 关闭行为：老配置没有该字段时默认「每次询问」，写回时是 snake_case。

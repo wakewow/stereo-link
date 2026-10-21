@@ -6,7 +6,8 @@
 //! * 路由条数任意：`routes` 里每台设备一条独立的 render 线程 + 抖动队列，互不阻塞；
 //! * 每条路由可选 [`RouteChannel::Left`] / [`RouteChannel::Right`] / [`RouteChannel::Both`]
 //!   （`Both` = 采集左右混音 `(L+R)/2`，输出的两个声道都填这份混音）；
-//! * 每条路由可以独立设增益和额外延迟（对齐两台音箱的固定时差）；
+//! * 每条路由可以独立设增益和额外延迟（对齐两台音箱的固定时差）；**实时 dB 增益偏移**
+//!   （[`RouteEngineHandle::set_route_gain_db`]）在播放中即时生效，不用重启引擎；
 //! * **某条路由打开失败不影响其它路由**：失败只写进该路的 `error`、整体仍 running，
 //!   只有全部路由都失败时 [`RouteEngineHandle::start`] 才返回错误、运行中全部失败才停引擎。
 //!
@@ -86,6 +87,11 @@ const RETRY_BASE_MS: u64 = 1_000;
 const RETRY_MAX_MS: u64 = 30_000;
 /// 重试等待切成小片，每片检查一次停止标志（保证 `stop()` 最多等这么久，毫秒）。
 const RETRY_SLEEP_SLICE_MS: u64 = 100;
+/// 实时 dB 增益偏移的下限 / 上限。GUI 的音量平衡补偿只在 ±20 dB 内动，这里留足余量；
+/// 超出范围直接夹住（见 [`RouteEngineHandle::set_route_gain_db`]），避免跑飞把声音弄爆。
+const GAIN_DB_MIN: f32 = -60.0;
+/// 实时 dB 增益偏移的上限，见 [`GAIN_DB_MIN`]。
+const GAIN_DB_MAX: f32 = 24.0;
 
 /// 10 ms 对应多少帧（sink 每轮最多消费的量，按引擎采样率算）。
 fn render_chunk_frames(rate: u32) -> usize {
@@ -556,6 +562,11 @@ impl RouteEngineHandle {
             .iter()
             .map(|route| AtomicU32::new(route.delay_ms))
             .collect();
+        // 实时 dB 增益偏移默认中性（0.0 dB）：配置增益已经在 RouteConfig.gain 里。
+        let gains_db: Vec<AtomicU32> = enabled
+            .iter()
+            .map(|_| AtomicU32::new(0.0f32.to_bits()))
+            .collect();
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             captured_frames: AtomicU64::new(0),
@@ -568,6 +579,8 @@ impl RouteEngineHandle {
             source_retrying: AtomicU64::new(0),
             sinks,
             delays_ms,
+            gains_db,
+            muted: AtomicBool::new(false),
         });
 
         let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(sink_count + 1);
@@ -694,6 +707,76 @@ impl RouteEngineHandle {
             .delays_ms
             .get(index)
             .map(|slot| slot.load(Ordering::Relaxed))
+    }
+
+    /// 播放中实时调整某条路由的 **dB 增益偏移**，**不需要重启引擎、不会断音**。
+    ///
+    /// 这是叠加在 [`RouteConfig::gain`] 之上的平衡补偿（例如 GUI 为了让两只音箱响度
+    /// 一致而每帧微调）：最终增益 = `gain * 10^(偏移/20)`。**0.0 dB 是中性**，配置里的
+    /// 增益原样生效；正数变响、负数变轻。
+    ///
+    /// * `index` 是**启用**路由里的下标，与 [`RouteEngineStats::routes`] 的顺序一致
+    ///   （0 = 配置里第一条 `enabled=true` 的路由）；
+    /// * 非有限值（NaN / ±∞）、下标越界、引擎已停（[`Self::alive`] 为 `false`）返回
+    ///   `false`，原子值保持不变；
+    /// * `gain_db` 先夹到 `-60.0..=24.0` 再写入，避免跑飞的数值把声音弄爆或弄没。
+    ///
+    /// 线程安全：写入只是每路一个 `AtomicU32`（存 `f32::to_bits()`）的
+    /// `store(Relaxed)`；音频线程每个音频包只读一次、**不加锁**，所以 GUI 每帧更新也
+    /// 不会阻塞音频线程，更不会造成重启/断音。
+    pub fn set_route_gain_db(&self, index: usize, gain_db: f32) -> bool {
+        if !gain_db.is_finite() || self.shared.stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        match self.shared.gains_db.get(index) {
+            Some(slot) => {
+                slot.store(
+                    gain_db.clamp(GAIN_DB_MIN, GAIN_DB_MAX).to_bits(),
+                    Ordering::Relaxed,
+                );
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 批量设置每条启用路由的 dB 增益偏移（下标 / 语义同 [`Self::set_route_gain_db`]）；
+    /// 返回成功写入的条数（下标越界的那几项算失败；引擎已停时全部失败）。
+    pub fn set_route_gains_db(&self, gains_db: &[f32]) -> usize {
+        gains_db
+            .iter()
+            .enumerate()
+            .filter(|(index, gain_db)| self.set_route_gain_db(*index, **gain_db))
+            .count()
+    }
+
+    /// 某条路由当前生效的 dB 增益偏移（读原子，不加锁）；越界返回 `None`。
+    pub fn route_gain_db(&self, index: usize) -> Option<f32> {
+        self.shared
+            .gains_db
+            .get(index)
+            .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)))
+    }
+
+    /// 打开 / 关闭引擎级**数字静音**（播放中可随时改，不需要重启引擎、不会断音）。
+    ///
+    /// 打开后每条路由都推数字 0（真正的静音），**与端点自己的音量/静音无关** —— 这解决
+    /// 「端点不支持 mute」的情况：有的蓝牙端点把 `SetMute` 折算成「音量压到最低档」并读回
+    /// 未静音，物理音箱还会漏出一点声音（系统静音时能听到小声音）。
+    ///
+    /// * 引擎已停时返回 `false`，原子值不变；
+    /// * 音频线程每个音频包只读一次原子（`Relaxed`），不加锁。
+    pub fn set_muted(&self, muted: bool) -> bool {
+        if self.shared.stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.shared.muted.store(muted, Ordering::Relaxed);
+        true
+    }
+
+    /// 当前是否处于引擎级数字静音（读原子，不加锁）。
+    pub fn muted(&self) -> bool {
+        self.shared.muted.load(Ordering::Relaxed)
     }
 
     /// 拍一张统计快照（加锁读，不影响音频线程）。
@@ -850,6 +933,16 @@ struct Shared {
     sinks: Vec<Mutex<SinkState>>,
     /// 每条启用路由的微调延迟（毫秒），下标与 `sinks` 一致；可在播放中随时改。
     delays_ms: Vec<AtomicU32>,
+    /// 每条启用路由的实时 dB 增益偏移（存 `f32::to_bits()`），下标与 `sinks` 一致；
+    /// 可在播放中随时改。**0.0 dB = 中性**，最终增益 =
+    /// `RouteConfig.gain * db_to_linear(偏移)`。音频线程只读原子、不加锁。
+    gains_db: Vec<AtomicU32>,
+    /// 引擎级数字静音：为 `true` 时每条路由都推 0（精确数字静音），与端点音量/静音无关。
+    ///
+    /// 存在的理由：有的端点（实测蓝牙音箱）**不支持端点静音** —— `SetMute(true)` 会被
+    /// 驱动折算成「把端点音量压到最低可用档」并立刻读回未静音，物理音箱仍在出声（只是小）。
+    /// 系统静音时靠这个原子把路由输出真正切成 0，不依赖端点行为。
+    muted: AtomicBool,
 }
 
 /// 采集源端点的混音格式（回环按它原样开流，转换全部在 Rust 侧做）。
@@ -1078,6 +1171,28 @@ fn mix_sample(channel: RouteChannel, left: i16, right: i16) -> i16 {
         // 先转 i32 再平均：i16::MAX + i16::MAX 也不会溢出，负半轴同理。
         RouteChannel::Both => ((left as i32 + right as i32) / 2) as i16,
     }
+}
+
+/// dB 增益偏移换算成线性幅度倍数（`10^(db/20)`）。
+///
+/// 供实时 dB 增益偏移用：音频线程**每个音频包只调用一次**（不是每个样本），避免重复
+/// `powf`。非有限值（NaN / ±∞）返回 `1.0`（中性）——坏数据不能把声音弄成静音或爆音。
+pub(crate) fn db_to_linear(db: f32) -> f32 {
+    if !db.is_finite() {
+        return 1.0;
+    }
+    10.0f32.powf(db / 20.0)
+}
+
+/// 某条路由最终生效的**线性增益**：配置增益 × dB 偏移倍数，夹到 `0.0..=8.0`；
+/// 引擎级数字静音（[`RouteEngineHandle::set_muted`]）时恒 `0.0`（精确数字静音）。
+///
+/// 音频线程每个音频包、每条路由只调用一次（不是每个样本）：一次 `powf` 就够。
+pub(crate) fn effective_linear_gain(sink_gain: f32, gain_db: f32, muted: bool) -> f32 {
+    if muted {
+        return 0.0;
+    }
+    (sink_gain * db_to_linear(gain_db)).clamp(0.0, 8.0)
 }
 
 /// 对 i16 采样应用增益并钳制回 i16 范围（1.0 = 原样快路径）。
@@ -2075,7 +2190,11 @@ fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> 
             );
 
             // 按每条路由的通道模式 + 增益 +（可选）反相，把这一包拆进各自的队列。
-            for slot in &shared.sinks {
+            // 实时 dB 偏移每个音频包只读一次原子（Relaxed）：音频线程只读、不加锁，
+            // 折算一次线性倍数后与 RouteConfig.gain 相乘，再夹到 validate 的 0.0..=8.0。
+            // 引擎级数字静音：每包只读一次原子；打开时所有路由都推 0。
+            let engine_muted = shared.muted.load(Ordering::Relaxed);
+            for (index, slot) in shared.sinks.iter().enumerate() {
                 let Ok(mut sink) = slot.lock() else {
                     continue;
                 };
@@ -2084,10 +2203,16 @@ fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> 
                     continue;
                 }
                 let channel = sink.channel;
-                let gain = sink.gain;
+                let gain_db = shared
+                    .gains_db
+                    .get(index)
+                    .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)))
+                    .unwrap_or(0.0);
+                // 每包只算一次 powf：0 dB → ×1.0；夹到与配置校验一致的 0.0..=8.0。
+                let gain = effective_linear_gain(sink.gain, gain_db, engine_muted);
                 let invert = sink.invert;
-                for index in 0..captured {
-                    let mono = mix_sample(channel, dsp.left[index], dsp.right[index]);
+                for frame in 0..captured {
+                    let mono = mix_sample(channel, dsp.left[frame], dsp.right[frame]);
                     let mut sample = apply_gain(mono, gain);
                     if invert {
                         sample = invert_sample(sample);
@@ -2715,6 +2840,8 @@ mod tests {
             source_retrying: AtomicU64::new(0),
             sinks: vec![Mutex::new(state)],
             delays_ms: vec![AtomicU32::new(10)],
+            gains_db: vec![AtomicU32::new(0.0f32.to_bits())],
+            muted: AtomicBool::new(false),
             rate: 48_000,
         });
         let handle = RouteEngineHandle {
@@ -2749,6 +2876,10 @@ mod tests {
     /// 造一个引擎内部状态（不启动线程），供 stats()/重试字段测试用。
     fn shared_with(states: Vec<SinkState>, stop: bool) -> Arc<Shared> {
         let delays_ms = states.iter().map(|_| AtomicU32::new(0)).collect::<Vec<_>>();
+        let gains_db = states
+            .iter()
+            .map(|_| AtomicU32::new(0.0f32.to_bits()))
+            .collect::<Vec<_>>();
         Arc::new(Shared {
             stop: AtomicBool::new(stop),
             captured_frames: AtomicU64::new(0),
@@ -2761,6 +2892,8 @@ mod tests {
             source_retrying: AtomicU64::new(0),
             sinks: states.into_iter().map(Mutex::new).collect(),
             delays_ms,
+            gains_db,
+            muted: AtomicBool::new(false),
         })
     }
 
@@ -3139,6 +3272,67 @@ mod tests {
         let mut route = route("箱A", RouteChannel::Left);
         route.invert = true;
         assert!(route.describe().contains("反相"), "{}", route.describe());
+    }
+
+    #[test]
+    fn db_to_linear_maps_neutral_and_six_db() {
+        // 0 dB = 不改变幅度；±6.0206 dB ≈ ×0.5 / ×2（10^(±6.0206/20) = 0.5 / 2）。
+        assert!((db_to_linear(0.0) - 1.0).abs() < f32::EPSILON);
+        assert!((db_to_linear(-6.0206) - 0.5).abs() < 1e-3);
+        assert!((db_to_linear(6.0206) - 2.0).abs() < 1e-3);
+        // 非有限值一律中性：坏数据不能把声音弄没，也不能弄爆。
+        assert_eq!(db_to_linear(f32::NAN), 1.0);
+        assert_eq!(db_to_linear(f32::INFINITY), 1.0);
+        assert_eq!(db_to_linear(f32::NEG_INFINITY), 1.0);
+    }
+
+    #[test]
+    fn live_gain_offset_clamps_and_validates() {
+        let mut state = SinkState::new(&route("箱A", RouteChannel::Left), 4);
+        state.gain = 1.0;
+        let handle = handle_for(shared_with(vec![state], false));
+        // 下标越界 / 非有限值都拒绝写入。
+        assert!(!handle.set_route_gain_db(1, 0.0));
+        assert!(!handle.set_route_gain_db(0, f32::NAN));
+        assert!(!handle.set_route_gain_db(0, f32::INFINITY));
+        // 正常写入 → 读回同值（0 dB 中性之外的值也能原样保存）。
+        assert!(handle.set_route_gain_db(0, -6.0));
+        assert_eq!(handle.route_gain_db(0), Some(-6.0));
+        // 超出范围夹到 -60.0..=24.0，不是拒绝。
+        assert!(handle.set_route_gain_db(0, 1_000.0));
+        assert_eq!(handle.route_gain_db(0), Some(GAIN_DB_MAX));
+        assert!(handle.set_route_gain_db(0, -1_000.0));
+        assert_eq!(handle.route_gain_db(0), Some(GAIN_DB_MIN));
+        // 批量设置返回成功条数：下标 1 越界算失败。
+        assert_eq!(handle.set_route_gains_db(&[1.0, 2.0]), 1);
+        assert_eq!(handle.route_gain_db(0), Some(1.0));
+        // 引擎已停 → 一律拒绝。
+        assert!(!handle_for(shared_with(Vec::new(), true)).set_route_gain_db(0, 0.0));
+    }
+
+    #[test]
+    fn engine_digital_mute_zeroes_gain_and_survives_route_gain() {
+        // 纯逻辑：静音时无论配置增益/实时偏移是什么，最终线性增益恒为 0（精确数字静音）。
+        assert_eq!(effective_linear_gain(1.0, 0.0, true), 0.0);
+        assert_eq!(effective_linear_gain(8.0, GAIN_DB_MAX, true), 0.0);
+        // 不静音时与原先一致：配置增益 × 10^(dB/20)，并夹到 0.0..=8.0。
+        assert!((effective_linear_gain(1.0, 0.0, false) - 1.0).abs() < f32::EPSILON);
+        assert!((effective_linear_gain(0.5, 0.0, false) - 0.5).abs() < f32::EPSILON);
+        assert!((effective_linear_gain(1.0, -6.0206, false) - 0.5).abs() < 1e-3);
+        assert_eq!(effective_linear_gain(8.0, GAIN_DB_MAX, false), 8.0);
+        // 句柄上的开关：能读回、引擎停了拒绝、停下时保持原值。
+        let handle = handle_for(shared_with(
+            vec![SinkState::new(&route("箱A", RouteChannel::Left), 4)],
+            false,
+        ));
+        assert!(!handle.muted());
+        assert!(handle.set_muted(true));
+        assert!(handle.muted());
+        assert!(handle.set_muted(false));
+        assert!(!handle.muted());
+        let stopped = handle_for(shared_with(Vec::new(), true));
+        assert!(!stopped.set_muted(true));
+        assert!(!stopped.muted());
     }
 
     /// 取错误里记录的 HRESULT（测试辅助）。

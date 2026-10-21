@@ -190,11 +190,41 @@ StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别
 > 安装脚本会直接提示先关闭。驱动来源、许可与手动命令见
 > [`docs/virtual-soundcard.md`](docs/virtual-soundcard.md)。
 
+## 命令行与无头运行
+
+GUI 之外还有一个同包产出的控制台程序 `stereo-link-cli.exe`：**界面上能做的一切（启停路由、启停投放接收端、
+改配置、播测试音、退出）都能用命令行完成，界面展示的状态都能用 `--json` 拿到，日志也能直接读文件。**
+没有实例时 `status` / `log` / `config` / `endpoints` / `doctor` 会退化为离线模式，不需要 GUI 在跑。
+
+```powershell
+stereo-link-cli status --json          # 引擎 / 路由 / 接收端 / 默认声卡 / 配置，一条 JSON
+stereo-link-cli serve                  # 无头常驻：路由 + 接收端 + 控制面（Ctrl+C 或 quit 退出）
+stereo-link-cli serve --no-receivers   # 只跑路由
+stereo-link-cli routing start|stop|restart|mute|unmute
+stereo-link-cli receiver list|start|stop|restart airplay|miplay|all
+stereo-link-cli config get split.queue_ms
+stereo-link-cli config set cast.low_latency true
+stereo-link-cli log -n 50 --level WARN
+stereo-link-cli endpoints render
+stereo-link-cli tone --freq 440 --seconds 1.0
+stereo-link-cli doctor                 # 环境自检
+stereo-link-cli quit
+```
+
+- **自动化测试**只走这条路径：`serve` 起无头实例 → CLI 驱动并断言 `--json`，不再靠点按钮 / 截图。
+  这是仓库开发规范（见 [`AGENTS.md`](AGENTS.md) §2）。
+- **命令行部署**：Windows 计划任务 / NSSM 服务、Linux systemd user unit、macOS launchd 的完整示例见
+  [`docs/cli.md`](docs/cli.md) §5。跨平台结论见
+  [`docs/platform-feasibility.md`](docs/platform-feasibility.md)（主程序）与
+  [`docs/platform-receiver-feasibility.md`](docs/platform-receiver-feasibility.md)（接收端）——主程序引擎
+  目前是 Windows-only，Linux/macOS 可直接部署的是 CLI + 接收端。
+
 ## 构建
 
 ```powershell
 cargo build --release -p stereo-link
-# 产物：target\release\stereo-link.exe（约 6 MB，单文件、无外部依赖）
+# 产物：target\release\stereo-link.exe（GUI，约 6 MB，单文件、无外部依赖）
+#       target\release\stereo-link-cli.exe（控制台，约 3 MB）
 ```
 
 需要 Rust 1.88+（MSVC 工具链）。`cargo test --workspace` 跑全部单元测试。

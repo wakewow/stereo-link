@@ -55,6 +55,8 @@ pub mod error;
 pub mod ring;
 
 #[cfg(windows)]
+pub mod balance;
+#[cfg(windows)]
 pub mod btsplit;
 #[cfg(windows)]
 pub mod capture;
@@ -118,4 +120,17 @@ pub use route::{
 #[cfg(windows)]
 pub mod volume;
 #[cfg(windows)]
-pub use volume::{get_endpoint_volume, set_endpoint_mute, set_endpoint_volume, EndpointVolume};
+pub use volume::{
+    capture_endpoint_curve, get_endpoint_volume, set_endpoint_mute, set_endpoint_volume,
+    EndpointVolume, CURVE_SCALARS,
+};
+
+/// 音量平衡校准（端点曲线 + 声学锚点 → 引擎侧数字增益）。
+///
+/// 与 [`sync`] 分开的原因：平衡结果要持久化、要在播放中每帧刷新，和一次性的延迟标定是两回事。
+#[cfg(windows)]
+pub use balance::{
+    balance_gains, calibrate_balance, calibrate_balance_with_progress, BalanceAnchor,
+    BalanceCalibration, BalanceCalibrationOutcome, BalanceProgress, EndpointCurve,
+    BALANCE_ANCHOR_SCALARS, BALANCE_CAL_VERSION, BALANCE_GAIN_DEADBAND_DB, BALANCE_GAIN_MAX_DB,
+};

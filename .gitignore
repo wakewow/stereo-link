@@ -57,3 +57,6 @@ drivers/certs/*.pfx
 # Android 移植可行性调研（README 主报告 + 01~04 分报告；含本机路径/设备/环境实测信息）
 /docs/android-port/
 /.tmp-*
+
+# ---------- 接收端（独立 workspace）的构建产物 ----------
+/receiver/target/
