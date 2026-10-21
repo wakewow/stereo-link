@@ -2,6 +2,39 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.0] - 2026-10-21
+
+### 新增
+
+- **`stereo-link-cli.exe`：完整的命令行入口 + 无头 `serve` 模式。** 界面上能做的事（启停路由、启停
+  投放接收端、改配置、播测试音、退出）命令行都能做；界面展示的状态都能用 `status --json` 拿到；日志
+  在无实例时也能直接读文件。命令：`status` / `log` / `routing` / `receiver` / `endpoints` / `config` /
+  `tone` / `doctor` / `serve` / `quit` / `ping`。详见 [`docs/cli.md`](docs/cli.md)。
+- **控制面**（`crates/stereo-link/src/control.rs`）：GUI 与 `serve` 都在 `127.0.0.1` 随机端口内嵌 JSON
+  行协议服务，token 校验，状态写在 `%APPDATA%\stereo-link\control.json`；CLI 作为客户端驱动实例。
+  进程被强杀留下陈旧 control.json 时，下一次读取会用 120 ms TCP 探测自动清理。
+- **无头部署**：`stereo-link-cli serve [--no-routing] [--no-receivers]`，`Ctrl+C` / `SIGTERM` / `quit`
+  都会先停路由与子进程接收端再退出，不留孤儿。Windows 计划任务 / NSSM、Linux systemd user unit、
+  macOS launchd 示例见 `docs/cli.md` §5。
+- **开发规范**写进仓库根 [`AGENTS.md`](AGENTS.md)：新增功能必须同时具备 CLI 动作 + 可机读状态 + 日志，
+  测试以 CLI/无头为准，不得只靠点按钮。
+- **跨平台可行性评估**：`docs/platform-feasibility.md`（主程序：引擎 89% 代码在 `#[cfg(windows)]`，
+  Linux 3.5–5.5 周可行、macOS 4–7 周勉强）与 `docs/platform-receiver-feasibility.md`（接收端：AirPlay
+  端几乎零成本，妙播端 macOS 受 5353 端口限制）。
+
+### 改变
+
+- `receiver/` 的两个接收端在启动前会清理上次遗留的同名孤儿进程（可用环境变量
+  `STEREOLINK_KEEP_STALE_RECEIVERS=1` 跳过），避免新实例因 5000/8899 被占而退到 5001 / 启动失败。
+- 日志改为「内存 + 文件」双层（`%APPDATA%\stereo-link\logs\stereo-link.log`，2 MB 轮转），接收端
+  （子进程）输出被转发进同一份日志。
+
+### 修复
+
+- `quit` 以前只发窗口关闭命令，会被「缩小至托盘」拦截导致进程不退；现在直接走完整收尾（停路由、
+  停接收端、恢复默认输出、保存配置、删控制文件）后退出。
+- `receiver list` 重复打印状态、`config get` 字符串值带引号等 CLI 文案问题。
+
 ## [0.5.5] - 2026-10-19
 
 ### 修复

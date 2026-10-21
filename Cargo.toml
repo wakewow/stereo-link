@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.5"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -20,6 +20,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Ctrl+C / SIGTERM 优雅退出：serve 模式必须先把子进程接收端收掉（Windows/Linux）。
+ctrlc = { version = "3.4", features = ["termination"] }
 
 [profile.release]
 lto = "thin"

@@ -17,7 +17,7 @@
 
 #define AppName        "StereoLink 立体声链"
 #define AppNameShort   "StereoLink"
-#define AppVersion     "0.5.5"
+#define AppVersion     "0.6.0"
 #define AppExe         "stereo-link.exe"
 #define AppPublisher   "StereoLink contributors"
 #define AppURL         "https://github.com/wakewow/stereo-link"
@@ -69,6 +69,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\dist\{#AppExe}";      DestDir: "{app}";                Flags: ignoreversion
+; 手机投放接收端（独立许可：LGPL / AGPL，见 docs\receiver.md 与 LICENSES\）
+Source: "..\dist\receivers\*.exe"; DestDir: "{app}\receivers";      Flags: ignoreversion
+; 控制台程序：命令行 / 无头 serve / 自动化测试都靠它（见 docs\cli.md）
+Source: "..\dist\stereo-link-cli.exe"; DestDir: "{app}";           Flags: ignoreversion
 Source: "..\README.md";           DestDir: "{app}";                Flags: ignoreversion
 Source: "..\CHANGELOG.md";        DestDir: "{app}";                Flags: ignoreversion
 Source: "..\LICENSE-MIT";         DestDir: "{app}";                Flags: ignoreversion
@@ -76,12 +80,14 @@ Source: "..\LICENSE-APACHE";      DestDir: "{app}";                Flags: ignore
 Source: "..\NOTICE";              DestDir: "{app}";                Flags: ignoreversion
 Source: "..\LICENSES\*";          DestDir: "{app}\LICENSES";       Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\docs\gui.md";         DestDir: "{app}\docs";           Flags: ignoreversion
+Source: "..\docs\cli.md";         DestDir: "{app}\docs";           Flags: ignoreversion
 Source: "..\docs\virtual-soundcard.md"; DestDir: "{app}\docs";     Flags: ignoreversion
 Source: "..\docs\images\*";       DestDir: "{app}\docs\images";    Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}";                  Filename: "{app}\{#AppExe}"
 Name: "{group}\使用手册（面板）";            Filename: "{app}\docs\gui.md"
+Name: "{group}\使用手册（命令行与无头部署）"; Filename: "{app}\docs\cli.md"
 Name: "{group}\使用手册（采集源与虚拟声卡）"; Filename: "{app}\docs\virtual-soundcard.md"
 Name: "{group}\打开安装目录";                Filename: "{app}"
 Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
