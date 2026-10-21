@@ -83,6 +83,14 @@ stereo-link-cli receiver restart miplay
 
 设备名固定 `StereoLink`；输出声卡跟随系统默认（接收端启动时读取）。启动前会清理上次留下的同名孤儿进程，可用环境变量 `STEREOLINK_KEEP_STALE_RECEIVERS=1` 跳过清理。
 
+`receiver start airplay` 拉起的是 **AirPlay 1 + AirPlay 2 双模式**（iPhone 首次连接需在手机上输入配对码 `3939`，配对一次后不再弹码；配对信息在 `%LOCALAPPDATA%\StereoLink\airplay-pairings.json`）。需要 AP1 实时流（看视频/游戏对延迟敏感）时，直接单独运行接收端并加 `--ap1`：
+
+```powershell
+receiver\target\release\airplay-recv.exe --name StereoLink --device default --ap1
+```
+
+AP2 的 PTP 时钟要监听 **UDP 319/320**，防火墙规则请按程序放行（`-Protocol Any`），详见 [`docs/receiver.md`](receiver.md) §7。
+
 ### endpoints
 
 ```powershell
@@ -174,11 +182,11 @@ target\debug\stereo-link-cli.exe quit
 1. 构建产物（或安装包）里的两个 exe 放在同一目录：
    `stereo-link.exe`、`stereo-link-cli.exe`。
 2. 接收端 exe 放到 `receiver\target\release\`，或把 `receivers\` 放在主程序目录下，或用环境变量 `STEREOLINK_RECEIVER_DIR` 指定目录。
-3. 防火墙：`airplay-recv.exe` / `miplay-recv.exe` 需要**入站放行**（Private/Public）。GUI 下打开投放页时会尝试加规则；纯命令行的机器请先执行：
+3. 防火墙：`airplay-recv.exe` / `miplay-recv.exe` 需要**入站放行**（Private/Public）。GUI 下打开投放页时会尝试加规则；纯命令行的机器请先执行（按程序放行**所有协议**：AirPlay 2 还用到 UDP 319/320 的 PTP 时钟，只放 TCP 会连不上或退化成 AP1）：
 
 ```powershell
-New-NetFirewallRule -DisplayName "StereoLink airplay-recv" -Direction Inbound -Action Allow -Program "$PWD\receiver\target\release\airplay-recv.exe" -Profile Private,Public
-New-NetFirewallRule -DisplayName "StereoLink miplay-recv" -Direction Inbound -Action Allow -Program "$PWD\receiver\target\release\miplay-recv.exe" -Profile Private,Public
+New-NetFirewallRule -DisplayName "StereoLink airplay-recv" -Direction Inbound -Action Allow -Program "$PWD\receiver\target\release\airplay-recv.exe" -Profile Private,Public -Protocol Any
+New-NetFirewallRule -DisplayName "StereoLink miplay-recv" -Direction Inbound -Action Allow -Program "$PWD\receiver\target\release\miplay-recv.exe" -Profile Private,Public -Protocol Any
 ```
 
 ### 5.2 Windows：计划任务（推荐，用户登录后自启）

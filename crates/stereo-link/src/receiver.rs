@@ -75,7 +75,8 @@ impl CastKind {
     pub fn phone_hint(self) -> &'static str {
         match self {
             CastKind::AirPlay => {
-                "iPhone / iPad：控制中心 → 音乐播放卡片右上角的「隔空播放」图标 → 选 StereoLink。"
+                "iPhone / iPad：控制中心 → 音乐播放卡片右上角的「隔空播放」图标 → 选 StereoLink。\
+                 \n首次连接（AirPlay 2）若手机要 4 位配对码，输入 3939；配对一次后快速重连、不再弹码。"
             }
             CastKind::MiPlay => {
                 "小米手机：控制中心 →「小米妙播」→ 选 StereoLink（或音乐 App 里的投送按钮）。"
@@ -633,6 +634,13 @@ mod tests {
         assert!(args.contains(&"--group-delay-ms") && args.contains(&"220"));
         assert!(args.contains(&"--min-queue-ms") && args.contains(&"160"));
         assert!(!CastKind::MiPlay.args(false).contains(&"--group-delay-ms"));
+    }
+
+    #[test]
+    fn airplay_hint_mentions_pairing_pin() {
+        // AirPlay 2 首次连接会要 4 位配对码，面板提示必须写出来，否则用户不知道输什么。
+        assert!(CastKind::AirPlay.phone_hint().contains("3939"));
+        assert!(!CastKind::MiPlay.phone_hint().contains("3939"));
     }
 
     #[test]

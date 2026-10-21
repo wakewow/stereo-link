@@ -35,7 +35,7 @@ receiver/                        ← 独立 cargo workspace（与主工作区分
 ├── Cargo.toml                   ← workspace 定义（MSRV 1.94、许可隔离的说明都在注释里）
 ├── start.ps1                    ← 一键启动脚本（编译 + 防火墙 + 开两个窗口）
 ├── crates/
-│   ├── airplay-recv/            ← AirPlay 1 接收端（iPhone / iPad / Mac）
+│   ├── airplay-recv/            ← AirPlay 1 / 2 接收端（iPhone / iPad / Mac）
 │   │   ├── Cargo.toml
 │   │   └── src/{main.rs, audio.rs}
 │   └── miplay-recv/             ← 小米妙播接收端（小米 / 红米手机）
@@ -77,6 +77,7 @@ cd E:\AI\MiPlay\receiver
 
 ```powershell
 .\start.ps1 -Release -Mode airplay     # 只开 AirPlay
+.\start.ps1 -Release -Mode airplay -Ap1  # AirPlay 只走 AP1 实时流（延迟更低，看视频用）
 .\start.ps1 -Release -Mode miplay      # 只开妙播
 .\start.ps1 -Release -Device "#10"     # 两个接收端都输出到第 10 个设备
 .\start.ps1 -Release -Name "书房电脑"   # 手机上显示的名字
@@ -93,7 +94,7 @@ cd E:\AI\MiPlay\receiver
 
 | 手机 | 操作 |
 |---|---|
-| iPhone / iPad | 控制中心 → 点「隔空播放」图标（两个矩形叠在一起的按钮）→ 音频输出里选 **StereoLink** |
+| iPhone / iPad | 控制中心 → 点「隔空播放」图标（两个矩形叠在一起的按钮）→ 音频输出里选 **StereoLink**；AP2 首次连接会弹 4 位配对码，输启动横幅里的 `3939`（输一次，之后快速重连） |
 | iPhone（音乐 App 内） | 正在播放页 → 底部 AirPlay 图标 → 选 **StereoLink** |
 | Mac | 菜单栏控制中心 → 声音 → 输出 → StereoLink |
 | 小米 / 红米 | 控制中心 → **小米妙播** → 选 **StereoLink**（也可在音乐 App 的投送按钮里选） |
@@ -104,13 +105,13 @@ cd E:\AI\MiPlay\receiver
 
 | | `airplay-recv` | `miplay-recv` |
 |---|---|---|
-| 协议 | AirPlay 1（RAOP，RTSP 5000） | 小米妙播（Lyra / mi-connect，私有协议） |
+| 协议 | **AirPlay 1 + AirPlay 2**（RAOP 实时流 + AP2 缓冲 AAC / 加密 RTSP，RTSP 5000） | 小米妙播（Lyra / mi-connect，私有协议） |
 | 适用 | iPhone / iPad / Mac | 小米 / 红米手机、小米平板 |
-| 上游 | [`shairplay` 0.10](https://crates.io/crates/shairplay) | `FusionPlay.MiPlaySdk` 1.0.4（git） |
+| 上游 | [`shairplay` 0.10](https://crates.io/crates/shairplay)（开了 `ap2` feature） | `FusionPlay.MiPlaySdk` 1.0.4（git） |
 | 许可 | LGPL-3.0-or-later（独立 exe） | AGPL-3.0-only（独立 exe） |
 | 出声方式 | 库回调交错 f32 → 抖动缓冲 → cpal/WASAPI | SDK 内部 cpal 直接出声，只需指定设备 |
-| 设备身份 | 固定 MAC `02:53:54:52:4C:4E` | 首次运行生成并持久化到 `%LOCALAPPDATA%\StereoLink\miplay-recv.json` |
-| 发现方式 | mDNS `_raop._tcp` | mDNS `_lyra-mdns._udp` + `_mi-connect._udp` |
+| 设备身份 | 固定 MAC `02:53:54:52:4C:4E`；AP2 配对信息在 `%LOCALAPPDATA%\StereoLink\airplay-pairings.json` | 首次运行生成并持久化到 `%LOCALAPPDATA%\StereoLink\miplay-recv.json` |
+| 发现方式 | mDNS `_raop._tcp`，AP2 模式额外注册 `_airplay._tcp`（`et=0,3,5`） | mDNS `_lyra-mdns._udp` + `_mi-connect._udp` |
 
 两个可以同时开，互不冲突（AirPlay 占 5000，妙播的控制端口是动态的）。
 
@@ -152,6 +153,9 @@ cd E:\AI\MiPlay\receiver
 | `-r, --rate <采样率>` | 输出采样率，与音源一致最省 CPU | `44100` |
 | `-d, --device <声卡>` | 名字/id/`#序号`/`default` | 系统默认 |
 | `--bind <IP>` | 只监听指定网卡（多网卡机器建议写） | 全部 |
+| `--ap1` | 只走 AirPlay 1（RAOP 实时流，延迟更低）；默认 1 + 2 双支持 | 关（=AP1+AP2） |
+| `--transient` | 无配对码的临时配对：手机端不弹码，但每次连接更慢 | 关 |
+| `--pin <配对码>` | AP2 配对码，4~8 位数字 | `3939` |
 | `--list-devices` | 列出输出设备后退出 | |
 | `-v, --verbose` | 调试日志（含 mDNS/TXT 细节） | |
 
@@ -177,6 +181,11 @@ cd E:\AI\MiPlay\receiver
 
 两个接收端都要**入站放行**（手机是主动连进来的）。`start.ps1` 会自动加，规则名分别是
 `StereoLink airplay-recv` 和 `StereoLink miplay-recv`（Inbound / Allow / Private+Public / Any 协议）。
+规则按程序放行**所有协议**，也就一起放行了 AP2 需要的 UDP 319/320（PTP 时钟）与加密 RTSP；
+如果你自己只放行 TCP，AP2 会连不上（或退化成 AP1）。
+
+从安装包/`dist` 目录运行时，规则里的 `-Program` 要指向实际 exe：
+`dist\receivers\airplay-recv.exe`、`dist\receivers\miplay-recv.exe`（面板在 `dist` 下启动时会自动定位到 `receivers\`）。
 
 手动加（管理员 PowerShell）：
 
@@ -252,6 +261,17 @@ python E:\AI\MiPlay\receiver\tools\probe_miplay_mdns.py
   `FUSIONPLAY_MIPLAY_MIN_QUEUE_MS`），默认值仍等于上游值。代价：和小米音箱一起「全屋播放」时，
   本机会比它们早约 0.6 秒——那种场景就别开低延迟。
 
+**iPhone 第一次连接要输配对码？**
+AirPlay 2 用 HomeKit 配对：第一次连会弹 4 位配对码，输启动横幅里打印的 `3939` 即可（一次性）。
+配对信息存在 `%LOCALAPPDATA%\StereoLink\airplay-pairings.json`，之后走 pair-verify 快速重连，不再弹码。
+换 `--pin` 可以自定义；删掉这个文件 = 所有手机重新配对。不想输码就加 `--transient`
+（手机端不弹码，但每次连接会慢几秒）。
+
+**AirPlay 2 和 AirPlay 1 有什么区别？选哪个？**
+默认两者都广告：iPhone/iPad/Mac 会自动走 AP2（缓冲 AAC、加密 RTSP、支持多声道下混），
+老设备/老系统仍可走 AP1（RAOP 实时 ALAC）。**看视频/打游戏**对延迟敏感就用 `--ap1`（实时流、
+内置约 200 ms 抖动缓冲）；只听音乐用默认 AP2，连接更稳、音质路径更完整。
+
 **和 MiXPlay 一起用会怎样？**
 MiXPlay 也会注册 `_raop._tcp` / `_lyra-mdns._udp` 并占 5000 端口，手机上可能出现**两个**同类设备
 （名字里带 MiXPlay 的那条 + `StereoLink`）。想省心就二选一，别同时开。
@@ -272,8 +292,18 @@ MiXPlay 也会注册 `_raop._tcp` / `_lyra-mdns._udp` 并占 5000 端口，手�
 已验证：
 
 - [x] 两个 crate `cargo build --release` 通过（Windows x86_64，rustc 1.99）；
+- [x] `airplay-recv` 开了 `ap2` feature 后编译通过（拉进 symphonia/rubato/rsa 等，exe 约 6.0 MB）；
+- [x] AP1+AP2 就绪横幅正常（「✅ AirPlay 1 + AirPlay 2 接收端已就绪」+ 配对码 3939 + 配对文件路径）；
+- [x] 默认模式 mDNS 同时播报：`_raop._tcp`（TXT `et=0,3,5`、`sf=0x204`）+ `_airplay._tcp`
+      （`flags=0x204`、`features=0x405D4A00,0x14340`、`deviceid=02:53:54:52:4c:4e`），均指向 5000；
+- [x] `--ap1` 模式 mDNS 只播报 `_raop._tcp`（TXT `et=0`，无 AP2 加密），退出码正常；
+- [x] `--pin` 参数校验：非 4~8 位数字（如 `--pin abc`）直接报错 `--pin 要是 4~8 位数字，例如 3939` 并以退出码 1 结束；
+- [x] `--transient` 横幅正确（「🔐 临时配对（无配对码）」，且不打印配对文件路径）；
+- [x] AP2 的 PTP sink 正常监听 UDP 319/320（IPv6 unspecified），加密 RTSP 走同一 5000；`--ap1` 模式不监听 319/320；
+- [x] 并发连接上限按模式区分：AP2 = 4、AP1 = 1（`max_clients()` 单测覆盖）——iOS 的「遥控 + 音频」两条
+      RTSP 连接不会再被 shairplay 以 `Max connections reached` 丢弃；
 - [x] `airplay-recv` mDNS 播报被同一网络上的第三方（Python `zeroconf`）发现，TXT 记录字段正常
-      （`cn=0,1 sv=false da=true vn=3 md=0,1,2 ch=2 sr=44100 ek=1 tp=TCP,UDP`）；
+      （AP1 模式：`cn=0,1 sv=false da=true vn=3 md=0,1,2 ch=2 sr=44100 ek=1 tp=TCP,UDP`）；
 - [x] `miplay-recv` 的 Lyra / mi-connect 应答用 `tools/probe_miplay_mdns.py` 本机自检通过；
 - [x] 设备选择（重名报错、`#序号`、完整 id）行为符合预期；
 - [x] 低延迟补丁编译通过，启动横幅正确显示「目标延迟：220 ms，排队下限：160 ms」；
@@ -281,6 +311,7 @@ MiXPlay 也会注册 `_raop._tcp` / `_lyra-mdns._udp` 并占 5000 端口，手�
 
 待真机确认：
 
-- [ ] iPhone 在「隔空播放」列表里看到 `StereoLink` 并成功出声（延迟、音质）；
+- [ ] iPhone 在「隔空播放」列表里看到 `StereoLink`（AP2）并成功出声（配对码 3939 / 延迟 / 音质）；
+- [ ] 同一台 iPhone 用 `--ap1` 模式复测（AP1 连接与延迟）；
 - [ ] 小米手机「小米妙播」列表里看到 `StereoLink` 并成功出声；
 - [ ] 手机端断开/重连、切歌、音量同步的行为。

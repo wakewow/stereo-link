@@ -190,6 +190,19 @@ StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别
 > 安装脚本会直接提示先关闭。驱动来源、许可与手动命令见
 > [`docs/virtual-soundcard.md`](docs/virtual-soundcard.md)。
 
+## 手机投放：把电脑当音箱
+
+面板「手机投放」页可以把**这台电脑**直接变成手机音乐的输出设备，和左右声道路由是两套独立的东西：
+
+- **iPhone / iPad / Mac**：走 AirPlay（`airplay-recv`）。默认同时支持 **AirPlay 1 + AirPlay 2**：
+  AP2 用缓冲 AAC + 加密 RTSP，首次连接在手机上输配对码 `3939`（配对一次后快速重连）；
+  对延迟敏感（看视频）可用 `--ap1` 退成实时 RAOP 流。
+- **小米 / 红米手机**：走小米妙播（`miplay-recv`，Lyra / mi-connect 私有协议），低延迟模式下约 0.2 秒。
+
+两个接收端都是**独立 exe**（许可隔离：LGPL 的 shairplay、AGPL 的 FusionPlay SDK），由面板启停，
+也可以单独命令行运行。手机投过来的声音**只进本机声卡**，不经过左右分声道引擎。详见
+[`docs/receiver.md`](docs/receiver.md)。
+
 ## 命令行与无头运行
 
 GUI 之外还有一个同包产出的控制台程序 `stereo-link-cli.exe`：**界面上能做的一切（启停路由、启停投放接收端、

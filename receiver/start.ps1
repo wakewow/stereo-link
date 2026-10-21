@@ -2,6 +2,7 @@
 #
 #   .\start.ps1                          # 同时开 AirPlay + 妙播
 #   .\start.ps1 -Mode airplay            # 只开 AirPlay（iPhone）
+#   .\start.ps1 -Mode airplay -Ap1       # AirPlay 只走 AP1 实时流（延迟更低，看视频用）
 #   .\start.ps1 -Mode miplay             # 只开妙播（小米手机）
 #   .\start.ps1 -Device "#10"            # 指定声卡（序号用 --list-devices 查；也可写完整 id）
 #   .\start.ps1 -Name "书房电脑"           # 投放列表里显示的名字
@@ -17,7 +18,9 @@ param(
     [string]$Device = "",
     [string]$Ip = "",
     [int]$Port = 5000,
-    [switch]$Release
+    [switch]$Release,
+    # AirPlay 默认 1 + 2 双支持；加 -Ap1 只走 AP1 实时流（延迟更低）。
+    [switch]$Ap1
 )
 
 $ErrorActionPreference = "Stop"
@@ -81,6 +84,7 @@ if ($Mode -in @("airplay", "both")) {
     $a = @()
     if ($Ip) { $a += @("--bind", $Ip) }
     $a += @("--port", "$Port") + $common
+    if ($Ap1) { $a += "--ap1" }
     Start-ReceiverWindow (Get-Exe "airplay-recv") $a "AirPlay 接收端"
 }
 

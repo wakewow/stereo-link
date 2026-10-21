@@ -2,6 +2,26 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 新增
+
+- **AirPlay 接收端升级为 AirPlay 1 + AirPlay 2 双模式**（`airplay-recv`，`shairplay` 打开 `ap2` feature）：
+  - iPhone / iPad / Mac 默认走 AP2（缓冲 AAC、加密 RTSP、HomeKit 持久配对）。首次连接在手机上输入
+    配对码 `3939`，配对信息落盘 `%LOCALAPPDATA%\StereoLink\airplay-pairings.json`，之后走 pair-verify
+    快速重连、不再弹码；删掉该文件 = 所有手机重新配对。
+  - mDNS 同时播报 `_raop._tcp` 与 `_airplay._tcp`（`et=0,3,5`）：新设备走 AP2，老设备仍可走 AP1。
+  - 新增三个参数：`--ap1`（只走 AP1 实时 RAOP 流，延迟更低）、`--transient`（无配对码的临时配对）、
+    `--pin <4~8 位数字>`（自定义配对码）。面板与 `stereo-link-cli receiver start airplay` 默认拉起
+    双模式，无需额外参数。
+  - AP2 的 PTP 时钟监听 UDP 319/320，防火墙规则必须放行 UDP（`start.ps1` 的 `-Protocol Any` 已覆盖）；
+    AP1 模式保持 1 路并发连接，AP2 模式放宽到 4 路（iOS 的「遥控」+「音频」是两条 RTSP 连接）。
+
+### 文档
+
+- `docs/receiver.md`：补 AP2 的协议对比、参数表、防火墙说明与常见问题；`README.md` 增「手机投放：
+  把电脑当音箱」一节。
+
 ## [0.6.0] - 2026-10-21
 
 ### 新增
