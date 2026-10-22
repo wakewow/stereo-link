@@ -356,8 +356,17 @@ pub fn engine_json(stats: Option<&stereo_audio::RouteEngineStats>) -> Value {
         "uptime_seconds": stats.uptime_seconds,
         "level_l": stats.level_l,
         "level_r": stats.level_r,
+        "effect": effect_fields(&stats.effect),
         "routes": routes,
     })
+}
+
+/// 接收端种类在 JSON / CLI 里用的名字。
+pub fn cast_kind_name(kind: crate::receiver::CastKind) -> &'static str {
+    match kind {
+        crate::receiver::CastKind::AirPlay => "airplay",
+        crate::receiver::CastKind::MiPlay => "miplay",
+    }
 }
 
 /// 接收端状态 → JSON。
@@ -367,12 +376,15 @@ pub fn receivers_json(cast: &crate::receiver::ReceiverManager) -> Value {
     for kind in CastKind::ALL {
         let status = cast.status(kind);
         list.push(json!({
-            "kind": match kind { CastKind::AirPlay => "airplay", CastKind::MiPlay => "miplay" },
+            "kind": cast_kind_name(kind),
             "label": kind.label(),
             "running": status.is_running(),
             "status": status.text(),
             "error": status.error(),
             "exe": cast.exe(kind).map(|path| path.display().to_string()),
+            // 音量：妙播写接收端 stdin 实时调，AirPlay 只能在手机端调（volume 恒 null）。
+            "volume": cast.volume(kind),
+            "volume_supported": matches!(kind, CastKind::MiPlay),
         }));
     }
     json!({
@@ -380,6 +392,215 @@ pub fn receivers_json(cast: &crate::receiver::ReceiverManager) -> Value {
         "device": cast.output_device(),
         "items": list,
     })
+}
+
+/// `receiver volume` 的 `percent` 字段：缺字段 / 非整数 / 超出 u8 都给出明确错误，
+/// 0–100 的范围由 [`receiver_volume`] 交给 `ReceiverManager::set_volume` 统一判断。
+pub fn percent_field(request: &Value) -> Result<u8, String> {
+    let Some(raw) = request.get("percent") else {
+        return Err("receiver volume 需要 percent 字段（0-100）".to_string());
+    };
+    let Some(value) = raw.as_u64() else {
+        return Err(format!("percent 要是 0-100 的整数，收到 {raw}"));
+    };
+    u8::try_from(value).map_err(|_| format!("音量只支持 0–100，收到 {value}"))
+}
+
+/// `receiver volume` 成功时的响应形状（GUI / serve 共用）。
+pub fn receiver_volume_json(kind: crate::receiver::CastKind, volume: u8) -> Value {
+    json!({ "kind": cast_kind_name(kind), "volume": volume })
+}
+
+/// `receiver volume` 的共用实现：GUI 的 `handle_control` 和 `serve` 的 `State::handle`
+/// 都走这一份，保证两条路径的参数校验、错误文案、成功响应完全一致。
+pub fn receiver_volume(
+    cast: &mut crate::receiver::ReceiverManager,
+    kind_name: &str,
+    request: &Value,
+) -> Value {
+    use crate::receiver::CastKind;
+    let kind = match kind_name.trim().to_ascii_lowercase().as_str() {
+        "airplay" | "ap" => CastKind::AirPlay,
+        "miplay" | "mi" | "妙播" => CastKind::MiPlay,
+        "all" => return err("音量要指定 kind（airplay / miplay）"),
+        other => return err(format!("kind 只支持 airplay / miplay / all，收到 {other}")),
+    };
+    let percent = match percent_field(request) {
+        Ok(percent) => percent,
+        Err(error) => return err(error),
+    };
+    match cast.set_volume(kind, percent) {
+        Ok(()) => {
+            tracing::info!("[投放] {} 音量设为 {percent}", kind.label());
+            ok(receiver_volume_json(kind, percent))
+        }
+        Err(error) => {
+            tracing::warn!("[投放] 设置 {} 音量失败：{error}", kind.label());
+            err(error)
+        }
+    }
+}
+
+/// 音效设置 → JSON 字段（配置值与引擎实际值共用同一套字段名）。
+pub fn effect_fields(settings: &stereo_audio::EffectSettings) -> Value {
+    json!({
+        "enabled": settings.enabled,
+        "preset": settings.preset.as_str(),
+        "preset_label": settings.preset.label(),
+        "amount": settings.amount,
+        "bass_boost_db": settings.bass_boost_db,
+        "limiter": settings.limiter,
+    })
+}
+
+/// 音效配置 + 引擎实际生效值 → JSON（`status` 里的 `routing.engine.effect` 与
+/// `effect status` 命令共用）。
+pub fn effect_json(
+    cfg: &crate::config::EffectConfig,
+    engine: Option<&stereo_audio::RouteEngineHandle>,
+) -> Value {
+    let configured: stereo_audio::EffectSettings = cfg.into();
+    let actual = engine.map(|engine| effect_fields(&engine.effect()));
+    let running = engine.is_some_and(|engine| engine.alive());
+    let mut value = effect_fields(&configured);
+    value["engine"] = actual.unwrap_or(Value::Null);
+    value["engine_running"] = json!(running);
+    value
+}
+
+/// 解析并应用 `effect preset`：设置预设，并把强度/低音/限幅套成该预设的推荐值。
+///
+/// 纯配置层（不落盘、不碰引擎），方便单测直接验证；落盘/热应用由 [effect_command] 统一做。
+fn apply_effect_preset(cfg: &mut crate::config::AppConfig, request: &Value) -> Result<(), String> {
+    let Some(raw) = request.get("value") else {
+        return Err("effect preset 需要 value 字段（dolby / dynaudio / harman）".to_owned());
+    };
+    let Some(name) = raw.as_str() else {
+        return Err(format!("preset 要是字符串，收到 {raw}"));
+    };
+    let Some(preset) = crate::config::EffectPresetConfig::parse(name) else {
+        return Err(format!(
+            "preset 只支持 dolby / dynaudio / harman（也认中文：类杜比 / 丹拿 / 哈曼卡顿），收到 {name}"
+        ));
+    };
+    cfg.effect.preset = preset;
+    // 切预设时套用推荐值（否则「丹拿」还挂着类杜比的 +7 dB 低音，听感就不是丹拿了）。
+    let (amount, bass_boost_db, limiter) = preset.recommended();
+    cfg.effect.amount = amount;
+    cfg.effect.bass_boost_db = bass_boost_db;
+    cfg.effect.limiter = limiter;
+    Ok(())
+}
+
+/// 从请求里取一个落在 `min..=max` 范围内的浮点参数。
+fn effect_number(request: &Value, min: f32, max: f32, label: &str) -> Result<f32, String> {
+    let Some(raw) = request.get("value") else {
+        return Err(format!("effect {label} 需要 value 字段（{min}..={max}）"));
+    };
+    let Some(number) = raw.as_f64() else {
+        return Err(format!("{label}要是数字，收到 {raw}"));
+    };
+    let number = number as f32;
+    if !number.is_finite() || !(min..=max).contains(&number) {
+        return Err(format!("{label}只支持 {min}..={max}，收到 {number}"));
+    }
+    Ok(number)
+}
+
+/// `effect` 命令的共用实现：GUI 的 `handle_control` 与 `serve` 的 `State::handle`
+/// 都走这一份，参数校验、热应用、日志和响应形状完全一致。
+///
+/// 动作为 `status`（默认）/ `on` / `off` / `preset`（value = dolby/dynaudio/harman）/
+/// `amount`（value 0..=1.5）/ `bass`（value 0..=12，dB）/ `limiter`（value true/false）。
+/// 改动后立即落盘并热写进运行中的引擎（`RouteEngineHandle::set_effect` 是原子量，
+/// 不重启路由、不中断声音）。
+pub fn effect_command(
+    cfg: &mut crate::config::AppConfig,
+    engine: Option<&stereo_audio::RouteEngineHandle>,
+    request: &Value,
+) -> Value {
+    let action = request
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("status")
+        .trim()
+        .to_ascii_lowercase();
+    let mut changed = false;
+    match action.as_str() {
+        "" | "status" => {}
+        "on" => {
+            cfg.effect.enabled = true;
+            changed = true;
+        }
+        "off" => {
+            cfg.effect.enabled = false;
+            changed = true;
+        }
+        "preset" => match apply_effect_preset(cfg, request) {
+            Ok(()) => changed = true,
+            Err(error) => return err(error),
+        },
+        "amount" => match effect_number(request, 0.0, 1.5, "强度") {
+            Ok(value) => {
+                cfg.effect.amount = value;
+                changed = true;
+            }
+            Err(error) => return err(error),
+        },
+        "bass" => match effect_number(request, 0.0, 12.0, "低音") {
+            Ok(value) => {
+                cfg.effect.bass_boost_db = value;
+                changed = true;
+            }
+            Err(error) => return err(error),
+        },
+        "limiter" => {
+            let Some(raw) = request.get("value") else {
+                return err("effect limiter 需要 value 字段（true/false）");
+            };
+            let on = match raw {
+                Value::Bool(on) => *on,
+                Value::String(text) if text.eq_ignore_ascii_case("on") => true,
+                Value::String(text) if text.eq_ignore_ascii_case("off") => false,
+                other => return err(format!("limiter 要是 true/false，收到 {other}")),
+            };
+            cfg.effect.limiter = on;
+            changed = true;
+        }
+        other => {
+            return err(format!(
+                "effect action 只支持 status / on / off / preset / amount / bass / limiter，收到 {other}"
+            ));
+        }
+    }
+    if changed {
+        cfg.save();
+    }
+    let applied = match engine {
+        Some(engine) if changed => engine.set_effect((&cfg.effect).into()),
+        _ => false,
+    };
+    if changed {
+        tracing::info!(
+            "[音效] 已更新（{}，{} 预设）：强度 {:.2}，低音 +{:.1} dB，限幅 {}",
+            if cfg.effect.enabled {
+                "开启"
+            } else {
+                "关闭"
+            },
+            cfg.effect.preset.label(),
+            cfg.effect.amount,
+            cfg.effect.bass_boost_db,
+            if cfg.effect.limiter { "开" } else { "关" }
+        );
+        if engine.is_some() && !applied {
+            tracing::warn!("[音效] 引擎不在运行，设置只写进配置，下次开始路由时生效");
+        }
+    }
+    let mut value = effect_json(&cfg.effect, engine);
+    value["changed"] = json!(changed);
+    value["applied"] = json!(applied);
+    ok(value)
 }
 
 /// 端点列表 → JSON。
@@ -432,6 +653,14 @@ pub fn config_summary(cfg: &crate::config::AppConfig) -> Value {
             "low_latency": cfg.cast.low_latency,
         },
         "theme": format!("{:?}", cfg.theme),
+        "effect": {
+            "enabled": cfg.effect.enabled,
+            "preset": cfg.effect.preset.as_str(),
+            "preset_label": cfg.effect.preset.label(),
+            "amount": cfg.effect.amount,
+            "bass_boost_db": cfg.effect.bass_boost_db,
+            "limiter": cfg.effect.limiter,
+        },
     })
 }
 
@@ -547,10 +776,105 @@ mod tests {
     }
 
     #[test]
+    fn effect_json_exposes_switch_and_engine_state() {
+        let cfg = crate::config::EffectConfig::default();
+        let data = effect_json(&cfg, None);
+        assert_eq!(data["enabled"], json!(false));
+        assert_eq!(data["preset"], json!("dolby"));
+        assert_eq!(data["preset_label"], json!("类杜比"));
+        assert_eq!(data["amount"], json!(1.0));
+        assert_eq!(data["bass_boost_db"], json!(4.0));
+        assert_eq!(data["limiter"], json!(true));
+        assert_eq!(data["engine"], Value::Null);
+        assert_eq!(data["engine_running"], json!(false));
+    }
+
+    #[test]
+    fn effect_preset_applies_recommended_values() {
+        let mut cfg = crate::config::AppConfig::default();
+        // 模拟用户把类杜比调成了很夸张的参数：切预设要回到该预设的推荐值。
+        cfg.effect.amount = 0.4;
+        cfg.effect.bass_boost_db = 11.0;
+        apply_effect_preset(&mut cfg, &json!({"value": "哈曼卡顿"})).unwrap();
+        assert_eq!(cfg.effect.preset, crate::config::EffectPresetConfig::Harman);
+        assert_eq!(cfg.effect.amount, 1.0);
+        assert_eq!(cfg.effect.bass_boost_db, 6.0);
+        assert!(cfg.effect.limiter);
+
+        apply_effect_preset(&mut cfg, &json!({"value": "dynaudio"})).unwrap();
+        assert_eq!(
+            cfg.effect.preset,
+            crate::config::EffectPresetConfig::Dynaudio
+        );
+        assert_eq!(cfg.effect.amount, 0.8);
+        assert_eq!(cfg.effect.bass_boost_db, 2.5);
+
+        // 坏参数：报错且不改配置。
+        let before = cfg.effect;
+        assert!(apply_effect_preset(&mut cfg, &json!({"value": "bose"})).is_err());
+        assert!(apply_effect_preset(&mut cfg, &json!({"value": 3})).is_err());
+        assert_eq!(cfg.effect, before);
+        assert!(apply_effect_preset(&mut cfg, &json!({})).is_err());
+    }
+
+    #[test]
+    fn effect_command_rejects_bad_values_without_saving() {
+        let mut cfg = crate::config::AppConfig::default();
+        let bad_amount = effect_command(&mut cfg, None, &json!({"action":"amount","value":9.0}));
+        assert_eq!(bad_amount["ok"], json!(false));
+        assert!(bad_amount["error"].as_str().unwrap().contains("0..=1.5"));
+        let bad_action = effect_command(&mut cfg, None, &json!({"action":"rocket"}));
+        assert_eq!(bad_action["ok"], json!(false));
+        let bad_limiter =
+            effect_command(&mut cfg, None, &json!({"action":"limiter","value":"maybe"}));
+        assert_eq!(bad_limiter["ok"], json!(false));
+        // 非法请求不能改配置。
+        assert_eq!(cfg.effect, crate::config::EffectConfig::default());
+    }
+    #[test]
     fn responses_have_stable_shape() {
         let ok = ok(json!({"a": 1}));
         assert_eq!(ok["ok"], json!(true));
         assert_eq!(ok["data"]["a"], json!(1));
         assert_eq!(err("boom")["ok"], json!(false));
+    }
+
+    #[test]
+    fn receiver_json_exposes_volume_fields() {
+        let cast = crate::receiver::ReceiverManager::new();
+        let data = receivers_json(&cast);
+        let items = data["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        let miplay = items
+            .iter()
+            .find(|item| item["kind"] == json!("miplay"))
+            .unwrap();
+        assert_eq!(miplay["volume_supported"], json!(true));
+        assert_eq!(miplay["volume"], Value::Null);
+        let airplay = items
+            .iter()
+            .find(|item| item["kind"] == json!("airplay"))
+            .unwrap();
+        assert_eq!(airplay["volume_supported"], json!(false));
+    }
+
+    #[test]
+    fn receiver_volume_shared_path_errors_are_clear() {
+        let mut cast = crate::receiver::ReceiverManager::new();
+        let all = receiver_volume(&mut cast, "all", &json!({"percent": 30}));
+        assert_eq!(all["ok"], json!(false));
+        assert!(all["error"].as_str().unwrap().contains("kind"));
+        let bad_kind = receiver_volume(&mut cast, "tv", &json!({"percent": 30}));
+        assert!(bad_kind["error"].as_str().unwrap().contains("tv"));
+        let too_loud = receiver_volume(&mut cast, "miplay", &json!({"percent": 150}));
+        assert!(too_loud["error"].as_str().unwrap().contains("0–100"));
+        let overflow = receiver_volume(&mut cast, "miplay", &json!({"percent": 300}));
+        assert!(overflow["error"].as_str().unwrap().contains("0–100"));
+        let missing = receiver_volume(&mut cast, "miplay", &json!({}));
+        assert!(missing["error"].as_str().unwrap().contains("percent"));
+        let stopped = receiver_volume(&mut cast, "miplay", &json!({"percent": 30}));
+        assert!(stopped["error"].as_str().unwrap().contains("未运行"));
+        let airplay = receiver_volume(&mut cast, "airplay", &json!({"percent": 30}));
+        assert!(airplay["error"].as_str().unwrap().contains("手机端"));
     }
 }

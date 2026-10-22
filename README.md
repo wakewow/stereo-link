@@ -197,7 +197,8 @@ StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别
 - **iPhone / iPad / Mac**：走 AirPlay（`airplay-recv`）。默认同时支持 **AirPlay 1 + AirPlay 2**：
   AP2 用缓冲 AAC + 加密 RTSP，首次连接在手机上输配对码 `3939`（配对一次后快速重连）；
   对延迟敏感（看视频）可用 `--ap1` 退成实时 RAOP 流。
-- **小米 / 红米手机**：走小米妙播（`miplay-recv`，Lyra / mi-connect 私有协议），低延迟模式下约 0.2 秒。
+- **小米 / 红米手机**：走小米妙播（`miplay-recv`，Lyra / mi-connect 私有协议），低延迟模式下约 0.2 秒；
+  面板有音量滑块，命令行用 `stereo-link-cli receiver volume miplay 30`，手机自己调音量也走同一条通道。
 
 两个接收端都是**独立 exe**（许可隔离：LGPL 的 shairplay、AGPL 的 FusionPlay SDK），由面板启停，
 也可以单独命令行运行。手机投过来的声音**只进本机声卡**，不经过左右分声道引擎。详见
@@ -215,6 +216,8 @@ stereo-link-cli serve                  # 无头常驻：路由 + 接收端 + 控
 stereo-link-cli serve --no-receivers   # 只跑路由
 stereo-link-cli routing start|stop|restart|mute|unmute
 stereo-link-cli receiver list|start|stop|restart airplay|miplay|all
+stereo-link-cli effect on              # 开音效（运行中热生效，不重启）
+stereo-link-cli effect preset harman   # 调音预设：dolby / dynaudio / harman
 stereo-link-cli config get split.queue_ms
 stereo-link-cli config set cast.low_latency true
 stereo-link-cli log -n 50 --level WARN
@@ -273,6 +276,8 @@ cargo build --release -p stereo-link
 | `split.queue_ms` | 每路预排队音频长度（抖动缓冲，毫秒） |
 | `split.left_delay_ms` / `split.right_delay_ms` | 左 / 右额外延迟（0–500 ms，用于对齐两只音箱） |
 | `split.invert_left` / `split.invert_right` | 左 / 右声道反相 180°（默认 `false`；音箱极性相反时用） |
+| `effect.enabled` / `effect.preset` | 音效开关（默认 `false`）/ 调音预设 `dolby`（类杜比）、`dynaudio`（丹拿）、`harman`（哈曼卡顿），默认 `dolby` |
+| `effect.amount` / `effect.bass_boost_db` / `effect.limiter` | 强度 0.0–1.5 / 低音提升 0–12 dB / 联动软限幅（默认值随预设：类杜比 1.0 / +4 dB / `true`） |
 | `capture.endpoint_id` | 采集端点的 id（`{0.0.0.00000000}.{guid}`）；优先靠它精确匹配 |
 | `capture.endpoint_name` | 采集端点短名（只用于界面展示与兜底） |
 | `capture.auto_switch_default` | 开始路由时是否自动把默认输出切成采集端点 |

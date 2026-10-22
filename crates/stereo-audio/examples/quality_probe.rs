@@ -247,6 +247,7 @@ fn run() -> Result<i32, String> {
         queue_ms: args.queue_ms,
         rate: None,
         capture_buffer_ms: None,
+        effect: Default::default(),
     };
     println!("引擎配置: {}", engine_cfg.describe());
     let engine =

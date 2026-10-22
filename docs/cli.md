@@ -41,9 +41,10 @@ stereo-link-cli status --json
 
 `--json` 输出**实例返回的数据文档本体**（不再包一层 `data`），顶层字段：
 `mode`（`gui` / `serve` / 离线时没有该字段）、`pid`、`version`、`protocol`、`uptime_seconds`、
-`routing`（`running` + `engine`：`running/rate/source/routes[]/captured_frames/level_l/level_r`）、
-`receivers`（`any_running/device/items[]`，每项 `kind/label/running/status/error/exe`）、
-`endpoints`（`count/items[]`：`id/name/flow/is_default/mix_format/error`）、`config`（`path/split/capture/cast/theme`）、
+`routing`（`running` + `engine`：`running/rate/source/routes[]/captured_frames/level_l/level_r/effect`，其中
+`effect.enabled/preset/amount/bass_boost_db/limiter` 是引擎**实际**生效的音效参数）、
+`receivers`（`any_running/device/items[]`，每项 `kind/label/running/status/error/exe/volume/volume_supported`）、
+`endpoints`（`count/items[]`：`id/name/flow/is_default/mix_format/error`）、`config`（`path/split/capture/cast/theme/effect`，`effect` 是**配置**里的值）、
 `extra`（`default_output/log_path/receivers_managed` 等）。
 
 没有实例时 `status --json` 输出 `{"running": false, "reason": "..."}`，退出码仍为 0（这是「没有实例」而不是错误）。
@@ -71,6 +72,37 @@ stereo-link-cli routing mute
 stereo-link-cli routing unmute
 ```
 
+### effect
+
+```powershell
+stereo-link-cli effect                     # 查看状态（等价于 effect status）
+stereo-link-cli effect status --json
+stereo-link-cli effect on                  # 打开音效；路由在跑就热生效（不重启、不断音）
+stereo-link-cli effect off                 # 关闭，恢复 bit-exact 直通
+stereo-link-cli effect preset dolby        # 调音预设：dolby / dynaudio / harman（也认中文名）
+stereo-link-cli effect preset harman
+stereo-link-cli effect amount 1.2          # 强度，0.0–1.5（默认值随预设）
+stereo-link-cli effect bass 6              # 低音提升，0–12 dB（默认值随预设）
+stereo-link-cli effect limiter on|off      # 联动软限幅，默认 on
+```
+
+三种调音预设（切换即时生效，只重算滤波器系数，不断音）：
+
+| 预设 | 声场加宽 | 低频单声道化 | presence | 高频 | 推荐强度 / 低音 |
+| --- | --- | --- | --- | --- | --- |
+| `dolby` 类杜比（默认） | 0.70 | 180 Hz | 4.5 kHz +1.5 dB | 9 kHz ±0 | 1.0 / +4 dB |
+| `dynaudio` 丹拿 | 0.15 | 90 Hz | 2.6 kHz +1.0 dB | 8.5 kHz −1.5 dB（柔化） | 0.8 / +2.5 dB |
+| `harman` 哈曼卡顿 | 0.45 | 200 Hz | 1.8 kHz +1.8 dB | 10 kHz +1.2 dB | 1.0 / +6 dB |
+
+- `effect preset <name>` 会同时把强度 / 低音 / 软限幅套成该预设的推荐值（之后仍可用 `amount` /
+  `bass` / `limiter` 微调）；`harman_kardon`、`类杜比`、`丹拿`、`哈曼卡顿` 也能识别。
+- 调音在采集域、**拆左右声道之前**做：两路输出同一份处理后的立体声，所以两只音箱效果一致。
+- 改动先写进配置；有实例在跑时同时热写进引擎，响应里的 `applied: true` 表示引擎已经生效。
+  `status --json` 的 `routing.engine.effect` 是引擎实际值，`config.effect` 是下次启动用的配置值。
+- `off` 是处理链完全跳过的 **bit-exact 直通**（不是把参数调小），不改变音频格式、不增加延迟。
+- 三条链都带 -1 dBFS 立体声联动软限幅与 15 ms 干湿淡入。它们是**模仿品牌听感的调音**，
+  **不是** Dolby Atmos / Dynaudio / Harman 官方认证或授权算法，不用安装 Dolby Access、不改端点空间音效设置。
+
 ### receiver
 
 ```powershell
@@ -79,6 +111,16 @@ stereo-link-cli receiver start airplay
 stereo-link-cli receiver start miplay
 stereo-link-cli receiver stop all
 stereo-link-cli receiver restart miplay
+stereo-link-cli receiver volume miplay 30     # 妙播接收端音量（0-100，可随时改）
+stereo-link-cli receiver volume miplay 30 --json
+```
+
+`receiver list` 的 `--json` 里每个接收端带 `volume`（当前音量，未知为 `null`）与 `volume_supported`：妙播为 `true`，AirPlay 为 `false`（AirPlay 的音量由手机端控制，`receiver volume airplay 30` 会明确报错）。
+
+妙播音量是**接收端数字增益**（0-100 映射到 0~1 的逐帧增益，改完立刻生效），不是 Windows 系统音量、也不是音箱硬件音量；手机端自己调音量走同一条协议通道，两边会互相覆盖成最后一次改动的值。音量在接收端持久化到 `%LOCALAPPDATA%\StereoLink\miplay-recv.json`，重启后保持。单独跑接收端时，面板/CLI 用的就是它的 stdin 控制通道：
+
+```powershell
+"volume 30" | receiver\target\release\miplay-recv.exe --name StereoLink
 ```
 
 设备名固定 `StereoLink`；输出声卡跟随系统默认（接收端启动时读取）。启动前会清理上次留下的同名孤儿进程，可用环境变量 `STEREOLINK_KEEP_STALE_RECEIVERS=1` 跳过清理。
@@ -168,6 +210,9 @@ $s.routing.running # True
 target\debug\stereo-link-cli.exe routing stop
 target\debug\stereo-link-cli.exe routing start
 target\debug\stereo-link-cli.exe config set split.queue_ms 60
+target\debug\stereo-link-cli.exe effect on          # 打开音效（热生效）
+target\debug\stereo-link-cli.exe effect preset dynaudio   # 换调音预设（类杜比 / 丹拿 / 哈曼卡顿）
+target\debug\stereo-link-cli.exe effect amount 1.2
 
 # 4. 收尾
 target\debug\stereo-link-cli.exe quit

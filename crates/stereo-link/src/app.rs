@@ -29,15 +29,15 @@ use eframe::egui::{
     Align, Color32, CornerRadius, FontId, Layout, Margin, Rect, RichText, Sense, Stroke, Vec2,
 };
 use stereo_audio::{
-    BalanceCalibration, BalanceCalibrationOutcome, BalanceReport, DataFlow, EndpointFormat,
-    EndpointInfo, EndpointVolume, MicCandidate, MicHealth, PcmFormat, RouteChannel, RouteConfig,
-    RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats, SyncConfig, SyncMethod,
-    SyncResult, BALANCE_ANCHOR_SCALARS, BALANCE_GAIN_DEADBAND_DB,
+    BalanceCalibration, BalanceCalibrationOutcome, BalanceReport, DataFlow, EffectSettings,
+    EndpointFormat, EndpointInfo, EndpointVolume, MicCandidate, MicHealth, PcmFormat, RouteChannel,
+    RouteConfig, RouteEngineConfig, RouteEngineHandle, RouteEngineStats, RouteStats, SyncConfig,
+    SyncMethod, SyncResult, BALANCE_ANCHOR_SCALARS, BALANCE_GAIN_DEADBAND_DB,
 };
 
 use crate::audio_default;
 use crate::close_flow::{self, CloseOutcome, CloseState};
-use crate::config::{AppConfig, BalanceCalConfig, ThemeMode, VolumeFollow};
+use crate::config::{AppConfig, BalanceCalConfig, EffectPresetConfig, ThemeMode, VolumeFollow};
 use crate::control::{self, ControlServer};
 use crate::endpoint_poll::{EndpointPoll, PollInput};
 use crate::fonts;
@@ -801,6 +801,8 @@ pub struct StereoLinkApp {
     /// 「把端点音量压到最低可用档（约 8%）」并立刻读回「未静音」，物理音箱仍会漏出小声音。
     /// 所以系统静音时同时在引擎侧推 0（精确数字静音），不依赖端点/驱动行为。
     last_engine_muted: bool,
+    /// 上一次写进引擎的音效设置（含调音预设）：和配置比较，变了才写引擎原子量。
+    last_effect: EffectSettings,
     /// 日志页是否自动滚动到最新一行。
     log_autoscroll: bool,
     /// 左声道行内波形/频谱（幅度来自真实 `RouteStats.level`）。
@@ -817,6 +819,8 @@ pub struct StereoLinkApp {
     last_level_log: Option<Instant>,
     /// 手机投放接收端（AirPlay / 小米妙播）：只管子进程，不碰音频数据。
     cast: ReceiverManager,
+    /// 「妙播音量」滑杆最近一次设置失败的原因（成功后清空），显示在该行下面。
+    cast_volume_error: Option<String>,
     /// 命令行控制面：`stereo-link-cli` 靠它读状态、发命令（开发规范：不用点按钮测试）。
     control: Option<ControlServer>,
     /// 启动时刻（`status` 里的 uptime）。
@@ -908,6 +912,7 @@ impl StereoLinkApp {
             calibrating: false,
             last_balance_gains: [0.0, 0.0],
             last_engine_muted: false,
+            last_effect: EffectSettings::default(),
             log_autoscroll: true,
             wave_l: theme::WaveBuf::new(),
             wave_r: theme::WaveBuf::new(),
@@ -916,6 +921,7 @@ impl StereoLinkApp {
             level_log: std::env::var_os("STEREOLINK_LEVEL_LOG").is_some(),
             last_level_log: None,
             cast: ReceiverManager::new(),
+            cast_volume_error: None,
             control: None,
             started_at: Instant::now(),
             pending_quit: false,
@@ -1035,6 +1041,7 @@ impl StereoLinkApp {
                     other => control::err(format!("routing 不支持 action={other}")),
                 }
             }
+            "effect" => control::effect_command(&mut self.cfg, self.engine.as_ref(), request),
             "receiver" => {
                 let action = control::str_field(request, "action").unwrap_or("list");
                 let kind = control::str_field(request, "kind").unwrap_or("all");
@@ -1053,6 +1060,8 @@ impl StereoLinkApp {
                 };
                 match action {
                     "list" => control::ok(control::receivers_json(&self.cast)),
+                    // 音量走 control.rs 的共用实现：serve 的 State::handle 调的是同一份代码。
+                    "volume" => control::receiver_volume(&mut self.cast, kind, request),
                     "start" | "restart" => {
                         let mut errors = Vec::new();
                         for kind in kinds {
@@ -1319,6 +1328,8 @@ impl StereoLinkApp {
         self.apply_endpoint_snapshot();
         // 主音量变了就重新算平衡补偿（实时改引擎每路数字增益，不重启引擎）。
         self.refresh_balance_gains();
+        // 音效开关/参数变了就热写进引擎（原子量，不重启、不断音）。
+        self.refresh_effect();
 
         if self.clicks_busy
             && self
@@ -1780,6 +1791,7 @@ impl StereoLinkApp {
             // 自动：引擎采样率跟随采集源的原生混音格式 → 全程零 SRC（这是「杂音/音质差」的修复）。
             rate: None,
             capture_buffer_ms: None,
+            effect: (&self.cfg.effect).into(),
         })
     }
 
@@ -2319,6 +2331,30 @@ impl StereoLinkApp {
         cal.gains_at(left, right, master)
     }
 
+    /// 把音效设置（含调音预设，5 个原子量）实时写进引擎（不重启引擎、不断音）。
+    ///
+    /// 和 [`Self::refresh_balance_gains`] 同一个模式：每帧调用，只有配置真的变了才写，
+    /// 免得每帧都去碰音频线程的共享内存。开关也走这里：引擎内部做约 15 ms 的干湿
+    /// 淡入淡出，所以切换不会「啪」一声。
+    fn refresh_effect(&mut self) {
+        let desired: EffectSettings = (&self.cfg.effect).into();
+        if desired == self.last_effect {
+            return;
+        }
+        self.last_effect = desired;
+        if let Some(engine) = self.engine.as_ref() {
+            if engine.set_effect(desired) {
+                tracing::info!(
+                    "[音效] 引擎热更新：{}（{}），强度 {:.2}，低音 +{:.1} dB，限幅 {}",
+                    if desired.enabled { "开" } else { "关" },
+                    desired.preset.label(),
+                    desired.amount,
+                    desired.bass_boost_db,
+                    if desired.limiter { "开" } else { "关" }
+                );
+            }
+        }
+    }
     /// 把平衡补偿 + 系统静音实时写进引擎（每路数字增益 / 引擎级数字静音，都是原子量；
     /// 不重启引擎、不断音）。
     ///
@@ -3588,6 +3624,111 @@ impl StereoLinkApp {
                 "反相：两台音箱接线/极性相反时，勾选任一路 180°，居中人声与低音就不会互相抵消。",
             ));
 
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(&mut self.cfg.effect.enabled, "音效")
+                    .on_hover_text(
+                        "三种调音预设（类杜比 / 丹拿 / 哈曼卡顿）给两箱一起用的声音加宽声场、\n\
+                         补低频、调音色（类似杜比/DTS 的音效模式，不是 Dolby / Dynaudio /\n\
+                         Harman 官方认证或授权算法）。关闭时采集数据 bit-exact 直通，不做\n\
+                         任何处理；开关和切预设都是热切换，不会断音。",
+                    )
+                    .changed()
+                {
+                    self.cfg.save();
+                    self.refresh_effect();
+                }
+                ui.add_space(10.0);
+                ui.label(muted("调音"));
+                let current = self.cfg.effect.preset;
+                egui::ComboBox::from_id_salt("effect_preset")
+                    .selected_text(current.label())
+                    .show_ui(ui, |ui| {
+                        for preset in EffectPresetConfig::ALL {
+                            if ui
+                                .selectable_label(preset == current, preset.label())
+                                .on_hover_text(match preset {
+                                    EffectPresetConfig::Dolby => {
+                                        "类杜比：宽声场 + 扎实低频 + 4.5 kHz 空气感，包围感最强。"
+                                    }
+                                    EffectPresetConfig::Dynaudio => {
+                                        "丹拿：几乎不加宽、90 Hz 以下单声道化、高频略收，干净、结像稳。"
+                                    }
+                                    EffectPresetConfig::Harman => {
+                                        "哈曼卡顿：中等加宽 + V 型曲线（人声与 10 kHz 高频抬升），更亮更有氛围。"
+                                    }
+                                })
+                                .clicked()
+                                && preset != current
+                            {
+                                self.cfg.effect.preset = preset;
+                                // 切预设时套用推荐值，否则「丹拿」还挂着类杜比的 +7 dB 低音。
+                                let (amount, bass_boost_db, limiter) = preset.recommended();
+                                self.cfg.effect.amount = amount;
+                                self.cfg.effect.bass_boost_db = bass_boost_db;
+                                self.cfg.effect.limiter = limiter;
+                                self.cfg.save();
+                                self.refresh_effect();
+                            }
+                        }
+                    });
+                if self.cfg.effect.enabled {
+                    ui.add_space(10.0);
+                    ui.label(muted("强度"));
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut self.cfg.effect.amount, 0.0..=1.5).step_by(0.05),
+                        )
+                        .on_hover_text("预设的整体强度：1.0 为预设的完整效果，越大越夸张。")
+                        .changed()
+                    {
+                        self.cfg.save();
+                        self.refresh_effect();
+                    }
+                }
+            });
+            if self.cfg.effect.enabled {
+                ui.horizontal(|ui| {
+                    ui.label(muted("低音"));
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut self.cfg.effect.bass_boost_db, 0.0..=12.0)
+                                .suffix(" dB")
+                                .step_by(0.5),
+                        )
+                        .on_hover_text("低频搁架增益：给节奏和氛围补厚度（默认 +4 dB）。")
+                        .changed()
+                    {
+                        self.cfg.save();
+                        self.refresh_effect();
+                    }
+                    ui.add_space(10.0);
+                    if ui
+                        .checkbox(&mut self.cfg.effect.limiter, "软限幅")
+                        .on_hover_text(
+                            "立体声联动软限幅（天花板 -1 dBFS）：加宽 + 低音提升后防止削顶破音。\
+                             建议保持开启。",
+                        )
+                        .changed()
+                    {
+                        self.cfg.save();
+                        self.refresh_effect();
+                    }
+                });
+                ui.label(muted(format!(
+                    "{} 调音：{}；切换预设会套用该预设的推荐强度/低音/限幅（之后仍可微调）。",
+                    self.cfg.effect.preset.label(),
+                    match self.cfg.effect.preset {
+                        EffectPresetConfig::Dolby =>
+                            "低频单声道化 + 声场加宽 + 4.5 kHz 空气感 + 软限幅",
+                        EffectPresetConfig::Dynaudio =>
+                            "低频收得更早 + 几乎不加宽 + 高频柔化 + 软限幅",
+                        EffectPresetConfig::Harman =>
+                            "中等加宽 + V 型曲线（低频/人声/高频都抬） + 软限幅",
+                    }
+                )));
+            }
             ui.add_space(6.0);
             ui.separator();
             ui.add_space(8.0);
@@ -4852,6 +4993,45 @@ impl StereoLinkApp {
             ui.label(RichText::new(error).size(12.0).color(palette().err));
         }
         ui.label(muted(kind.phone_hint()));
+        // 音量：妙播写接收端 stdin 实时调（手机端也能继续调，事件会回来更新这里）；
+        // AirPlay 的音量协商在手机端，面板不给控件。
+        match kind {
+            CastKind::MiPlay => {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("音量").size(12.0));
+                    // 以接收端自报值为准：拖动 → 写 stdin → 事件行回来更新 `cast.volume`。
+                    let mut volume = self.cast.volume(kind).unwrap_or(50);
+                    let slider = ui
+                        .add_enabled(running, egui::Slider::new(&mut volume, 0..=100).suffix("%"));
+                    if slider.changed() {
+                        match self.cast.set_volume(kind, volume) {
+                            Ok(()) => self.cast_volume_error = None,
+                            Err(error) => {
+                                tracing::warn!("[投放] 设置妙播音量失败：{error}");
+                                self.cast_volume_error = Some(error);
+                            }
+                        }
+                    }
+                    // 拖动过程只更新滑杆（每帧都写 stdin，接收端实时生效），松手才记一行日志。
+                    if (slider.changed() && !slider.dragged())
+                        || (slider.drag_stopped() && !slider.changed())
+                    {
+                        if let Some(volume) = self.cast.volume(kind) {
+                            tracing::info!("[投放] 妙播音量设为 {volume}（面板）");
+                        }
+                    }
+                    if !running {
+                        ui.label(muted("开始接收后可调"));
+                    }
+                });
+                if let Some(error) = &self.cast_volume_error {
+                    ui.label(RichText::new(error).size(12.0).color(palette().err));
+                }
+            }
+            CastKind::AirPlay => {
+                ui.label(muted("音量由手机端控制"));
+            }
+        }
         match &exe {
             Some(path) => ui.label(
                 RichText::new(format!("接收端：{}", path.display()))
@@ -5035,8 +5215,8 @@ impl StereoLinkApp {
                     // `RedrawRequested`，eframe 的重绘队列清空后 `ControlFlow` 会永远停在
                     // `Poll`（eframe-0.31.1 `native/run.rs:170-193` 的 check_redraw_requests），
                     // 表现为隐藏期间忙等跑满一个核（实测 97–100% 单核）。最小化窗口仍会收到
-                    // 重绘，CPU 回到个位数；窗口本身创建时已 `with_taskbar(false)`，
-                    // 所以最小化后任务栏也不留按钮，观感与「收进托盘」一致。
+                    // 重绘，CPU 回到个位数；窗口本身创建时是 `with_taskbar(true)`，
+                    // 最小化后任务栏按钮仍在（点任务栏或托盘图标都能唤回窗口）。
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                 } else {
                     // 托盘不可用：退化为普通最小化，避免窗口「凭空消失」。

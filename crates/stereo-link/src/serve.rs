@@ -147,6 +147,7 @@ impl State {
             queue_ms: self.cfg.split.queue_ms,
             rate: None,
             capture_buffer_ms: None,
+            effect: (&self.cfg.effect).into(),
         })
     }
 
@@ -295,10 +296,11 @@ impl State {
             "routing" => {
                 self.handle_routing(control::str_field(request, "action").unwrap_or("status"))
             }
+            "effect" => control::effect_command(&mut self.cfg, self.engine.as_ref(), request),
             "receiver" => {
                 let action = control::str_field(request, "action").unwrap_or("list");
                 let kind = control::str_field(request, "kind").unwrap_or("all");
-                self.handle_receiver(action, kind)
+                self.handle_receiver(action, kind, request)
             }
             "endpoints" => {
                 self.refresh_endpoints();
@@ -350,7 +352,7 @@ impl State {
         }
     }
 
-    fn handle_receiver(&mut self, action: &str, kind: &str) -> Value {
+    fn handle_receiver(&mut self, action: &str, kind: &str, request: &Value) -> Value {
         let kinds: Vec<CastKind> = if kind == "all" {
             CastKind::ALL.to_vec()
         } else {
@@ -363,6 +365,8 @@ impl State {
         };
         match action {
             "list" => control::ok(control::receivers_json(&self.cast)),
+            // 音量走 control.rs 的共用实现：GUI 的 handle_control 调的是同一份代码。
+            "volume" => control::receiver_volume(&mut self.cast, kind, request),
             "start" | "restart" => {
                 let mut errors = Vec::new();
                 for kind in kinds {
@@ -416,6 +420,11 @@ impl State {
                     Ok(result) => {
                         self.cfg.save();
                         self.cast.set_low_latency(self.cfg.cast.low_latency);
+                        if key.starts_with("effect") {
+                            if let Some(engine) = self.engine.as_ref() {
+                                engine.set_effect((&self.cfg.effect).into());
+                            }
+                        }
                         tracing::info!("[配置] {key} = {value}");
                         control::ok(json!({ "updated": result, "saved": true }))
                     }
@@ -424,6 +433,9 @@ impl State {
             }
             "reload" => {
                 self.cfg = AppConfig::load();
+                if let Some(engine) = self.engine.as_ref() {
+                    engine.set_effect((&self.cfg.effect).into());
+                }
                 control::ok(json!({ "reloaded": true }))
             }
             other => control::err(format!("config 不支持 action={other}")),

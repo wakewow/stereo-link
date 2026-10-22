@@ -32,9 +32,10 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1240.0, 820.0])
             .with_min_inner_size([1040.0, 660.0])
             .with_app_id("stereo-link")
-            // 托盘应用：不在任务栏留按钮，这样「关闭 → 缩小至托盘」时窗口彻底从任务栏消失
-            // （egui 0.31 没有运行期切换任务栏按钮的命令，只能在建窗时定死）。
-            .with_taskbar(false)
+            // 普通桌面应用：任务栏保留窗口按钮。关闭 → 「缩小至托盘」后任务栏按钮仍在，
+            // 点任务栏或托盘图标都能找回窗口（egui 0.31 没有运行期切换任务栏按钮的命令，
+            // 只能在建窗时定死，所以这里必须为 true）。
+            .with_taskbar(true)
             .with_icon(std::sync::Arc::new(stereo_link::app_icon())),
         ..Default::default()
     };

@@ -63,6 +63,8 @@ pub mod capture;
 #[cfg(windows)]
 mod com;
 #[cfg(windows)]
+pub mod effect;
+#[cfg(windows)]
 pub mod endpoint_format;
 #[cfg(windows)]
 pub mod format_support;
@@ -103,6 +105,8 @@ pub use capture::{
     default_endpoint, list_endpoints, resolve_endpoint, AudioCapture, CaptureConfig, CaptureMode,
     ConversionPath, NegotiatedFormat,
 };
+#[cfg(windows)]
+pub use effect::{EffectPreset, EffectProfile, EffectSettings, StereoEffect};
 #[cfg(windows)]
 pub use endpoint_format::{
     build_waveformat_ext, default_render as default_render_format,

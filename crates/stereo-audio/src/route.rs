@@ -59,6 +59,9 @@ use windows::Win32::System::Com::CoTaskMemFree;
 
 use crate::com::{self, ComGuard};
 use crate::convert::{f32_to_s16, s16_to_f32, SampleFormat, StreamResampler};
+use crate::effect::{
+    EffectPreset, EffectSettings, StereoEffect, MAX_AMOUNT, MAX_BASS_DB, MIN_AMOUNT, MIN_BASS_DB,
+};
 use crate::endpoint::{DataFlow, FormatInfo, PcmFormat};
 use crate::error::{AudioError, Result};
 
@@ -227,6 +230,10 @@ pub struct RouteEngineConfig {
     /// `DEFAULT_CAPTURE_BUFFER_MS`（40 ms）。回环采集**物理输出端点**时（空闲/切换
     /// 设备容易爆音滋啦），可以适当加大。
     pub capture_buffer_ms: Option<u32>,
+    /// 音色 DSP 链（采集域 2→2 调音，拆路前生效；默认关闭 = bit-exact 直通）。
+    ///
+    /// 内含调音预设（类杜比 / 丹拿 / 哈曼卡顿）与全局强度、低音、软限幅。
+    pub effect: EffectSettings,
 }
 
 impl Default for RouteEngineConfig {
@@ -241,6 +248,7 @@ impl Default for RouteEngineConfig {
             queue_ms: 40,
             rate: None,
             capture_buffer_ms: None,
+            effect: EffectSettings::default(),
         }
     }
 }
@@ -302,6 +310,18 @@ impl RouteEngineConfig {
                     "capture_buffer_ms={buffer_ms} 不在 20..=2000"
                 )));
             }
+        }
+        if !(MIN_AMOUNT..=MAX_AMOUNT).contains(&self.effect.amount) {
+            return Err(AudioError::invalid(format!(
+                "effect.amount={} 不在 {MIN_AMOUNT}..={MAX_AMOUNT}",
+                self.effect.amount
+            )));
+        }
+        if !(MIN_BASS_DB..=MAX_BASS_DB).contains(&self.effect.bass_boost_db) {
+            return Err(AudioError::invalid(format!(
+                "effect.bass_boost_db={} 不在 {MIN_BASS_DB}..={MAX_BASS_DB}",
+                self.effect.bass_boost_db
+            )));
         }
 
         let mut enabled = 0usize;
@@ -479,6 +499,8 @@ pub struct RouteEngineStats {
     pub level_r: f32,
     /// 每条**启用**路由的统计，顺序与配置里启用项一致（含打开失败的）。
     pub routes: Vec<RouteStats>,
+    /// 当前生效的音效参数（预设 + 强度/低音/限幅；运行中热改会立刻反映到这里）。
+    pub effect: EffectSettings,
 }
 
 impl RouteEngineStats {
@@ -511,6 +533,15 @@ impl RouteEngineStats {
         for route in &self.routes {
             text.push_str(" | ");
             text.push_str(&route.describe());
+        }
+        if self.effect.enabled {
+            text.push_str(&format!(
+                " | 音效 开（{}，强度 {:.2}，低音 +{:.1} dB，限幅 {}）",
+                self.effect.preset.label(),
+                self.effect.amount,
+                self.effect.bass_boost_db,
+                if self.effect.limiter { "开" } else { "关" }
+            ));
         }
         text
     }
@@ -567,6 +598,13 @@ impl RouteEngineHandle {
             .iter()
             .map(|_| AtomicU32::new(0.0f32.to_bits()))
             .collect();
+        // 音效：配置值搬进原子量，之后热改只写原子、不重启引擎。
+        let effect = config.effect.sanitized();
+        let effect_enabled = AtomicBool::new(effect.enabled);
+        let effect_preset = AtomicU32::new(u32::from(effect.preset.code()));
+        let effect_amount = AtomicU32::new(effect.amount.to_bits());
+        let effect_bass_db = AtomicU32::new(effect.bass_boost_db.to_bits());
+        let effect_limiter = AtomicBool::new(effect.limiter);
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             captured_frames: AtomicU64::new(0),
@@ -581,6 +619,11 @@ impl RouteEngineHandle {
             delays_ms,
             gains_db,
             muted: AtomicBool::new(false),
+            effect_enabled,
+            effect_preset,
+            effect_amount,
+            effect_bass_db,
+            effect_limiter,
         });
 
         let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(sink_count + 1);
@@ -779,6 +822,41 @@ impl RouteEngineHandle {
         self.shared.muted.load(Ordering::Relaxed)
     }
 
+    /// 播放中热切换音效/调音预设（不需要重启引擎、不会断音）。
+    ///
+    /// 参数先过 [EffectSettings::sanitized] 夹到合法范围（非有限值/越界值按合法值处理，
+    /// 仍返回 true）；引擎已停时返回 false，原子值不变。
+    ///
+    /// 音频线程每个采集包只读一次这 5 个原子（Relaxed），不加锁；关闭时采集侧走
+    /// bit-exact 快速路径，不会因为效果器引入任何格式/量化变化。
+    pub fn set_effect(&self, settings: EffectSettings) -> bool {
+        if self.shared.stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        let settings = settings.sanitized();
+        self.shared
+            .effect_enabled
+            .store(settings.enabled, Ordering::Relaxed);
+        self.shared
+            .effect_preset
+            .store(u32::from(settings.preset.code()), Ordering::Relaxed);
+        self.shared
+            .effect_amount
+            .store(settings.amount.to_bits(), Ordering::Relaxed);
+        self.shared
+            .effect_bass_db
+            .store(settings.bass_boost_db.to_bits(), Ordering::Relaxed);
+        self.shared
+            .effect_limiter
+            .store(settings.limiter, Ordering::Relaxed);
+        true
+    }
+
+    /// 当前生效的音效参数（读原子，不加锁）。
+    pub fn effect(&self) -> EffectSettings {
+        self.shared.effect_settings()
+    }
+
     /// 拍一张统计快照（加锁读，不影响音频线程）。
     pub fn stats(&self) -> RouteEngineStats {
         let source_device = self
@@ -829,6 +907,7 @@ impl RouteEngineHandle {
             level_l: f32::from_bits(self.shared.level_l.load(Ordering::Relaxed)),
             level_r: f32::from_bits(self.shared.level_r.load(Ordering::Relaxed)),
             routes,
+            effect: self.shared.effect_settings(),
         }
     }
 
@@ -943,6 +1022,30 @@ struct Shared {
     /// 驱动折算成「把端点音量压到最低可用档」并立刻读回未静音，物理音箱仍在出声（只是小）。
     /// 系统静音时靠这个原子把路由输出真正切成 0，不依赖端点行为。
     muted: AtomicBool,
+    /// 音效总开关（关闭 = 采集侧 bit-exact 直通）。
+    effect_enabled: AtomicBool,
+    /// 调音预设（存 [EffectPreset::code] 的 u32；热切换只写原子）。
+    effect_preset: AtomicU32,
+    /// 加宽强度（存 f32::to_bits()，0.0..=1.5）。
+    effect_amount: AtomicU32,
+    /// 低频提升 dB（存 f32::to_bits()，0.0..=12.0）。
+    effect_bass_db: AtomicU32,
+    /// 是否启用立体声联动限幅。
+    effect_limiter: AtomicBool,
+}
+
+impl Shared {
+    /// 读一次音效参数（音频线程每个采集包读一次，只读原子、不加锁）。
+    fn effect_settings(&self) -> EffectSettings {
+        EffectSettings {
+            enabled: self.effect_enabled.load(Ordering::Relaxed),
+            preset: EffectPreset::from_code(self.effect_preset.load(Ordering::Relaxed) as u8),
+            amount: f32::from_bits(self.effect_amount.load(Ordering::Relaxed)),
+            bass_boost_db: f32::from_bits(self.effect_bass_db.load(Ordering::Relaxed)),
+            limiter: self.effect_limiter.load(Ordering::Relaxed),
+        }
+        .sanitized()
+    }
 }
 
 /// 采集源端点的混音格式（回环按它原样开流，转换全部在 Rust 侧做）。
@@ -1030,6 +1133,8 @@ struct CaptureDsp {
     /// 最终交给路由队列的左右声道 i16（引擎采样率）。
     left: Vec<i16>,
     right: Vec<i16>,
+    /// 音效处理器（采集域、拆路前；关闭时完全直通）。
+    effect: StereoEffect,
 }
 
 impl CaptureDsp {
@@ -1048,6 +1153,7 @@ impl CaptureDsp {
             resampled: Vec::new(),
             left: Vec::new(),
             right: Vec::new(),
+            effect: StereoEffect::new(engine_rate),
         }
     }
 
@@ -1055,12 +1161,20 @@ impl CaptureDsp {
     ///
     /// `silent = true` 表示 WASAPI 置了 `AUDCLNT_BUFFERFLAGS_SILENT`：这时缓冲内容未定义。
     /// 必须按 `frames` 补零，绝不能把未初始化的内存当音频写出去。
-    fn process(&mut self, bytes: &[u8], frames: usize, silent: bool) -> Result<(usize, f32, f32)> {
+    fn process(
+        &mut self,
+        bytes: &[u8],
+        frames: usize,
+        silent: bool,
+        effect: &EffectSettings,
+    ) -> Result<(usize, f32, f32)> {
         // 16-bit 整数混音 + 采集增益 1.0 + 采样率一致：直接搬 i16，避免 s16→f32→s16
         // 往返带来的 ±1 LSB 量化误差（这条快路径正是本机绝大多数端点的路径）。
         if self.format.sample_format == SampleFormat::S16
             && (self.capture_gain - 1.0).abs() <= f32::EPSILON
             && self.resampler.is_none()
+            && !effect.enabled
+            && !self.effect.is_active()
         {
             let mut left = std::mem::take(&mut self.left);
             let mut right = std::mem::take(&mut self.right);
@@ -1124,12 +1238,28 @@ impl CaptureDsp {
         // 采样率不一致时，只在这里重采样一次（流式，跨包保留相位）。
         let mut resampled = std::mem::take(&mut self.resampled);
         resampled.clear();
-        let converted: &[f32] = match &mut self.resampler {
-            Some(resampler) => {
-                resampler.process(&stereo, &mut resampled);
-                &resampled
-            }
-            None => &stereo,
+        let resampling = self.resampler.is_some();
+        let converted_len = if let Some(resampler) = &mut self.resampler {
+            resampler.process(&stereo, &mut resampled);
+            resampled.len()
+        } else {
+            stereo.len()
+        };
+
+        // 音效：插在采集域 f32 双声道上、拆路之前（零新增延迟）。
+        if effect.enabled || self.effect.is_active() {
+            let converted: &mut [f32] = if resampling {
+                &mut resampled[..converted_len]
+            } else {
+                &mut stereo[..converted_len]
+            };
+            self.effect.process_interleaved(converted, effect);
+        }
+
+        let converted: &[f32] = if resampling {
+            &resampled[..converted_len]
+        } else {
+            &stereo[..converted_len]
         };
         let out_frames = converted.len() / 2;
 
@@ -2166,7 +2296,8 @@ fn capture_loop(shared: &Arc<Shared>, config: &RouteEngineConfig) -> Result<()> 
                 // SAFETY: GetBuffer 成功后 data 指向 byte_len 字节的有效缓冲，直到 ReleaseBuffer。
                 unsafe { std::slice::from_raw_parts(data, byte_len) }
             };
-            let processed = dsp.process(bytes, frames as usize, silent);
+            let effect = shared.effect_settings();
+            let processed = dsp.process(bytes, frames as usize, silent, &effect);
             let released = unsafe { capture.ReleaseBuffer(frames) };
             let (captured, peak_l, peak_r) = processed?;
             released.map_err(|e| AudioError::wasapi(e.code().0, "ReleaseBuffer(route capture)"))?;
@@ -2388,7 +2519,9 @@ mod tests {
         let mut dsp = CaptureDsp::new(format, 48_000, 2.0);
         assert!(!capture_resamples(&dsp));
         let pcm = pcm_f32_stereo(&[(0.5, -0.25), (1.0, -1.0)]);
-        let (frames, peak_l, peak_r) = dsp.process(&pcm, 2, false).unwrap();
+        let (frames, peak_l, peak_r) = dsp
+            .process(&pcm, 2, false, &EffectSettings::default())
+            .unwrap();
         assert_eq!(frames, 2);
         // 增益 2.0：0.5 → 1.0（i16 满幅），-0.25 → -0.5，-1.0 → 钳制到满幅。
         assert_eq!(dsp.left, vec![32_767, 32_767]);
@@ -2404,7 +2537,9 @@ mod tests {
             CaptureFormat::from_info(&mix_info(48_000, 2, Some(SampleFormat::F32))).unwrap();
         let mut dsp = CaptureDsp::new(format, 48_000, 1.0);
         // SILENT：bytes 传入空切片，必须按 frames 补零。
-        let (frames, peak_l, peak_r) = dsp.process(&[], 3, true).unwrap();
+        let (frames, peak_l, peak_r) = dsp
+            .process(&[], 3, true, &EffectSettings::default())
+            .unwrap();
         assert_eq!(frames, 3);
         assert_eq!(dsp.left, vec![0, 0, 0]);
         assert_eq!(dsp.right, vec![0, 0, 0]);
@@ -2419,7 +2554,9 @@ mod tests {
             CaptureFormat::from_info(&mix_info(48_000, 2, Some(SampleFormat::S16))).unwrap();
         let mut dsp = CaptureDsp::new(format, 48_000, 1.0);
         let pcm = pcm16_stereo(&[(1_000, -2_000), (i16::MAX, i16::MIN)]);
-        let (frames, _, _) = dsp.process(&pcm, 2, false).unwrap();
+        let (frames, _, _) = dsp
+            .process(&pcm, 2, false, &EffectSettings::default())
+            .unwrap();
         assert_eq!(frames, 2);
         assert_eq!(dsp.left, vec![1_000, i16::MAX]);
         assert_eq!(dsp.right, vec![-2_000, i16::MIN]);
@@ -2434,7 +2571,9 @@ mod tests {
         for sample in [100i16, -200] {
             mono.extend_from_slice(&sample.to_le_bytes());
         }
-        let (frames, _, _) = dsp.process(&mono, 2, false).unwrap();
+        let (frames, _, _) = dsp
+            .process(&mono, 2, false, &EffectSettings::default())
+            .unwrap();
         assert_eq!(frames, 2);
         assert_eq!(dsp.left, vec![100, -200]);
         assert_eq!(dsp.right, vec![100, -200]);
@@ -2448,7 +2587,9 @@ mod tests {
         let mut dsp = CaptureDsp::new(format, 48_000, 1.0);
         assert!(capture_resamples(&dsp));
         let pcm = pcm_f32_stereo(&vec![(0.25, 0.25); 441]);
-        let (frames, _, _) = dsp.process(&pcm, 441, false).unwrap();
+        let (frames, _, _) = dsp
+            .process(&pcm, 441, false, &EffectSettings::default())
+            .unwrap();
         // 441 @44.1k → 480 @48k。
         assert!((470..=482).contains(&frames), "{frames}");
         assert_eq!(dsp.left.len(), frames);
@@ -2802,6 +2943,7 @@ mod tests {
                     retry_in_ms: 4_000,
                 },
             ],
+            effect: EffectSettings::default(),
         };
         let describe = stats.describe();
         assert!(describe.contains("箱A"), "{describe}");
@@ -2842,6 +2984,11 @@ mod tests {
             delays_ms: vec![AtomicU32::new(10)],
             gains_db: vec![AtomicU32::new(0.0f32.to_bits())],
             muted: AtomicBool::new(false),
+            effect_enabled: AtomicBool::new(false),
+            effect_preset: AtomicU32::new(0),
+            effect_amount: AtomicU32::new(1.0f32.to_bits()),
+            effect_bass_db: AtomicU32::new(4.0f32.to_bits()),
+            effect_limiter: AtomicBool::new(true),
             rate: 48_000,
         });
         let handle = RouteEngineHandle {
@@ -2894,6 +3041,11 @@ mod tests {
             delays_ms,
             gains_db,
             muted: AtomicBool::new(false),
+            effect_enabled: AtomicBool::new(false),
+            effect_preset: AtomicU32::new(0),
+            effect_amount: AtomicU32::new(1.0f32.to_bits()),
+            effect_bass_db: AtomicU32::new(4.0f32.to_bits()),
+            effect_limiter: AtomicBool::new(true),
         })
     }
 

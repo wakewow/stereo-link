@@ -14,11 +14,11 @@
 //! 设备名固定为 [`DEVICE_NAME`]，手机端在 AirPlay「隔空播放」/ 小米妙播里看到的
 //! 就是这个名字。
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Instant;
@@ -150,11 +150,15 @@ struct Proc {
     /// 解析到的 exe 路径（找不到就是 `None`，界面据此提示去编译）。
     exe: Option<PathBuf>,
     child: Option<Child>,
+    /// 子进程标准输入：妙播接收端从它读 `volume N` 控制行（AirPlay 用不上，但管道同样留住）。
+    stdin: Option<ChildStdin>,
     status: CastStatus,
     /// 子进程最后一行输出（异常退出时拼进错误说明）。
     last_line: String,
     /// 接收端启动时报告的「输出声卡」名字（面板用它告诉用户声音到底出在哪）。
     device: Option<String>,
+    /// 接收端自报的当前音量（0–100）；启动横幅和手机/主机的音量事件都会更新它。
+    volume: Option<u8>,
 }
 
 /// 子进程输出行的发送端类型：`(接收端下标, 文本行)`。
@@ -190,17 +194,21 @@ impl ReceiverManager {
                     kind: CastKind::AirPlay,
                     exe: None,
                     child: None,
+                    stdin: None,
                     status: CastStatus::Stopped,
                     last_line: String::new(),
                     device: None,
+                    volume: None,
                 },
                 Proc {
                     kind: CastKind::MiPlay,
                     exe: None,
                     child: None,
+                    stdin: None,
                     status: CastStatus::Stopped,
                     last_line: String::new(),
                     device: None,
+                    volume: None,
                 },
             ],
             log_rx,
@@ -248,6 +256,37 @@ impl ReceiverManager {
             .collect()
     }
 
+    /// 接收端自报的当前音量（0–100）；还没收到横幅或事件时为 `None`。
+    pub fn volume(&self, kind: CastKind) -> Option<u8> {
+        self.procs[kind.index()].volume
+    }
+
+    /// 设置妙播接收端的音量（0–100）。
+    ///
+    /// 妙播接收端从 stdin 读控制行（契约：`volume <0-100>\n`），改的是接收端
+    /// 自己的音量：手机端和主机端都能继续调，接收端会把最新值写进事件行。
+    /// AirPlay 的音量协商在手机侧，这里统一返回错误；没在跑同样报错。
+    pub fn set_volume(&mut self, kind: CastKind, percent: u8) -> Result<(), String> {
+        if percent > 100 {
+            return Err(format!("音量只支持 0–100，收到 {percent}"));
+        }
+        if kind != CastKind::MiPlay {
+            return Err("AirPlay 的音量由手机端控制".to_string());
+        }
+        let proc = &mut self.procs[kind.index()];
+        if proc.child.is_none() {
+            return Err(format!("{} 接收端未运行", kind.label()));
+        }
+        let Some(stdin) = proc.stdin.as_mut() else {
+            return Err(format!("{} 接收端没有 stdin 通道", kind.label()));
+        };
+        writeln!(stdin, "volume {percent}")
+            .and_then(|()| stdin.flush())
+            .map_err(|error| format!("写入接收端失败：{error}"))?;
+        proc.volume = Some(percent);
+        Ok(())
+    }
+
     /// 妙播是否用低延迟参数启动；已经在跑就顺便重启，让新设置立刻生效。
     pub fn set_low_latency(&mut self, low_latency: bool) {
         if self.low_latency == low_latency {
@@ -282,7 +321,7 @@ impl ReceiverManager {
         let mut command = Command::new(&exe);
         command
             .args(kind.args(self.low_latency))
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(windows)]
@@ -290,6 +329,8 @@ impl ReceiverManager {
 
         match command.spawn() {
             Ok(mut child) => {
+                // stdin 留着：妙播接收端从它读 `volume N` 控制行（AirPlay 不读也无妨）。
+                let stdin = child.stdin.take();
                 // 两个管道各起一个读取线程，读到的每一行都送回 `poll()` 转进日志面板。
                 if let Some(stdout) = child.stdout.take() {
                     let tx = self.log_tx.clone();
@@ -303,10 +344,12 @@ impl ReceiverManager {
                     "[投放] 已启动 {} 接收端（设备名 {DEVICE_NAME}，输出跟随系统默认声卡）",
                     kind.label()
                 );
+                self.procs[index].stdin = stdin;
                 self.procs[index].child = Some(child);
                 self.procs[index].status = CastStatus::Running;
                 self.procs[index].last_line.clear();
                 self.procs[index].device = None;
+                self.procs[index].volume = None;
                 Ok(())
             }
             Err(error) => {
@@ -322,6 +365,9 @@ impl ReceiverManager {
     /// 停止一个接收端（没有在跑就什么都不做）。
     pub fn stop(&mut self, kind: CastKind) {
         let index = kind.index();
+        // 先放掉 stdin（管道随之关闭），再杀进程，避免接收端还在等控制行。
+        self.procs[index].stdin = None;
+        self.procs[index].volume = None;
         if let Some(mut child) = self.procs[index].child.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -363,6 +409,9 @@ impl ReceiverManager {
             if let Some(device) = device_of(&line) {
                 proc.device = Some(device);
             }
+            if let Some(volume) = volume_of(&line) {
+                proc.volume = Some(volume);
+            }
             if is_interesting(&line) {
                 tracing::info!("[{}] {}", proc.kind.label(), clip(&line, 300));
             }
@@ -393,7 +442,9 @@ impl ReceiverManager {
                     };
                     tracing::warn!("[投放] {message}");
                     proc.child = None;
+                    proc.stdin = None;
                     proc.device = None;
+                    proc.volume = None;
                     proc.status = CastStatus::Failed(message);
                 }
                 Err(error) => {
@@ -484,11 +535,35 @@ fn device_of(line: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
+/// 从接收端输出里认出当前音量：启动横幅和手机/主机改音量的 JSON 事件都算。
+///
+/// 契约 A 的两种行：
+/// * 启动横幅：`🔊 接收端音量：50（手机端可调，面板/CLI 也能改）`
+/// * 事件行 ：`[妙播] volume {"source":"host","percent":50}`
+///
+/// 越界的数字一律夹到 0–100，接收端打错也不让界面拿到怪值。
+fn volume_of(line: &str) -> Option<u8> {
+    if let Some((_, rest)) = line.split_once("接收端音量") {
+        let rest = rest.trim_start_matches(['：', ':', ' ']);
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(volume) = digits.parse::<u32>() {
+            return Some(volume.min(100) as u8);
+        }
+    }
+    let (_, rest) = line.split_once("volume")?;
+    let value: serde_json::Value = serde_json::from_str(rest.trim()).ok()?;
+    let percent = value.get("percent")?;
+    let percent = percent
+        .as_i64()
+        .or_else(|| percent.as_f64().map(|value| value.round() as i64))?;
+    Some(percent.clamp(0, 100) as u8)
+}
+
 /// 哪些输出行值得抬进面板日志。
 /// 接收端自己会打发现/探测类明细（每秒数条），只在它们的控制台留着；这里保留
 /// 就绪、播放、设备、错误这类对用户有意义的行。
 fn is_interesting(line: &str) -> bool {
-    const NOISE: [&str; 8] = [
+    const NOISE: [&str; 9] = [
         "discovery_",
         "audio_pcm",
         "packet_received",
@@ -497,6 +572,8 @@ fn is_interesting(line: &str) -> bool {
         "peer_query",
         "advertisement",
         "generic_tv_discovery",
+        // 音量事件：拖动面板滑杆时每帧一条，界面滑杆已经显示，日志里不刷屏。
+        "volume",
     ];
     !NOISE.iter().any(|noise| line.contains(noise))
 }
@@ -564,8 +641,8 @@ fn stale_pids(exe: &str) -> Vec<u32> {
 /// 查找顺序（先命中先用）：
 /// 1. 环境变量 `STEREOLINK_RECEIVER_DIR`（便携包/自定义安装位置）；
 /// 2. 主程序所在目录、以及它下面的 `receivers/`（正式打包形态）；
-/// 3. 工作区里的 `receiver/target/{release,debug}`（开发期 `cargo run` / `cargo build` 形态）；
-/// 4. 源码目录回溯的 `receiver/target/{release,debug}`（`cargo run` 从任意目录启动）。
+/// 3. 从当前 exe 逐级向上回溯工作区根，找 `receiver/target/{release,debug}`
+///    （开发期 `cargo run` / `cargo build` / `cargo test` 形态，从任意目录启动都能命中）。
 pub fn locate(kind: CastKind) -> Option<PathBuf> {
     let name = kind.exe_name();
     let mut dirs: Vec<PathBuf> = Vec::new();
@@ -576,30 +653,35 @@ pub fn locate(kind: CastKind) -> Option<PathBuf> {
         if let Some(dir) = exe.parent() {
             dirs.push(dir.to_path_buf());
             dirs.push(dir.join("receivers"));
-            // target/release/stereo-link.exe → target/release → target → 工作区根
-            if let Some(build_dir) = dir.parent() {
-                if let Some(root) = build_dir.parent() {
-                    for profile in ["release", "debug"] {
-                        dirs.push(root.join("receiver").join("target").join(profile));
-                    }
-                }
-            }
         }
     }
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for profile in ["release", "debug"] {
-        dirs.push(
-            manifest
-                .join("..")
-                .join("..")
-                .join("receiver")
-                .join("target")
-                .join(profile),
-        );
-    }
-    dirs.into_iter()
+    if let Some(path) = dirs
+        .into_iter()
         .map(|dir| dir.join(name))
-        .find(|path| path.is_file())
+        .find(|p| p.is_file())
+    {
+        return Some(path);
+    }
+    locate_in_workspace(name)
+}
+
+/// 从当前 exe 向上回溯，找开发期的 `receiver/target/{release,debug}`。
+///
+/// 不用 `env!("CARGO_MANIFEST_DIR")`：那会把构建机的绝对路径编进 exe（发布产物
+/// 不该泄露用户名/目录，见 `scripts/build-release.ps1` 的自检）。
+fn locate_in_workspace(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut dir = exe.parent()?.to_path_buf();
+    for _ in 0..5 {
+        for profile in ["release", "debug"] {
+            let candidate = dir.join("receiver").join("target").join(profile).join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        dir = dir.parent()?.to_path_buf();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -662,6 +744,45 @@ mod tests {
     }
 
     #[test]
+    fn detects_volume_from_banner_and_events() {
+        // 启动横幅：全角 / 半角冒号都要认。
+        assert_eq!(
+            volume_of("🔊 接收端音量：50（手机端可调，面板/CLI 也能改）"),
+            Some(50)
+        );
+        assert_eq!(volume_of("🔊 接收端音量: 7"), Some(7));
+        // 手机端改音量 / 主机（面板/CLI）改音量的事件行。
+        assert_eq!(
+            volume_of("[妙播] volume {\"source\":\"xiaomi\",\"percent\":30}"),
+            Some(30)
+        );
+        assert_eq!(
+            volume_of("[妙播] volume {\"source\":\"host\",\"percent\":100}"),
+            Some(100)
+        );
+        // 越界夹到 0–100；坏 JSON / 无关行返回 None。
+        assert_eq!(volume_of("[妙播] volume {\"percent\":150}"), Some(100));
+        assert_eq!(volume_of("[妙播] volume {\"percent\":-5}"), Some(0));
+        assert_eq!(volume_of("🔊 接收端音量：250"), Some(100));
+        assert_eq!(volume_of("[妙播] volume 不是 JSON"), None);
+        assert_eq!(volume_of("✅ 已就绪"), None);
+        assert_eq!(device_of("🔊 接收端音量：50"), None);
+    }
+
+    #[test]
+    fn set_volume_rejects_airplay_and_stopped_receiver() {
+        let mut cast = ReceiverManager::new();
+        let airplay = cast.set_volume(CastKind::AirPlay, 30).unwrap_err();
+        assert!(airplay.contains("手机端"), "{airplay}");
+        let stopped = cast.set_volume(CastKind::MiPlay, 30).unwrap_err();
+        assert!(stopped.contains("未运行"), "{stopped}");
+        let too_loud = cast.set_volume(CastKind::MiPlay, 150).unwrap_err();
+        assert!(too_loud.contains("0–100"), "{too_loud}");
+        // 失败不影响已知音量。
+        assert_eq!(cast.volume(CastKind::MiPlay), None);
+    }
+
+    #[test]
     fn noise_lines_are_filtered_out() {
         assert!(!is_interesting(
             "discovery_packet_received source=192.168.1.21"
@@ -671,6 +792,20 @@ mod tests {
         ));
         assert!(is_interesting("✅ 小米妙播接收端已就绪：「StereoLink」"));
         assert!(is_interesting("🔈 输出声卡：扬声器"));
+        // 音量事件很密（面板拖动滑杆时每帧一条），只更新状态不进日志。
+        assert!(!is_interesting(
+            "[妙播] volume {\"source\":\"host\",\"percent\":30}"
+        ));
+        assert!(is_interesting(
+            "🔊 接收端音量：50（手机端可调，面板/CLI 也能改）"
+        ));
+    }
+
+    #[test]
+    fn workspace_lookup_skips_unknown_binaries() {
+        // 定位走运行期的路径回溯，不依赖编译期 CARGO_MANIFEST_DIR
+        // （否则构建机的绝对路径会被编进发布产物）。
+        assert!(locate_in_workspace("stereolink-no-such-recv-9f3c.exe").is_none());
     }
 
     #[test]

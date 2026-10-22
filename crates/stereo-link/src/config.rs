@@ -379,6 +379,122 @@ pub struct CastConfig {
     pub low_latency: bool,
 }
 
+/// 音效调音预设（配置层）。
+///
+/// 与 [`stereo_audio::EffectPreset`] 一一对应；单独定义是因为 stereo-audio 不依赖 serde。
+/// 新增预设时**只能往后追加**（JSON 里存的是 name，code 只用于引擎原子量）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectPresetConfig {
+    /// 类杜比：宽 + 低频 + 空气感。
+    #[default]
+    Dolby,
+    /// 丹拿：监听式、干净、高频柔。
+    Dynaudio,
+    /// 哈曼卡顿：V 型、亮、有氛围。
+    Harman,
+}
+
+impl EffectPresetConfig {
+    /// 全部预设（GUI 下拉框 / CLI 帮助用）。
+    pub const ALL: [Self; 3] = [Self::Dolby, Self::Dynaudio, Self::Harman];
+
+    /// 转成引擎预设。
+    pub fn to_engine(self) -> stereo_audio::EffectPreset {
+        match self {
+            Self::Dolby => stereo_audio::EffectPreset::Dolby,
+            Self::Dynaudio => stereo_audio::EffectPreset::Dynaudio,
+            Self::Harman => stereo_audio::EffectPreset::Harman,
+        }
+    }
+
+    /// 从引擎预设转回配置层。
+    pub fn from_engine(preset: stereo_audio::EffectPreset) -> Self {
+        match preset {
+            stereo_audio::EffectPreset::Dolby => Self::Dolby,
+            stereo_audio::EffectPreset::Dynaudio => Self::Dynaudio,
+            stereo_audio::EffectPreset::Harman => Self::Harman,
+        }
+    }
+
+    /// 稳定英文 id（JSON / CLI 参数用）。
+    pub fn as_str(self) -> &'static str {
+        self.to_engine().as_str()
+    }
+
+    /// 界面显示名。
+    pub fn label(self) -> &'static str {
+        self.to_engine().label()
+    }
+
+    /// 解析英文 id（也接受中文名）。
+    pub fn parse(raw: &str) -> Option<Self> {
+        stereo_audio::EffectPreset::parse(raw).map(Self::from_engine)
+    }
+
+    /// 切换到该预设时建议一起套用的（强度, 低音 dB, 软限幅）。
+    pub fn recommended(self) -> (f32, f32, bool) {
+        self.to_engine().recommended()
+    }
+}
+
+/// 音色 DSP 链设置（三种调音预设，两箱一起用时给声音加宽、补低音、加空气感）。
+///
+/// 与 [`stereo_audio::EffectSettings`] 一一对应；单独定义是因为 stereo-audio 不依赖 serde。
+/// 默认关闭：不开效果时采集数据 bit-exact 直通，不做任何处理。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EffectConfig {
+    /// 是否启用（开关）。
+    pub enabled: bool,
+    /// 调音预设（类杜比 / 丹拿 / 哈曼卡顿）。
+    pub preset: EffectPresetConfig,
+    /// 强度：全局缩放预设的加宽/音色量（0.0..=1.5，1.0 为预设的完整效果）。
+    pub amount: f32,
+    /// 低音提升（dB，0.0..=12.0）。
+    pub bass_boost_db: f32,
+    /// 立体声联动软限幅（防止加宽 + 低音提升后削顶）。
+    pub limiter: bool,
+}
+
+impl Default for EffectConfig {
+    fn default() -> Self {
+        let preset = EffectPresetConfig::default();
+        let (amount, bass_boost_db, limiter) = preset.recommended();
+        Self {
+            enabled: false,
+            preset,
+            amount,
+            bass_boost_db,
+            limiter,
+        }
+    }
+}
+
+impl From<&EffectConfig> for stereo_audio::EffectSettings {
+    fn from(cfg: &EffectConfig) -> Self {
+        Self {
+            enabled: cfg.enabled,
+            preset: cfg.preset.to_engine(),
+            amount: cfg.amount,
+            bass_boost_db: cfg.bass_boost_db,
+            limiter: cfg.limiter,
+        }
+    }
+}
+
+impl From<&stereo_audio::EffectSettings> for EffectConfig {
+    fn from(settings: &stereo_audio::EffectSettings) -> Self {
+        Self {
+            enabled: settings.enabled,
+            preset: EffectPresetConfig::from_engine(settings.preset),
+            amount: settings.amount,
+            bass_boost_db: settings.bass_boost_db,
+            limiter: settings.limiter,
+        }
+    }
+}
+
 /// 面板持久化配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -420,6 +536,9 @@ pub struct AppConfig {
     /// 手机投放接收端设置。
     #[serde(default)]
     pub cast: CastConfig,
+    /// 音色 DSP 链 / 调音预设（默认关闭）。
+    #[serde(default)]
+    pub effect: EffectConfig,
 }
 
 fn default_auto_start() -> bool {
@@ -440,6 +559,7 @@ impl Default for AppConfig {
             theme: ThemeMode::System,
             balance: BalanceCalConfig::default(),
             cast: CastConfig::default(),
+            effect: EffectConfig::default(),
         }
     }
 }
@@ -718,6 +838,65 @@ mod tests {
         // 其他缺失字段仍按默认值。
         assert_eq!(cfg.split.left_endpoint, "");
         assert_eq!(cfg.capture.endpoint_name, "立体声链虚拟声卡");
+    }
+
+    /// 音效：老配置缺字段 → 默认关闭 + 类杜比预设；打开后能完整往返（含预设），并与引擎设置一一对应。
+    #[test]
+    fn effect_config_defaults_to_off_and_round_trips() {
+        let json = r#"{"show_log": true}"#;
+        let old: AppConfig = serde_json::from_str(json).expect("旧配置要能解析");
+        assert_eq!(old.effect, EffectConfig::default());
+        assert!(!old.effect.enabled);
+        assert_eq!(old.effect.preset, EffectPresetConfig::Dolby);
+        assert_eq!(old.effect.amount, 1.0);
+        assert_eq!(old.effect.bass_boost_db, 4.0);
+        assert!(old.effect.limiter);
+
+        // 老配置里没有 preset 字段：按默认预设读，不能报错。
+        let legacy: EffectConfig =
+            serde_json::from_str(r#"{"enabled":true,"amount":1.2}"#).expect("缺 preset 要能解析");
+        assert_eq!(legacy.preset, EffectPresetConfig::Dolby);
+        assert_eq!(legacy.bass_boost_db, 4.0, "缺字段按默认值");
+
+        let cfg = EffectConfig {
+            enabled: true,
+            preset: EffectPresetConfig::Harman,
+            amount: 1.25,
+            bass_boost_db: 7.5,
+            limiter: false,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            json.contains(r#""preset":"harman""#),
+            "JSON 里预设用 name：{json}"
+        );
+        let back: EffectConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cfg);
+
+        let engine: stereo_audio::EffectSettings = (&cfg).into();
+        assert!(engine.enabled);
+        assert_eq!(engine.preset, stereo_audio::EffectPreset::Harman);
+        assert_eq!(engine.amount, 1.25);
+        assert_eq!(engine.bass_boost_db, 7.5);
+        assert!(!engine.limiter);
+        let round: EffectConfig = (&engine).into();
+        assert_eq!(round, cfg);
+
+        // 预设解析：英文 id、中文名都认，未知值返回 None。
+        assert_eq!(
+            EffectPresetConfig::parse("dynaudio"),
+            Some(EffectPresetConfig::Dynaudio)
+        );
+        assert_eq!(
+            EffectPresetConfig::parse("哈曼卡顿"),
+            Some(EffectPresetConfig::Harman)
+        );
+        assert_eq!(EffectPresetConfig::parse("unknown"), None);
+        for preset in EffectPresetConfig::ALL {
+            assert_eq!(EffectPresetConfig::parse(preset.as_str()), Some(preset));
+            assert!(!preset.label().is_empty());
+        }
+        assert_eq!(EffectPresetConfig::Dynaudio.recommended(), (0.8, 2.5, true));
     }
 
     /// 完全非法的 JSON：回默认值，且原文件必须先改名成 `config.json.bad-*`，

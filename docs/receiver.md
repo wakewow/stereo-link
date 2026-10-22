@@ -15,6 +15,8 @@
 * **设备名固定是 `StereoLink`** —— 手机里看到、选的就是这个名字。
 * **输出声卡 = Windows 当前的「默认播放设备」**，页面上会显示接收端实际打开的那块声卡；
   在系统里换默认声卡，接收端会自动重启跟着走（页面上写着「跟随系统默认」）。
+* **接收端音量**可以在「手机投放」页直接调（实时生效，重启后保持上次的值）；手机上按音量键
+  也会同步回来。音量存在接收端的状态文件里，和 `--volume` 是同一个值（见 §6.1）。
 * 两个接收端各占一行，显示状态（运行中 / 未运行 / 异常）和接收端 exe 路径；
   「开始 / 停止」单独控制，右上角「全部停止」一次收掉。
 * 勾上**「随面板启动」**（默认勾着）后，面板一启动就会把接收端拉起来；取消勾选就不再自动拉。
@@ -110,7 +112,7 @@ cd E:\AI\MiPlay\receiver
 | 上游 | [`shairplay` 0.10](https://crates.io/crates/shairplay)（开了 `ap2` feature） | `FusionPlay.MiPlaySdk` 1.0.4（git） |
 | 许可 | LGPL-3.0-or-later（独立 exe） | AGPL-3.0-only（独立 exe） |
 | 出声方式 | 库回调交错 f32 → 抖动缓冲 → cpal/WASAPI | SDK 内部 cpal 直接出声，只需指定设备 |
-| 设备身份 | 固定 MAC `02:53:54:52:4C:4E`；AP2 配对信息在 `%LOCALAPPDATA%\StereoLink\airplay-pairings.json` | 首次运行生成并持久化到 `%LOCALAPPDATA%\StereoLink\miplay-recv.json` |
+| 设备身份 | 固定 MAC `02:53:54:52:4C:4E`；AP2 配对信息在 `%LOCALAPPDATA%\StereoLink\airplay-pairings.json` | 首次运行生成并持久化到 `%LOCALAPPDATA%\StereoLink\miplay-recv.json`（设备身份 + 音量） |
 | 发现方式 | mDNS `_raop._tcp`，AP2 模式额外注册 `_airplay._tcp`（`et=0,3,5`） | mDNS `_lyra-mdns._udp` + `_mi-connect._udp` |
 
 两个可以同时开，互不冲突（AirPlay 占 5000，妙播的控制端口是动态的）。
@@ -167,15 +169,41 @@ cd E:\AI\MiPlay\receiver
 | `-d, --device <声卡>` | `#序号` / id / 名字 | 系统默认 |
 | `--ip <IPv4>` | 本机局域网地址，不填自动探测 | 自动 |
 | `--iface <网卡名>` | 一般不用填 | 自动 |
-| `--volume <0-100>` | 接收端音量初值 | `50` |
-| `--state <文件>` | 身份持久化文件 | `%LOCALAPPDATA%\StereoLink\miplay-recv.json` |
+| `--volume <0-100>` | 接收端音量初值（会记进状态文件；不写就用上次保存的） | 上次保存值，首次 `50` |
+| `--state <文件>` | 设备身份 + 音量持久化文件 | `%LOCALAPPDATA%\StereoLink\miplay-recv.json` |
 | `--list-devices` | 列出输出设备后退出 | |
-| `--quiet` | 只打印报错事件（面板拉起时用，避免刷屏） | 关 |
+| `--quiet` | 只打印报错类事件和 volume 事件（面板拉起时用，避免刷屏） | 关 |
 | `--group-delay-ms <ms>` | 妙播目标延迟：越小越跟手，见 §9 | `800` |
 | `--min-queue-ms <ms>` | 排队延迟下限，一般只跟着上面一起调小 | `650` |
 | `--diag-loopback` | 自检专用：让 mDNS 响应也能回到本机（见 §8） | 关 |
 
-改 `--name` 会改手机里显示的名字；`miplay-recv` 的身份文件删掉会重新生成（手机端可能需要重新发现一次）。
+改 `--name` 会改手机里显示的名字；`miplay-recv` 的身份文件删掉会重新生成（手机端可能需要重新发现一次，音量也回到默认 50）。
+
+### 6.1 运行中调音量（stdin 控制）
+
+`miplay-recv` 运行时会读自己的 stdin，**一行一条命令**（UTF-8）。面板「手机投放」页的音量滑杆、
+`stereo-link-cli` 以及任何脚本都走这条通道：
+
+| 输入 | 行为 | 输出（stdout，机器可读） |
+|---|---|---|
+| `volume <0-100>` | 立即生效：通知手机端 + 写入状态文件（重启后保持） | `[妙播] volume {"source":"host","percent":N}` |
+| `volume 150` / `volume abc` | 不改音量、进程不退出 | `[妙播] control_error {"reason":"bad_value","line":"..."}` |
+| 其它命令 | 进程不退出 | `[妙播] control_error {"reason":"unknown_command","line":"..."}` |
+| 空行 | 忽略 | — |
+| stdin EOF | 只结束控制线程，接收端继续投放 | — |
+
+手机端自己调音量时，同一行格式会以 `"source":"xiaomi"` 出现（值同样落盘）。
+
+一次性命令（stdin 关掉后接收端继续运行，Ctrl+C 退出）：
+
+```powershell
+"volume 30" | .\receiver\target\release\miplay-recv.exe --name StereoLink
+@("volume 30", "volume 60") | .\receiver\target\release\miplay-recv.exe --name StereoLink
+```
+
+需要持续控制（例如面板）时保持 stdin 管道不关，按需写 `volume N\n` 即可。
+无手机连接时 `set_volume` 没有可通知的对象会返回错误：值仍会保存、下次启动生效，
+stderr 里有一条 `WARN`，命令本身照常打印 `volume` 行。
 
 ## 7. 防火墙
 
@@ -233,7 +261,7 @@ python E:\AI\MiPlay\receiver\tools\probe_miplay_mdns.py
 - 设备被独占（某些 ASIO/独占模式程序占着声卡）→ 换设备或关掉那个程序。
 
 **妙播连上了但没声音？**
-- 妙播的音量控制在**接收端**（`--volume`），手机音量键不一定同步；
+- 音量：面板「手机投放」页的滑杆或 stdin `volume N` 实时生效（见 §6.1），手机音量键调的值也会同步并记住；先确认接收端音量不是 0；
 - SDK 要求 48 kHz，用 `--list-devices` 确认目标设备支持 48 kHz（本机大多数设备都是）；
 - 设备名/id 写错时 SDK 会打一条 warning 并**回落到默认设备**，所以「连上了没声音」先看是不是落到别的声卡了。
 
@@ -307,11 +335,18 @@ MiXPlay 也会注册 `_raop._tcp` / `_lyra-mdns._udp` 并占 5000 端口，手�
 - [x] `miplay-recv` 的 Lyra / mi-connect 应答用 `tools/probe_miplay_mdns.py` 本机自检通过；
 - [x] 设备选择（重名报错、`#序号`、完整 id）行为符合预期；
 - [x] 低延迟补丁编译通过，启动横幅正确显示「目标延迟：220 ms，排队下限：160 ms」；
-- [x] 面板「手机投放」页渲染正常（两行状态、随面板启动、低延迟勾选框、接收端路径）。
+- [x] 面板「手机投放」页渲染正常（两行状态、随面板启动、低延迟勾选框、接收端路径）；
+- [x] `miplay-recv` stdin 音量控制：`volume 30` 打印 `[妙播] volume {"source":"host","percent":30}`；
+      非法值（`volume abc` / `volume 150`）与未知命令打印 `[妙播] control_error` 且进程不退出；
+      stdin EOF 后接收端继续运行（真实 release exe + 管道冒烟，见 `receiver/target/smoke/smoke_volume.py`）；
+- [x] `--volume` 省略时读回状态文件里上次保存的音量（首次运行默认 50）；每次改音量立即落盘，
+      显式 `--volume` 优先于状态文件；
+- [x] `--quiet` 下 `volume` 事件仍然输出（面板/CLI 依赖这一行），其它事件仍被过滤。
 
 待真机确认：
 
 - [ ] iPhone 在「隔空播放」列表里看到 `StereoLink`（AP2）并成功出声（配对码 3939 / 延迟 / 音质）；
 - [ ] 同一台 iPhone 用 `--ap1` 模式复测（AP1 连接与延迟）；
 - [ ] 小米手机「小米妙播」列表里看到 `StereoLink` 并成功出声；
-- [ ] 手机端断开/重连、切歌、音量同步的行为。
+- [ ] 手机已连接时 `volume N` 真正改变手机端音量，手机音量键调音量回显为 `"source":"xiaomi"`；
+- [ ] 手机端断开/重连、切歌的行为。

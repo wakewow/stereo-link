@@ -6,6 +6,28 @@
 
 ### 新增
 
+- **音效调音（可热切换开关）**：声道路由页新增「音效」开关，对左右两路输出做同一份
+  2→2 调音（M/S 加宽、180 Hz 以下低频单声道化、低架低音、4.5 kHz presence 提亮、-1 dBFS 联动
+  软限幅、15 ms 干湿淡入），默认关闭；可调强度（0.0–1.5）、低音（0–12 dB）与软限幅。调音跑在采集域、
+  拆声道之前，所以两只音箱效果一致；开启不增加延迟，关闭是 bit-exact 直通。配置字段 `effect.*`，
+  命令行 `stereo-link-cli effect status|on|off|amount|bass|limiter`，`status --json` 的 `config.effect`
+  是配置值、`routing.engine.effect` 是引擎实际值；运行中改动热生效，不重启、不断音。
+  注意：它是「类杜比」调音，**不是 Dolby Atmos**，不需要装 Dolby Access，也不改 Windows 端点空间音效。
+- **音效新增「丹拿 / 哈曼卡顿」调音预设**：原来的「类杜比音效」升级为「音效 + 调音」两件套，
+  下拉可选**类杜比**（默认）、**丹拿**、**哈曼卡顿**三种预设，各自有固定的加宽量、低频单声道化频率、
+  presence 与高频曲线（丹拿几乎不加宽、90 Hz 以下单声道化、8.5 kHz 高频略收；哈曼卡顿中等加宽 +
+  V 型曲线，1.8 kHz 人声与 10 kHz 高频抬升）。切换预设会自动套用推荐强度 / 低音 / 软限幅
+  （类杜比 1.0 / +4 dB、丹拿 0.8 / +2.5 dB、哈曼卡顿 1.0 / +6 dB），之后仍可微调；切预设与开关
+  都是热生效、不断音，关闭依旧是 bit-exact 直通。配置新增 `effect.preset`（JSON 存 `dolby` /
+  `dynaudio` / `harman`，旧配置缺该字段按 `dolby` 解析），命令为
+  `stereo-link-cli effect preset <dolby|dynaudio|harman>`，`status --json` 的 `config.effect.preset`
+  与 `routing.engine.effect.preset` 都会带预设 id 与中文名。预设是模仿品牌听感的调音，不是
+  Dolby / Dynaudio / Harman 官方认证或授权算法。
+- **妙播接收端音量可控**（面板滑块 + CLI + 状态字段）：`miplay-recv` 新增 stdin 控制通道（`volume <0-100>`），
+  面板「手机投放」页的小米妙播行多了音量滑块，`stereo-link-cli receiver volume miplay 30` 可在命令行改；
+  `receiver list --json` 与 `status --json` 的接收端条目带 `volume` / `volume_supported`。音量是接收端数字
+  增益（实时生效），手机端调音量走同一条协议通道，值持久化到 `%LOCALAPPDATA%\StereoLink\miplay-recv.json`
+  （`--volume` 不写就用上次保存的，默认 50）。`--quiet` 不再吞掉手机端的音量变化事件。
 - **AirPlay 接收端升级为 AirPlay 1 + AirPlay 2 双模式**（`airplay-recv`，`shairplay` 打开 `ap2` feature）：
   - iPhone / iPad / Mac 默认走 AP2（缓冲 AAC、加密 RTSP、HomeKit 持久配对）。首次连接在手机上输入
     配对码 `3939`，配对信息落盘 `%LOCALAPPDATA%\StereoLink\airplay-pairings.json`，之后走 pair-verify
@@ -17,10 +39,21 @@
   - AP2 的 PTP 时钟监听 UDP 319/320，防火墙规则必须放行 UDP（`start.ps1` 的 `-Protocol Any` 已覆盖）；
     AP1 模式保持 1 路并发连接，AP2 模式放宽到 4 路（iOS 的「遥控」+「音频」是两条 RTSP 连接）。
 
+### 修复
+
+- **主窗口常驻任务栏**：以前建窗时用了 `with_taskbar(false)`，任务栏没有窗口按钮，关闭窗口
+  「缩小至托盘」后只能去托盘图标里找。现在任务栏一直有「StereoLink 立体声链」窗口按钮（缩小后
+  为最小化状态），点任务栏按钮或托盘图标都能唤回窗口。
+- **发布产物不再带构建机路径**：接收端定位以前用编译期 `CARGO_MANIFEST_DIR`，会把构建机的绝对
+  源码目录编进 exe；改为运行期从当前 exe 逐级向上回溯工作区根，`scripts/build-release.ps1` 的
+  路径自检恢复通过。
+
 ### 文档
 
 - `docs/receiver.md`：补 AP2 的协议对比、参数表、防火墙说明与常见问题；`README.md` 增「手机投放：
   把电脑当音箱」一节。
+- `docs/cli.md` / `docs/gui.md`：补 `receiver volume` 命令与面板音量滑块说明（妙播走接收端增益、
+  AirPlay 音量由手机端控制）。
 
 ## [0.6.0] - 2026-10-21
 

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, EffectPresetConfig};
 use crate::control;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -80,6 +80,7 @@ fn dispatch(globals: Globals, command: &str, rest: &[&str]) -> Result<i32, Strin
         "status" => status(globals),
         "log" => log(globals, rest),
         "routing" => routing(globals, rest),
+        "effect" => effect(globals, rest),
         "receiver" | "receivers" | "cast" => receiver(globals, rest),
         "endpoints" | "devices" => endpoints(globals, rest),
         "config" | "cfg" => config(globals, rest),
@@ -368,6 +369,9 @@ fn routing(globals: Globals, rest: &[&str]) -> Result<i32, String> {
 
 fn receiver(globals: Globals, rest: &[&str]) -> Result<i32, String> {
     let action = rest.first().copied().unwrap_or("list");
+    if action == "volume" {
+        return receiver_volume(globals, rest);
+    }
     let kind = rest.get(1).copied().unwrap_or("all");
     let data = control::request(json!({ "cmd": "receiver", "action": action, "kind": kind }))?;
     if globals.json {
@@ -384,15 +388,24 @@ fn receiver(globals: Globals, rest: &[&str]) -> Result<i32, String> {
             let status = text(item, "status");
             // 状态文字和「运行中/未运行」重复时就不用打两遍。
             let status = if status == state { "" } else { status };
+            // 音量：妙播有滑杆对应值（没上报过就是 --），AirPlay 只能在手机端调。
+            let volume = match item.get("volume_supported").and_then(Value::as_bool) {
+                Some(true) => match item.get("volume").and_then(Value::as_u64) {
+                    Some(volume) => format!("音量 {volume}"),
+                    None => "音量 --".to_string(),
+                },
+                _ => "音量由手机端控制".to_string(),
+            };
             println!(
-                "{:<8} {:<6} {}{}",
+                "{:<8} {:<6} {}{}    {}",
                 text(item, "kind"),
                 state,
                 status,
                 item.get("error")
                     .and_then(Value::as_str)
                     .map(|error| format!("（{error}）"))
-                    .unwrap_or_default()
+                    .unwrap_or_default(),
+                volume,
             );
         }
         if let Some(device) = data.get("device").and_then(Value::as_str) {
@@ -400,6 +413,154 @@ fn receiver(globals: Globals, rest: &[&str]) -> Result<i32, String> {
         }
     }
     Ok(0)
+}
+
+/// `effect`：音效开关、调音预设与参数（`effect` / `effect on|off|preset|amount|bass|limiter`）。
+fn effect(globals: Globals, rest: &[&str]) -> Result<i32, String> {
+    const USAGE: &str = "用法：effect [status|on|off] | effect preset <dolby|dynaudio|harman> | effect amount <0-1.5> | effect bass <0-12> | effect limiter <on|off>";
+    let action = rest.first().copied().unwrap_or("status");
+    let mut request = json!({ "cmd": "effect", "action": action });
+    match action {
+        "status" | "on" | "off" => {}
+        "amount" => {
+            let Some(raw) = rest.get(1).copied() else {
+                return Err(USAGE.to_string());
+            };
+            request["value"] = json!(parse_effect_number(raw, 0.0, 1.5, "强度")?);
+        }
+        "bass" => {
+            let Some(raw) = rest.get(1).copied() else {
+                return Err(USAGE.to_string());
+            };
+            request["value"] = json!(parse_effect_number(raw, 0.0, 12.0, "低音")?);
+        }
+        "limiter" => {
+            let Some(raw) = rest.get(1).copied() else {
+                return Err(USAGE.to_string());
+            };
+            let on = match raw.to_ascii_lowercase().as_str() {
+                "on" | "true" | "1" => true,
+                "off" | "false" | "0" => false,
+                other => return Err(format!("limiter 只支持 on/off，收到 {other}")),
+            };
+            request["value"] = json!(on);
+        }
+        "preset" => {
+            let Some(raw) = rest.get(1).copied() else {
+                return Err(USAGE.to_string());
+            };
+            request["value"] = json!(parse_effect_preset(raw)?.as_str());
+        }
+        other => return Err(format!("effect 不支持 action={other}（{USAGE}）")),
+    }
+    let data = control::request(request)?;
+    if globals.json {
+        print_json(&data);
+    } else {
+        print_effect(&data);
+        if action != "status" {
+            let applied = data
+                .get("applied")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if applied {
+                println!("已热写进运行中的引擎（不重启、不断音）");
+            } else {
+                println!("只写进了配置：下次开始路由时生效");
+            }
+        }
+    }
+    Ok(0)
+}
+
+/// 调音预设参数：英文 id / 中文名都认，未知值先在这里拦一次（错误更贴近用法）。
+fn parse_effect_preset(raw: &str) -> Result<EffectPresetConfig, String> {
+    EffectPresetConfig::parse(raw).ok_or_else(|| {
+        format!("调音预设只支持 dolby / dynaudio / harman（或 类杜比/丹拿/哈曼卡顿），收到 {raw}")
+    })
+}
+
+/// 音效参数：浮点数 + 范围检查（先在这里拦一次，错误更贴近用法）。
+fn parse_effect_number(raw: &str, min: f32, max: f32, label: &str) -> Result<f32, String> {
+    match raw.parse::<f32>() {
+        Ok(value) if value.is_finite() && (min..=max).contains(&value) => Ok(value),
+        _ => Err(format!("{label}要在 {min}-{max} 之间，收到 {raw}")),
+    }
+}
+
+fn print_effect(data: &Value) {
+    let enabled = data
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let amount = data.get("amount").and_then(Value::as_f64).unwrap_or(0.0);
+    let bass = data
+        .get("bass_boost_db")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let limiter = data
+        .get("limiter")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let running = data
+        .get("engine_running")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let preset = data
+        .get("preset_label")
+        .and_then(Value::as_str)
+        .unwrap_or("类杜比");
+    println!(
+        "音效：{}（调音：{preset}）",
+        if enabled { "开启" } else { "关闭" }
+    );
+    println!(
+        "强度：{amount:.2} | 低音：+{bass:.1} dB | 软限幅：{}",
+        if limiter { "开" } else { "关" }
+    );
+    println!(
+        "引擎：{}",
+        if running {
+            "运行中（已生效）"
+        } else {
+            "未运行（配置已保存，下次开始路由生效）"
+        }
+    );
+}
+/// `receiver volume <airplay|miplay> <0-100>`：妙播写接收端 stdin 实时改音量。
+fn receiver_volume(globals: Globals, rest: &[&str]) -> Result<i32, String> {
+    const USAGE: &str = "用法：receiver volume <airplay|miplay> <0-100>";
+    let Some(kind) = rest.get(1).copied() else {
+        return Err(USAGE.to_string());
+    };
+    let Some(raw) = rest.get(2).copied() else {
+        return Err(USAGE.to_string());
+    };
+    let percent = parse_percent(raw)?;
+    let data = control::request(json!({
+        "cmd": "receiver",
+        "action": "volume",
+        "kind": kind,
+        "percent": percent,
+    }))?;
+    if globals.json {
+        print_json(&data);
+    } else {
+        println!(
+            "{} 音量已设为 {}%",
+            text(&data, "kind"),
+            number(&data, "volume")
+        );
+    }
+    Ok(0)
+}
+
+/// 音量百分比参数：0–100 的整数（范围先在这里拦一次，错误更贴近用法）。
+fn parse_percent(raw: &str) -> Result<u8, String> {
+    match raw.parse::<u8>() {
+        Ok(percent) if percent <= 100 => Ok(percent),
+        _ => Err(format!("音量要在 0-100 之间，收到 {raw}")),
+    }
 }
 
 fn endpoints(globals: Globals, rest: &[&str]) -> Result<i32, String> {
@@ -745,7 +906,13 @@ StereoLink 立体声链 —— 命令行
   log [-n 行数] [--level WARN] [-f] [--file]
                         实例在跑读内存日志，否则读落盘日志；-f 只跟文件
   routing [start|stop|restart|mute|unmute|status]
+  effect [status|on|off] 音效开关（两箱一起用时加宽声场 / 补低音 / 调音色）
+  effect preset <dolby|dynaudio|harman>
+                        调音预设：类杜比 / 丹拿 / 哈曼卡顿（切换会套用推荐强度、低音、限幅）
+  effect amount <0-1.5> | bass <0-12> | limiter <on|off>
   receiver [list|start|stop|restart] [airplay|miplay|all]
+  receiver volume <airplay|miplay> <0-100>
+                         调接收端音量（妙播实时生效；AirPlay 只能在手机端调）
   endpoints [render|capture]
   config [show|get <key>|set <key> <value>|path]
   tone [--freq 440] [--seconds 1.0] [--device 名字片段]
@@ -772,11 +939,55 @@ mod tests {
     }
 
     #[test]
+    fn volume_percent_parsing_is_strict() {
+        assert_eq!(parse_percent("0").unwrap(), 0);
+        assert_eq!(parse_percent("30").unwrap(), 30);
+        assert_eq!(parse_percent("100").unwrap(), 100);
+        for bad in ["101", "150", "300", "-1", "abc", ""] {
+            let error = parse_percent(bad).unwrap_err();
+            assert!(error.contains("0-100"), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn effect_preset_parsing_accepts_ids_and_labels() {
+        assert_eq!(
+            parse_effect_preset("dynaudio").unwrap(),
+            EffectPresetConfig::Dynaudio
+        );
+        assert_eq!(
+            parse_effect_preset(" 哈曼卡顿 ").unwrap(),
+            EffectPresetConfig::Harman
+        );
+        assert_eq!(
+            parse_effect_preset("dolby").unwrap(),
+            EffectPresetConfig::Dolby
+        );
+        for bad in ["", "bose", "丹拿调音x"] {
+            let error = parse_effect_preset(bad).unwrap_err();
+            assert!(
+                error.contains("dolby / dynaudio / harman"),
+                "{bad}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn effect_number_parsing_is_strict() {
+        assert_eq!(parse_effect_number("1.0", 0.0, 1.5, "强度").unwrap(), 1.0);
+        assert_eq!(parse_effect_number("0", 0.0, 12.0, "低音").unwrap(), 0.0);
+        for bad in ["-0.1", "1.6", "abc", "NaN", ""] {
+            assert!(parse_effect_number(bad, 0.0, 1.5, "强度").is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn help_mentions_every_command() {
         for command in [
             "status",
             "log",
             "routing",
+            "effect",
             "receiver",
             "endpoints",
             "config",
