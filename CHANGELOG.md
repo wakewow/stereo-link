@@ -2,6 +2,29 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.8.0] - 2026-11-17
+
+### 新增
+
+- **左右声道手动音量微调（界面滑块 + CLI + 配置，不依赖声学校准）**：声道路由卡的「音量平衡」区
+  新增常驻一行「手动微调」，左 / 右各一个滑块（−24 … +12 dB，正数提升、负数衰减）与「归零」按钮；
+  拖动**立即**写进引擎（不重启路由、不断音），松手存配置，旁边读数显示「自动 左…/右… · 合计
+  左…/右… dB」。此前只有跑完声学校准（`音量平衡校准`）才有自动补偿，没麦克风 / 没校准的用户在
+  软件内部完全调不了左右响度——这就是本次修的问题。配置新增 `trim.left_db` / `trim.right_db`
+  （默认 0，`AppConfig::load` 会夹值并清 NaN/inf），命令行新增
+  `stereo-link-cli balance [status] | set <左 dB> <右 dB> | left <dB> | right <dB> | reset`
+  （`--json` 输出 `trim` / `auto` / `route_channels` / `routing`），`status --json` 的
+  `config.trim` 与 `config.balance` 都能机读；`config set trim.left_db -3` 同样立即生效。
+  有校准记录时最终增益 = 自动补偿 + 手动微调，两层都在 `balance --json` 里分开可见。
+
+### 修复
+
+- **只配一侧输出时增益可能打错声道**：路由下标按「实际启用的声道顺序」排列（只配右声道时下标 0
+  就是右声道），而平衡增益一直按 `[左, 右]` 顺序下发；现在改为按启用顺序映射后再写引擎（界面、
+  无头 `serve` 两条路径共用 `control::gains_in_route_order`）。
+- **无头 `serve` 模式完全没有左右音量平衡**：`serve` 之前从不调用 `set_route_gains_db`，现在启动
+  路由、`balance` 命令、`config set trim.*`、`config reload` 都会把手动微调写进引擎。
+
 ## [0.7.0] - 2026-10-22
 
 ### 新增
