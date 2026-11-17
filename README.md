@@ -80,6 +80,9 @@ StereoLink 补的就是这一块：把系统声音拆成左 / 右两路，分别
   表里给任一路勾选反相，把极性修回来（只勾一路）。
 - **每路音量条**：声道路由表里直接拖动该路音箱的端点音量，写回系统音量，不用切到 Windows
   音量合成器。
+- **左右手动微调**：声道路由卡「音量平衡」区常驻一行手动微调滑块（左 / 右各 −24 … +12 dB，可一键
+  归零），**不跑声学校准也能用**，拖动即写进引擎（不重启路由、不断音）、松手存配置；有校准记录时
+  叠加在自动补偿之上。命令行等价于 `stereo-link-cli balance set -3 -1.5`。
 - **声学自校验**：可以用本机麦克风量出两台音箱的真实到达时间差，自动给较慢的一路垫延迟；同一
   次测量还会给出左右音量平衡建议，可一键「应用并复测」；没有麦克风时用「点击串试听」靠人耳
   手动微调。
@@ -218,6 +221,8 @@ stereo-link-cli routing start|stop|restart|mute|unmute
 stereo-link-cli receiver list|start|stop|restart airplay|miplay|all
 stereo-link-cli effect on              # 开音效（运行中热生效，不重启）
 stereo-link-cli effect preset harman   # 调音预设：dolby / dynaudio / harman
+stereo-link-cli balance set -3 -1.5    # 左右声道手动微调（dB，运行中热生效）
+stereo-link-cli balance                # 读回手动微调 / 自动校准 / 生效声道
 stereo-link-cli config get split.queue_ms
 stereo-link-cli config set cast.low_latency true
 stereo-link-cli log -n 50 --level WARN
@@ -276,6 +281,8 @@ cargo build --release -p stereo-link
 | `split.queue_ms` | 每路预排队音频长度（抖动缓冲，毫秒） |
 | `split.left_delay_ms` / `split.right_delay_ms` | 左 / 右额外延迟（0–500 ms，用于对齐两只音箱） |
 | `split.invert_left` / `split.invert_right` | 左 / 右声道反相 180°（默认 `false`；音箱极性相反时用） |
+| `trim.left_db` / `trim.right_db` | 左右声道手动微调（−24 … +12 dB，默认 0；**不依赖校准**，与自动补偿叠加，改完热生效） |
+| `balance` | 声学校准记录（锚点、左右端点、灵敏度差、校准时间）；空 = 未校准。自动补偿 = 按它算出的每路衰减，手动微调叠在它上面 |
 | `effect.enabled` / `effect.preset` | 音效开关（默认 `false`）/ 调音预设 `dolby`（类杜比）、`dynaudio`（丹拿）、`harman`（哈曼卡顿），默认 `dolby` |
 | `effect.amount` / `effect.bass_boost_db` / `effect.limiter` | 强度 0.0–1.5 / 低音提升 0–12 dB / 联动软限幅（默认值随预设：类杜比 1.0 / +4 dB / `true`） |
 | `capture.endpoint_id` | 采集端点的 id（`{0.0.0.00000000}.{guid}`）；优先靠它精确匹配 |
@@ -300,6 +307,7 @@ cargo build --release -p stereo-link
 | 只有一边有声 | 检查左 / 右声道选的是不是两台不同设备；看对应电平条是否在动；点「左右自检音」分别确认 |
 | 声音断续、日志里「欠载」在涨 | 把「高级 → 抖动缓冲」从 40 ms 往上调；缩短蓝牙距离、避开 2.4 GHz 干扰；蓝牙带宽不够时先断开其它蓝牙设备 |
 | 两只音箱不同步 | 用「声学自校验」的麦克风测量并自动对齐；没有麦克风就展开「高级：左右微调延迟」，给声音较早的那只加 10–50 ms |
+| 两只音箱响度不一样（不想校准 / 没有麦克风） | 拖声道路由卡「音量平衡 → 手动微调」的左 / 右滑块（−24 … +12 dB，拖了立刻生效、松手存盘），或 `stereo-link-cli balance set <左 dB> <右 dB>`；校准过就叠加在自动补偿之上 |
 | 调系统音量，两台音箱的音量不跟着变 | 声道路由卡「系统音量」选「跟随系统音量」。默认「自动」只对 UU远程 / Steam 这类第三方虚拟音频设备镜像；自研虚拟声卡 / 物理输出是后置音量，系统音量本来就已经作用在采集幅度里 |
 | 人声低、发闷、音质差 | 把该路音量条与系统音量拉满；确认「路径」列是 `Auto`（48 kHz 零 SRC）；增益不要超过 1.0 去补音量 |
 | 居中的人声发虚、低音互相抵消 | 两只音箱极性相反：在声道路由表里勾对应那一路的 `180°`（只勾一路） |

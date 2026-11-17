@@ -603,6 +603,200 @@ pub fn effect_command(
     ok(value)
 }
 
+// ---------------------------------------------------------------- 音量平衡 / 手动微调
+//
+// 背景：以前「左右声道响度不齐」只能靠跑一遍声学校准（`BalanceCalibration`）自动补偿，
+// 没校准过就完全没有补偿、也没有任何手动入口 —— 用户听感不齐时无从下手。这里补上
+// 「手动微调」：两个通道各一个 dB 值，不依赖校准，有校准时叠加在自动补偿之上。
+
+/// 引擎里「启用的路由」按什么顺序排（下标 → 声道）。
+///
+/// 引擎的 `set_route_gain_db(index, _)` 里 `index` 是**启用路由的下标**，而路由是按
+/// 「配了左就先推左、再推右」的顺序进引擎的（见 `app::route_engine_config` /
+/// `serve::build_engine_config`）。只配了右声道时下标 0 就是右声道 —— 直接把
+/// `[左, 右]` 当数组塞进去，增益会打到另一个声道上，所以每次都要先过这一层。
+pub fn enabled_route_channels(cfg: &crate::config::AppConfig) -> Vec<stereo_audio::RouteChannel> {
+    let mut channels = Vec::new();
+    if !cfg.split.left_endpoint.trim().is_empty() {
+        channels.push(stereo_audio::RouteChannel::Left);
+    }
+    if !cfg.split.right_endpoint.trim().is_empty() {
+        channels.push(stereo_audio::RouteChannel::Right);
+    }
+    channels
+}
+
+/// 把 `[左, 右]` 两个 dB 增益摊成引擎要的数组（顺序同 [`enabled_route_channels`]）。
+pub fn gains_in_route_order(
+    gains_db: [f32; 2],
+    channels: &[stereo_audio::RouteChannel],
+) -> Vec<f32> {
+    channels
+        .iter()
+        .map(|channel| match channel {
+            stereo_audio::RouteChannel::Right => gains_db[1],
+            // `Both` 只出现在「一条路由同时吃左右」的配置里，按左声道的值处理。
+            stereo_audio::RouteChannel::Left | stereo_audio::RouteChannel::Both => gains_db[0],
+        })
+        .collect()
+}
+
+/// 手动微调 → JSON（`balance status`、`status --json`、`config show` 共用一份形状）。
+pub fn trim_json(cfg: &crate::config::AppConfig) -> Value {
+    let trim = cfg.trim.sanitized();
+    json!({
+        "left_db": trim.left_db,
+        "right_db": trim.right_db,
+        "min_db": crate::config::TrimConfig::MIN_DB,
+        "max_db": crate::config::TrimConfig::MAX_DB,
+        "neutral": trim.is_neutral(),
+        "describe": trim.describe(),
+    })
+}
+
+/// 自动平衡校准的摘要（有没有校准过、锚点几个、灵敏度差多少）。
+pub fn balance_cal_json(cfg: &crate::config::AppConfig) -> Value {
+    let anchors = cfg.balance.anchors.len();
+    json!({
+        "calibrated": anchors > 0,
+        "anchors": anchors,
+        "left_endpoint": cfg.balance.left_endpoint,
+        "right_endpoint": cfg.balance.right_endpoint,
+        "sens_diff_db": cfg.balance.sens_diff_db,
+        "calibrated_at": cfg.balance.calibrated_at,
+        "max_gain_db": stereo_audio::BALANCE_GAIN_MAX_DB,
+        "deadband_db": stereo_audio::BALANCE_GAIN_DEADBAND_DB,
+    })
+}
+
+/// 读一个 dB 参数（`balance` 命令用；范围就是 [`crate::config::TrimConfig::MIN_DB`]
+/// 到 [`crate::config::TrimConfig::MAX_DB`]，超范围直接报错而不是悄悄夹住 ——
+/// 脚本里写错一个数量级应该立刻看得见）。
+fn trim_number(raw: &Value, label: &str) -> Result<f32, String> {
+    let (min, max) = (
+        crate::config::TrimConfig::MIN_DB,
+        crate::config::TrimConfig::MAX_DB,
+    );
+    let Some(number) = raw.as_f64() else {
+        return Err(format!("{label}要是数字（dB），收到 {raw}"));
+    };
+    let number = number as f32;
+    if !number.is_finite() || !(min..=max).contains(&number) {
+        return Err(format!("{label}只支持 {min}..={max} dB，收到 {number}"));
+    }
+    Ok(number)
+}
+
+/// `balance` 命令的共用实现：GUI 的 `handle_control` 与 `serve` 的 `State::handle`
+/// 都走这一份，参数校验、落盘、日志和响应形状完全一致。
+///
+/// 动作：
+/// * `status`（默认）：只是把当前值读出来；
+/// * `set`：`left_db` + `right_db` 两个都要（dB，−24…+12）；
+/// * `left` / `right`：只改一侧，`value` 是 dB（一条命令掰平衡最短）；
+/// * `reset`：两侧归零。
+///
+/// **只改配置并落盘，不直接写引擎**：引擎里那一份增益是「自动补偿 + 手动微调」的
+/// 合成值，由宿主每帧算完整份写下去；这里插一脚会把校准补偿冲掉。宿主拿到
+/// `changed: true` 后各自重算一次（GUI → `refresh_balance_gains`，`serve` →
+/// `apply_trim_gains`），所以命令返回里带 `routing` 说明引擎此刻在不在跑。
+pub fn balance_command(
+    cfg: &mut crate::config::AppConfig,
+    engine: Option<&stereo_audio::RouteEngineHandle>,
+    request: &Value,
+) -> Value {
+    let changed = match apply_balance_request(cfg, request) {
+        Ok(changed) => changed,
+        Err(error) => return err(error),
+    };
+    if changed {
+        cfg.save();
+        if engine.is_some() {
+            tracing::info!("[音量平衡] 手动微调已更新：{}", cfg.trim.describe());
+        } else {
+            tracing::warn!(
+                "[音量平衡] 引擎未运行，微调只写进配置（{}），下次开始路由时生效",
+                cfg.trim.describe()
+            );
+        }
+    }
+    let channels = enabled_route_channels(cfg);
+    ok(json!({
+        "trim": trim_json(cfg),
+        "auto": balance_cal_json(cfg),
+        // 两个增益各自会落到哪条路由上：只配一侧时这里只有一项，别按 [左, 右] 硬套。
+        "route_channels": channels
+            .iter()
+            .map(|channel| format!("{channel:?}").to_lowercase())
+            .collect::<Vec<_>>(),
+        "routing": engine.is_some(),
+        "changed": changed,
+    }))
+}
+
+/// [`balance_command`] 的纯逻辑部分：解析请求并改 `cfg.trim`，不落盘、不碰引擎。
+///
+/// 拆出来是为了能单测「改了什么」而不写真实 `%APPDATA%\stereo-link\config.json`。
+/// 返回 `Ok(改没改)`；参数不合法返回给用户看的错误（此时配置**一点没动**）。
+pub fn apply_balance_request(
+    cfg: &mut crate::config::AppConfig,
+    request: &Value,
+) -> Result<bool, String> {
+    let action = request
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("status")
+        .trim()
+        .to_ascii_lowercase();
+    let before = cfg.trim;
+    match action.as_str() {
+        "" | "status" => {}
+        "set" => {
+            let (Some(left), Some(right)) = (request.get("left_db"), request.get("right_db"))
+            else {
+                return Err(
+                    "balance set 需要 left_db 和 right_db（dB）；只改一侧用 balance left / right"
+                        .to_string(),
+                );
+            };
+            let left = trim_number(left, "左声道微调")?;
+            let right = trim_number(right, "右声道微调")?;
+            cfg.trim = crate::config::TrimConfig {
+                left_db: left,
+                right_db: right,
+            }
+            .sanitized();
+        }
+        "left" | "right" => {
+            let Some(raw) = request.get("value") else {
+                return Err(format!("balance {action} 需要 value（dB）"));
+            };
+            let label = if action == "left" {
+                "左声道微调"
+            } else {
+                "右声道微调"
+            };
+            let value = trim_number(raw, label)?;
+            let mut next = cfg.trim.sanitized();
+            if action == "left" {
+                next.left_db = value;
+            } else {
+                next.right_db = value;
+            }
+            cfg.trim = next.sanitized();
+        }
+        "reset" => {
+            cfg.trim = crate::config::TrimConfig::default();
+        }
+        other => {
+            return Err(format!(
+                "balance action 只支持 status / set / left / right / reset，收到 {other}"
+            ));
+        }
+    }
+    Ok(cfg.trim != before)
+}
+
 /// 端点列表 → JSON。
 pub fn endpoints_json(endpoints: &[stereo_audio::EndpointInfo]) -> Value {
     let items: Vec<Value> = endpoints
@@ -653,6 +847,9 @@ pub fn config_summary(cfg: &crate::config::AppConfig) -> Value {
             "low_latency": cfg.cast.low_latency,
         },
         "theme": format!("{:?}", cfg.theme),
+        // 手动微调 + 自动平衡：`status --json` 里一眼能看出「有没有校准」「微调了多少」。
+        "trim": trim_json(cfg),
+        "balance": balance_cal_json(cfg),
         "effect": {
             "enabled": cfg.effect.enabled,
             "preset": cfg.effect.preset.as_str(),
@@ -831,6 +1028,96 @@ mod tests {
         // 非法请求不能改配置。
         assert_eq!(cfg.effect, crate::config::EffectConfig::default());
     }
+    /// 手动左右微调的控制面契约：默认中性、set 两个都改、left/right 只改一侧、
+    /// reset 归零、越界和缺参报错且配置一点不动。
+    #[test]
+    fn apply_balance_request_covers_set_left_right_reset() {
+        let mut cfg = crate::config::AppConfig::default();
+        // 默认就是「没微调」。
+        assert!(!apply_balance_request(&mut cfg, &json!({})).unwrap());
+        assert!(cfg.trim.is_neutral());
+
+        assert!(apply_balance_request(
+            &mut cfg,
+            &json!({"action":"set","left_db":-3.0,"right_db":-1.5})
+        )
+        .unwrap());
+        assert_eq!(cfg.trim.gains_db(), [-3.0, -1.5]);
+
+        // 只改一侧：另一侧必须原样留着。
+        apply_balance_request(&mut cfg, &json!({"action":"right","value":2.0})).unwrap();
+        assert_eq!(cfg.trim.gains_db(), [-3.0, 2.0]);
+        apply_balance_request(&mut cfg, &json!({"action":"left","value":-0.5})).unwrap();
+        assert_eq!(cfg.trim.gains_db(), [-0.5, 2.0]);
+
+        // 越界 / 缺参 / 错动作：报错且不改。
+        let before = cfg.trim;
+        assert!(apply_balance_request(&mut cfg, &json!({"action":"left","value":40.0})).is_err());
+        assert!(apply_balance_request(&mut cfg, &json!({"action":"set","left_db":1.0})).is_err());
+        assert!(apply_balance_request(
+            &mut cfg,
+            &json!({"action":"set","left_db":"响一点","right_db":0})
+        )
+        .is_err());
+        assert!(apply_balance_request(&mut cfg, &json!({"action":"rocket"})).is_err());
+        assert_eq!(cfg.trim, before);
+
+        assert!(apply_balance_request(&mut cfg, &json!({"action":"reset"})).unwrap());
+        assert!(cfg.trim.is_neutral());
+    }
+
+    /// 增益必须按「启用路由的顺序」摊开：只配了右声道时，下标 0 是右声道。
+    /// 这一条以前是错的（直接把 `[左, 右]` 塞进引擎），会让手动微调打到另一个声道。
+    #[test]
+    fn gains_follow_enabled_route_order() {
+        use stereo_audio::RouteChannel;
+
+        let mut cfg = crate::config::AppConfig::default();
+        assert!(enabled_route_channels(&cfg).is_empty());
+
+        cfg.split.left_endpoint = "扬声器 (左)".to_string();
+        cfg.split.right_endpoint = "扬声器 (右)".to_string();
+        let channels = enabled_route_channels(&cfg);
+        assert_eq!(channels, vec![RouteChannel::Left, RouteChannel::Right]);
+        assert_eq!(
+            gains_in_route_order([-3.0, 1.0], &channels),
+            vec![-3.0, 1.0]
+        );
+
+        // 只配右声道：引擎里只有一条路由，它就是右声道 —— 拿到的必须是右边那个值。
+        cfg.split.left_endpoint = String::new();
+        let channels = enabled_route_channels(&cfg);
+        assert_eq!(channels, vec![RouteChannel::Right]);
+        assert_eq!(gains_in_route_order([-3.0, 1.0], &channels), vec![1.0]);
+
+        // 只配左声道。
+        cfg.split.left_endpoint = "扬声器 (左)".to_string();
+        cfg.split.right_endpoint = "  ".to_string();
+        let channels = enabled_route_channels(&cfg);
+        assert_eq!(channels, vec![RouteChannel::Left]);
+        assert_eq!(gains_in_route_order([-3.0, 1.0], &channels), vec![-3.0]);
+    }
+
+    /// `balance status` 的响应形状（脚本按这个字段名解析）+ 摘要里带上了 trim/balance。
+    #[test]
+    fn balance_status_exposes_trim_and_calibration() {
+        let mut cfg = crate::config::AppConfig::default();
+        cfg.split.left_endpoint = "L".to_string();
+        cfg.trim.left_db = -2.5;
+        let response = balance_command(&mut cfg, None, &json!({"action":"status"}));
+        assert_eq!(response["ok"], json!(true));
+        assert_eq!(response["data"]["trim"]["left_db"], json!(-2.5));
+        assert_eq!(response["data"]["trim"]["neutral"], json!(false));
+        assert_eq!(response["data"]["auto"]["calibrated"], json!(false));
+        assert_eq!(response["data"]["route_channels"], json!(["left"]));
+        assert_eq!(response["data"]["routing"], json!(false));
+        assert_eq!(response["data"]["changed"], json!(false));
+
+        let summary = config_summary(&cfg);
+        assert_eq!(summary["trim"]["left_db"], json!(-2.5));
+        assert_eq!(summary["balance"]["calibrated"], json!(false));
+    }
+
     #[test]
     fn responses_have_stable_shape() {
         let ok = ok(json!({"a": 1}));

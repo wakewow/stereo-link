@@ -37,7 +37,9 @@ use stereo_audio::{
 
 use crate::audio_default;
 use crate::close_flow::{self, CloseOutcome, CloseState};
-use crate::config::{AppConfig, BalanceCalConfig, EffectPresetConfig, ThemeMode, VolumeFollow};
+use crate::config::{
+    AppConfig, BalanceCalConfig, EffectPresetConfig, ThemeMode, TrimConfig, VolumeFollow,
+};
 use crate::control::{self, ControlServer};
 use crate::endpoint_poll::{EndpointPoll, PollInput};
 use crate::fonts;
@@ -795,6 +797,9 @@ pub struct StereoLinkApp {
     calibrating: bool,
     /// 上一次写进引擎的平衡补偿（dB，左/右），用来避免每帧重复写引擎原子量。
     last_balance_gains: [f32; 2],
+    /// 上一次生效的手动微调：用户拖滑块时哪怕只动 0.02 dB 也要立刻写引擎，
+    /// 所以它单独参与「要不要写」的判断（增益死区对它不生效）。
+    last_trim: TrimConfig,
     /// 上一次写进引擎的「数字静音」状态：系统静音时让引擎直接把输出推 0。
     ///
     /// 端点静音靠不住：实测 Xiaomi Sound（蓝牙声卡）上 `SetMute(true)` 会被驱动折算成
@@ -911,6 +916,7 @@ impl StereoLinkApp {
             balance_cal: cfg_balance,
             calibrating: false,
             last_balance_gains: [0.0, 0.0],
+            last_trim: TrimConfig::default(),
             last_engine_muted: false,
             last_effect: EffectSettings::default(),
             log_autoscroll: true,
@@ -1042,6 +1048,14 @@ impl StereoLinkApp {
                 }
             }
             "effect" => control::effect_command(&mut self.cfg, self.engine.as_ref(), request),
+            // 手动左右音量微调（`balance`）：命令只改配置，这里紧接着按
+            // 「自动补偿 + 手动微调」重算一次并热写引擎，所以改完立刻听得见。
+            "balance" => {
+                let response =
+                    control::balance_command(&mut self.cfg, self.engine.as_ref(), request);
+                self.refresh_balance_gains();
+                response
+            }
             "receiver" => {
                 let action = control::str_field(request, "action").unwrap_or("list");
                 let kind = control::str_field(request, "kind").unwrap_or("all");
@@ -2308,27 +2322,48 @@ impl StereoLinkApp {
             .or_else(|| self.route_volumes.get(&RouteChannel::Left).copied())
     }
 
-    /// 当前应该给两路的补偿增益（dB，均 ≤ 0，只压不抬，以较安静一侧为基准）。
+    /// 只有**自动补偿**那一层（校准算出来的 dB，均 ≤ 0），不含手动微调。
     ///
-    /// 跟随生效时两端标量都等于主音量；用户手动拧过某一路时用各自的实际音量。
-    fn desired_balance_gains(&self) -> [f32; 2] {
-        let (Some(cal), Some(master)) = (self.active_balance(), self.balance_master()) else {
-            return [0.0, 0.0];
-        };
-        if self.engine.is_some() && self.volume_follow_active() {
-            return cal.gains_following(master);
+    /// 界面要把两层分开显示（「自动 … · 合计 …」），所以单独拆出来；没校准过 / 端点换过
+    /// 就是 `[0.0, 0.0]`。
+    fn auto_balance_gains(&self) -> [f32; 2] {
+        match (self.active_balance(), self.balance_master()) {
+            (Some(cal), Some(master)) => {
+                if self.engine.is_some() && self.volume_follow_active() {
+                    cal.gains_following(master)
+                } else {
+                    let left = self
+                        .route_volumes
+                        .get(&RouteChannel::Left)
+                        .copied()
+                        .unwrap_or(master);
+                    let right = self
+                        .route_volumes
+                        .get(&RouteChannel::Right)
+                        .copied()
+                        .unwrap_or(master);
+                    cal.gains_at(left, right, master)
+                }
+            }
+            // 没校准（或还没回读到音量）：自动补偿为 0，手动微调照样生效。
+            _ => [0.0, 0.0],
         }
-        let left = self
-            .route_volumes
-            .get(&RouteChannel::Left)
-            .copied()
-            .unwrap_or(master);
-        let right = self
-            .route_volumes
-            .get(&RouteChannel::Right)
-            .copied()
-            .unwrap_or(master);
-        cal.gains_at(left, right, master)
+    }
+
+    /// 当前应该给两路的补偿增益（dB）。
+    ///
+    /// 由两部分相加：
+    /// 1. **自动补偿**（[`Self::auto_balance_gains`]）：有校准记录时按端点灵敏度曲线算
+    ///    （均 ≤ 0，只压不抬，以较安静一侧为基准）；没校准过就是 0。
+    /// 2. **手动微调**（[`TrimConfig`]）：用户在界面滑块 / `balance` 命令里直接掰的两个
+    ///    dB 值，**不依赖校准，永远生效**。
+    ///
+    /// 以前这里没校准就直接 `return [0.0, 0.0]`，所以「左右不齐」只能靠先跑一遍声学校准，
+    /// 没法手动修 —— 现在手动微调是独立的一层，叠在自动补偿之上。
+    fn desired_balance_gains(&self) -> [f32; 2] {
+        let trim = self.cfg.trim.gains_db();
+        let auto = self.auto_balance_gains();
+        [auto[0] + trim[0], auto[1] + trim[1]]
     }
 
     /// 把音效设置（含调音预设，5 个原子量）实时写进引擎（不重启引擎、不断音）。
@@ -2366,13 +2401,17 @@ impl StereoLinkApp {
     /// 「未静音」，系统静音后物理音箱还会漏出小声音。引擎侧推 0 才是确定的数字静音。
     fn refresh_balance_gains(&mut self) {
         let gains = self.desired_balance_gains();
+        let trim = self.cfg.trim.sanitized();
         // 采集源 = 用户眼里的「系统音量」；它静音了就代表系统静音。
         let muted = self
             .volume_source
             .map(|volume| volume.muted)
             .unwrap_or(false);
         let threshold = BALANCE_GAIN_DEADBAND_DB * 0.25;
-        let gains_changed = (gains[0] - self.last_balance_gains[0]).abs() >= threshold
+        // 手动微调越过死区也要立刻写：用户拖了 0.02 dB 就该马上听到，不能等攒够 0.05 dB。
+        let trim_changed = trim != self.last_trim;
+        let gains_changed = trim_changed
+            || (gains[0] - self.last_balance_gains[0]).abs() >= threshold
             || (gains[1] - self.last_balance_gains[1]).abs() >= threshold;
         let mute_changed = muted != self.last_engine_muted;
         if !gains_changed && !mute_changed {
@@ -2381,10 +2420,16 @@ impl StereoLinkApp {
         let before = self.last_balance_gains;
         let loud = (gains[0] - before[0]).abs() >= 1.0 || (gains[1] - before[1]).abs() >= 1.0;
         self.last_balance_gains = gains;
+        self.last_trim = trim;
         self.last_engine_muted = muted;
         if let Some(engine) = self.engine.as_ref() {
             if gains_changed {
-                engine.set_route_gains_db(&gains);
+                // 必须按「启用路由的顺序」写：只配一侧时引擎下标 0 未必是左声道，
+                // 直接把 [左, 右] 递进去会把增益打到另一个声道上。
+                let channels = control::enabled_route_channels(&self.cfg);
+                if !channels.is_empty() {
+                    engine.set_route_gains_db(&control::gains_in_route_order(gains, &channels));
+                }
             }
             if mute_changed {
                 engine.set_muted(muted);
@@ -2403,29 +2448,41 @@ impl StereoLinkApp {
         // 「调音量后补偿跟着变、有效差仍为 0」这条证据只在这几行里有。
         if loud && self.engine.is_some() {
             let master = self.balance_master().unwrap_or(0.0);
-            let residual = self
-                .active_balance()
-                .map(|cal| {
-                    let left = self
-                        .route_volumes
-                        .get(&RouteChannel::Left)
-                        .copied()
-                        .unwrap_or(master);
-                    let right = self
-                        .route_volumes
-                        .get(&RouteChannel::Right)
-                        .copied()
-                        .unwrap_or(master);
-                    cal.residual_db(left, right, master)
-                })
-                .unwrap_or(0.0);
-            tracing::info!(
-                "[音量平衡] 主音量 {:.0}% → 补偿 左 {:+.1} dB / 右 {:+.1} dB（有效差 {:+.1} dB）",
-                master * 100.0,
-                gains[0],
-                gains[1],
-                residual
-            );
+            if trim.is_neutral() {
+                let residual = self
+                    .active_balance()
+                    .map(|cal| {
+                        let left = self
+                            .route_volumes
+                            .get(&RouteChannel::Left)
+                            .copied()
+                            .unwrap_or(master);
+                        let right = self
+                            .route_volumes
+                            .get(&RouteChannel::Right)
+                            .copied()
+                            .unwrap_or(master);
+                        cal.residual_db(left, right, master)
+                    })
+                    .unwrap_or(0.0);
+                tracing::info!(
+                    "[音量平衡] 主音量 {:.0}% → 补偿 左 {:+.1} dB / 右 {:+.1} dB（有效差 {:+.1} dB）",
+                    master * 100.0,
+                    gains[0],
+                    gains[1],
+                    residual
+                );
+            } else {
+                // 有手动微调时「有效差」这个数已经不是用户听到的结果（差在哪里由人耳定），
+                // 所以只报实际写进引擎的增益和微调值，别拿一个会误导人的残差糊上去。
+                tracing::info!(
+                    "[音量平衡] 主音量 {:.0}% → 增益 左 {:+.1} dB / 右 {:+.1} dB（含手动微调 {}）",
+                    master * 100.0,
+                    gains[0],
+                    gains[1],
+                    trim.describe()
+                );
+            }
         }
     }
 
@@ -3934,6 +3991,10 @@ impl StereoLinkApp {
             )
             .on_hover_text(status);
 
+            // 手动微调：左右各一个 dB 滑块 —— 「两台音箱响度不齐」最直接的修法，
+            // 不依赖校准，常驻显示（以前这里只有校准按钮，没校准过就只能忍着）。
+            self.trim_row(ui);
+
             // 音量平衡：一次校准（两端音量曲线 + 3 档声学锚点）存进配置；运行时只按当前
             // 主音量重算「每路数字增益」，所以调系统音量不会再破坏平衡 —— 这是这个 bug 的
             // 结构性修复：平衡不再是「两个端点的音量差」，跟随怎么镜像都不会把它抹掉。
@@ -4091,6 +4152,86 @@ impl StereoLinkApp {
                 .on_hover_text(source_line);
             });
         });
+    }
+
+    /// 「手动微调」一行：左右各一个 dB 滑块 + 归零 + 合计读数（常驻）。
+    ///
+    /// 为什么需要它：`音量平衡` 里的校准是「自动算准」，但它要么需要麦克风跑约 30 秒，
+    /// 要么在没校准记录时干脆什么都不做 —— 以前这就等于「左右不齐只能忍」。手动微调是
+    /// 独立的一层：不依赖校准、任何时候可用，有校准时叠加在自动补偿之上
+    /// （最终写进引擎的增益 = 自动补偿 + 手动微调）。
+    fn trim_row(&mut self, ui: &mut egui::Ui) {
+        let mut trim = self.cfg.trim.sanitized();
+        let mut changed = false;
+        let mut released = false;
+        ui.horizontal(|ui| {
+            ui.label(muted("手动微调")).on_hover_text(
+                "左右各一个 dB 微调：正 = 更响，负 = 更轻（−24 … +12 dB）。\n\
+                 不需要先做校准也能用；有校准记录时叠加在自动补偿之上。\n\
+                 拖动即时生效（写引擎原子量，不重启路由、不断音），松手落盘。\n\
+                 CLI 同一份能力：stereo-link-cli balance set <左 dB> <右 dB>",
+            );
+            ui.label(muted("左"));
+            let left = ui.add_sized(
+                [92.0, 20.0],
+                egui::Slider::new(&mut trim.left_db, TrimConfig::MIN_DB..=TrimConfig::MAX_DB)
+                    .suffix(" dB"),
+            );
+            changed |= left.changed();
+            released |= left.drag_stopped();
+            ui.label(muted("右"));
+            let right = ui.add_sized(
+                [92.0, 20.0],
+                egui::Slider::new(&mut trim.right_db, TrimConfig::MIN_DB..=TrimConfig::MAX_DB)
+                    .suffix(" dB"),
+            );
+            changed |= right.changed();
+            released |= right.drag_stopped();
+            let reset = btn(ui, "归零", theme::ButtonKind::Secondary)
+                .on_hover_text("两侧都回到 0 dB（等于不微调）；自动平衡补偿不受影响。");
+            if reset.clicked() {
+                trim = TrimConfig::default();
+                changed = true;
+                released = true;
+            }
+        });
+        // 读数单独一行：滑块 + 按钮已经吃掉大半宽度，挤在同一行会被卡片边缘裁掉。
+        // 「自动」是校准算出来的那一层，「合计」= 自动 + 手动，也就是真正写进引擎的 dB。
+        let auto = self.auto_balance_gains();
+        let total = [auto[0] + trim.left_db, auto[1] + trim.right_db];
+        let text = if self.active_balance().is_some() {
+            format!(
+                "校准补偿 左 {:+.1} / 右 {:+.1} dB · 合计（写进引擎）左 {:+.1} / 右 {:+.1} dB",
+                auto[0], auto[1], total[0], total[1]
+            )
+        } else {
+            format!(
+                "未校准，自动补偿 0 dB · 合计（写进引擎）左 {:+.1} / 右 {:+.1} dB",
+                total[0], total[1]
+            )
+        };
+        text_cell(
+            ui,
+            (ui.available_width() - 6.0).max(120.0),
+            18.0,
+            &text,
+            FontId::monospace(11.5),
+            palette().muted,
+            false,
+        )
+        .on_hover_text(
+            "「合计」就是引擎当前每一路的数字增益；「校准补偿」是声学校准算出来的那一份，\n\
+             两者之差就是你手动微调的量。没校准过时校准补偿恒为 0，微调照样生效。",
+        );
+        if changed {
+            self.cfg.trim = trim.sanitized();
+            // 立即按新值重算并热写引擎（拖动过程中就能听到变化）。
+            self.refresh_balance_gains();
+        }
+        if released {
+            self.save();
+            tracing::info!("[音量平衡] 手动微调：{}", self.cfg.trim.describe());
+        }
     }
 
     fn route_row(&mut self, ui: &mut egui::Ui, channel: RouteChannel, device_w: f32) {

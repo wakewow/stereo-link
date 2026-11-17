@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::config::{AppConfig, EffectPresetConfig};
+use crate::config::{AppConfig, EffectPresetConfig, TrimConfig};
 use crate::control;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -81,6 +81,7 @@ fn dispatch(globals: Globals, command: &str, rest: &[&str]) -> Result<i32, Strin
         "log" => log(globals, rest),
         "routing" => routing(globals, rest),
         "effect" => effect(globals, rest),
+        "balance" => balance(globals, rest),
         "receiver" | "receivers" | "cast" => receiver(globals, rest),
         "endpoints" | "devices" => endpoints(globals, rest),
         "config" | "cfg" => config(globals, rest),
@@ -413,6 +414,131 @@ fn receiver(globals: Globals, rest: &[&str]) -> Result<i32, String> {
         }
     }
     Ok(0)
+}
+
+/// `balance`：左右声道手动音量微调（`balance` / `balance set <左> <右>` /
+/// `balance left <dB>` / `balance right <dB>` / `balance reset`）。
+///
+/// 这是「左右音箱响度不齐」的手动修法：不依赖声学校准，拖界面滑块和敲这条命令是同一份
+/// 配置（`trim.left_db` / `trim.right_db`），有校准记录时叠加在自动补偿之上。
+fn balance(globals: Globals, rest: &[&str]) -> Result<i32, String> {
+    let (min, max) = (TrimConfig::MIN_DB, TrimConfig::MAX_DB);
+    let usage = || {
+        format!(
+            "用法：balance [status] | balance set <左 dB> <右 dB> | balance left <dB> | \
+             balance right <dB> | balance reset（dB 范围 {min} … {max}）"
+        )
+    };
+    let action = rest.first().copied().unwrap_or("status");
+    let mut request = json!({ "cmd": "balance", "action": action });
+    match action {
+        "status" => {}
+        "set" => {
+            let (Some(left), Some(right)) = (rest.get(1).copied(), rest.get(2).copied()) else {
+                return Err(usage());
+            };
+            request["left_db"] = json!(parse_trim_number(left, min, max, "左声道微调")?);
+            request["right_db"] = json!(parse_trim_number(right, min, max, "右声道微调")?);
+        }
+        "left" | "right" => {
+            let Some(raw) = rest.get(1).copied() else {
+                return Err(usage());
+            };
+            let label = if action == "left" {
+                "左声道微调"
+            } else {
+                "右声道微调"
+            };
+            request["value"] = json!(parse_trim_number(raw, min, max, label)?);
+        }
+        "reset" => {}
+        other => return Err(format!("balance 不支持 action={other}（{}）", usage())),
+    }
+    let data = control::request(request)?;
+    if globals.json {
+        print_json(&data);
+    } else {
+        print_balance(&data, action != "status");
+    }
+    Ok(0)
+}
+
+/// 微调参数：浮点数 + 范围检查（先在这里拦一次，错误更贴近用法）。
+fn parse_trim_number(raw: &str, min: f32, max: f32, label: &str) -> Result<f32, String> {
+    match raw.parse::<f32>() {
+        Ok(value) if value.is_finite() && (min..=max).contains(&value) => Ok(value),
+        _ => Err(format!("{label}要在 {min} … {max} dB 之间，收到 {raw}")),
+    }
+}
+
+fn print_balance(data: &Value, changed: bool) {
+    let trim = data.get("trim").cloned().unwrap_or(Value::Null);
+    let auto = data.get("auto").cloned().unwrap_or(Value::Null);
+    let left = trim.get("left_db").and_then(Value::as_f64).unwrap_or(0.0);
+    let right = trim.get("right_db").and_then(Value::as_f64).unwrap_or(0.0);
+    let neutral = trim
+        .get("neutral")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    println!(
+        "手动微调：{}",
+        if neutral {
+            "未微调（左 0.0 / 右 0.0 dB）".to_string()
+        } else {
+            format!("左 {left:+.1} / 右 {right:+.1} dB")
+        }
+    );
+    let calibrated = auto
+        .get("calibrated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if calibrated {
+        let sens = auto
+            .get("sens_diff_db")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let anchors = auto.get("anchors").and_then(Value::as_u64).unwrap_or(0);
+        println!("自动校准：已校准（灵敏度差 {sens:+.1} dB · {anchors} 个锚点，叠加在上面）");
+    } else {
+        println!("自动校准：未校准（自动补偿 0 dB；微调照样生效）");
+    }
+    let channels = data
+        .get("route_channels")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|channel| match channel {
+                    "left" => "左",
+                    "right" => "右",
+                    _ => channel,
+                })
+                .collect::<Vec<_>>()
+                .join("+")
+        })
+        .unwrap_or_default();
+    let routing = data
+        .get("routing")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if changed {
+        if routing {
+            println!("已热写进引擎（{channels} 声道，不重启路由、不断音）");
+        } else {
+            println!("路由没在跑：已存进配置，开始路由时生效");
+        }
+    } else {
+        println!(
+            "生效声道：{}｜引擎：{}",
+            if channels.is_empty() {
+                "未配置左右输出".to_string()
+            } else {
+                channels
+            },
+            if routing { "运行中" } else { "未运行" }
+        );
+    }
 }
 
 /// `effect`：音效开关、调音预设与参数（`effect` / `effect on|off|preset|amount|bass|limiter`）。
@@ -910,6 +1036,11 @@ StereoLink 立体声链 —— 命令行
   effect preset <dolby|dynaudio|harman>
                         调音预设：类杜比 / 丹拿 / 哈曼卡顿（切换会套用推荐强度、低音、限幅）
   effect amount <0-1.5> | bass <0-12> | limiter <on|off>
+  balance [status]      手动左右音量微调（不依赖校准；有校准时叠加在自动补偿之上）
+  balance set <-24..12> <-24..12>
+                        直接给左右各自的 dB（正 = 更响，负 = 更轻）
+  balance left <dB> | right <dB> | reset
+                        只改一侧 / 两侧归零（拖界面滑块与这条命令是同一份配置）
   receiver [list|start|stop|restart] [airplay|miplay|all]
   receiver volume <airplay|miplay> <0-100>
                          调接收端音量（妙播实时生效；AirPlay 只能在手机端调）
@@ -988,6 +1119,7 @@ mod tests {
             "log",
             "routing",
             "effect",
+            "balance",
             "receiver",
             "endpoints",
             "config",
@@ -997,6 +1129,25 @@ mod tests {
             "quit",
         ] {
             assert!(HELP.contains(command), "帮助里少了 {command}");
+        }
+    }
+
+    /// 手动微调的参数解析：范围严格（−24 … +12 dB），不是数字/超范围直接报错。
+    #[test]
+    fn trim_number_parsing_is_strict() {
+        let (min, max) = (TrimConfig::MIN_DB, TrimConfig::MAX_DB);
+        assert_eq!(
+            parse_trim_number("-3.5", min, max, "左声道微调").unwrap(),
+            -3.5
+        );
+        assert_eq!(parse_trim_number("0", min, max, "右声道微调").unwrap(), 0.0);
+        assert_eq!(
+            parse_trim_number("12", min, max, "右声道微调").unwrap(),
+            12.0
+        );
+        for bad in ["-24.5", "13", "响一点", "", "NaN"] {
+            let error = parse_trim_number(bad, min, max, "左声道微调").unwrap_err();
+            assert!(error.contains("-24 … 12 dB"), "{bad}: {error}");
         }
     }
 }

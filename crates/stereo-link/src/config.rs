@@ -495,6 +495,77 @@ impl From<&stereo_audio::EffectSettings> for EffectConfig {
     }
 }
 
+/// 手动左右音量微调（dB）。
+///
+/// 为什么是两个独立 dB 值、而不是一个 `[-1, 1]` 的「平衡」滑块：真实场景里两台音箱
+/// 品牌不同、摆位不同，有人要**压掉**偏响的一侧，也有人要**补上**偏轻的一侧；
+/// 平衡滑块只能一边降，补不了。两个 dB 值两件事都能表达。
+///
+/// 它和 [`BalanceCalConfig`] 的关系：校准是「自动算准」，微调是「耳朵最后说了算」。
+/// 微调**不依赖**校准就能用（这就是本功能的重点——以前没校准过就完全没法调），
+/// 有校准记录时两者叠加：`最终增益 = 自动补偿 + 手动微调`。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrimConfig {
+    /// 左声道微调（dB，正 = 更响）。
+    pub left_db: f32,
+    /// 右声道微调（dB，正 = 更响）。
+    pub right_db: f32,
+}
+
+impl Default for TrimConfig {
+    fn default() -> Self {
+        Self {
+            left_db: 0.0,
+            right_db: 0.0,
+        }
+    }
+}
+
+impl TrimConfig {
+    /// 微调下限（dB）：够把一侧几乎压没（−24 dB ≈ 6% 幅度），又不会一拖就没声。
+    pub const MIN_DB: f32 = -24.0;
+    /// 微调上限（dB）：允许补一点，但 +12 dB 已经贴近削顶边缘——采集源接近满刻度时会削波，
+    /// 所以宁可让用户先降另一侧（这才是正常用法），也不放开更大的提升。
+    pub const MAX_DB: f32 = 12.0;
+
+    /// 夹到合法范围并清掉 NaN/inf（配置被手改坏时不会把声音弄爆或弄没）。
+    pub fn sanitized(self) -> Self {
+        fn clean(value: f32) -> f32 {
+            if value.is_finite() {
+                value.clamp(TrimConfig::MIN_DB, TrimConfig::MAX_DB)
+            } else {
+                0.0
+            }
+        }
+        Self {
+            left_db: clean(self.left_db),
+            right_db: clean(self.right_db),
+        }
+    }
+
+    /// 两侧都是 0 = 没动过（等于不微调）。
+    pub fn is_neutral(&self) -> bool {
+        let clean = self.sanitized();
+        clean.left_db == 0.0 && clean.right_db == 0.0
+    }
+
+    /// `[左, 右]` 两个 dB 值（已 sanitize）。
+    pub fn gains_db(&self) -> [f32; 2] {
+        let clean = self.sanitized();
+        [clean.left_db, clean.right_db]
+    }
+
+    /// 人读一行（界面 / 日志 / CLI 共用同一句，免得三处措辞对不上）。
+    pub fn describe(&self) -> String {
+        let clean = self.sanitized();
+        if clean.is_neutral() {
+            return "未微调（左 0.0 / 右 0.0 dB）".to_string();
+        }
+        format!("左 {:+.1} / 右 {:+.1} dB", clean.left_db, clean.right_db)
+    }
+}
+
 /// 面板持久化配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -539,6 +610,11 @@ pub struct AppConfig {
     /// 音色 DSP 链 / 调音预设（默认关闭）。
     #[serde(default)]
     pub effect: EffectConfig,
+    /// 手动左右音量微调（dB）；默认两边都是 0，等于没微调。
+    ///
+    /// 不依赖 [`AppConfig::balance`]：没校准过也能用，校准过则叠加在自动补偿之上。
+    #[serde(default)]
+    pub trim: TrimConfig,
 }
 
 fn default_auto_start() -> bool {
@@ -560,6 +636,7 @@ impl Default for AppConfig {
             balance: BalanceCalConfig::default(),
             cast: CastConfig::default(),
             effect: EffectConfig::default(),
+            trim: TrimConfig::default(),
         }
     }
 }
@@ -580,7 +657,10 @@ impl AppConfig {
 
     /// 读配置；任何问题都回默认值并记一条日志。
     pub fn load() -> Self {
-        Self::load_from(&Self::path())
+        let mut cfg = Self::load_from(&Self::path());
+        // 手改过的配置文件可能把微调写成 NaN/超范围值；读进来就夹一次，别让脏值流到引擎。
+        cfg.trim = cfg.trim.sanitized();
+        cfg
     }
 
     /// 从指定路径读配置（单测/真机复现用，避免碰真实的 `%APPDATA%`）。
@@ -753,6 +833,43 @@ mod tests {
         assert_eq!(restored.left_curve, cal.left_curve);
         assert_eq!(restored.right_curve, cal.right_curve);
         assert!((restored.sens_diff_db - cal.sens_diff_db).abs() < 1e-6);
+    }
+
+    /// 手动左右微调：老配置没有该字段时两侧都是 0（等于不微调），脏值必须被夹住，
+    /// 序列化后读回来一致 —— 这是「软件内部手动调左右音量」的持久化底座。
+    #[test]
+    fn trim_config_defaults_to_neutral_and_clamps_dirty_values() {
+        let old: AppConfig = serde_json::from_str(r#"{"show_log": false}"#).expect("老配置");
+        assert!(old.trim.is_neutral());
+        assert_eq!(old.trim.gains_db(), [0.0, 0.0]);
+
+        // 手改配置常见的脏值：超范围 / NaN / 无穷。
+        let dirty: AppConfig =
+            serde_json::from_str(r#"{"trim": {"left_db": 99.0, "right_db": -99.0}}"#)
+                .expect("脏配置也要能解析");
+        assert_eq!(
+            dirty.trim.sanitized().gains_db(),
+            [TrimConfig::MAX_DB, TrimConfig::MIN_DB]
+        );
+
+        let nan = TrimConfig {
+            left_db: f32::NAN,
+            right_db: f32::INFINITY,
+        };
+        assert_eq!(nan.sanitized().gains_db(), [0.0, 0.0]);
+        assert!(nan.is_neutral());
+
+        // 正常值往返。
+        let cfg = TrimConfig {
+            left_db: -3.5,
+            right_db: 1.5,
+        };
+        let json = serde_json::to_string(&cfg).expect("序列化");
+        let back: TrimConfig = serde_json::from_str(&json).expect("反序列化");
+        assert_eq!(back, cfg);
+        assert_eq!(back.gains_db(), [-3.5, 1.5]);
+        assert_eq!(back.describe(), "左 -3.5 / 右 +1.5 dB");
+        assert!(!back.is_neutral());
     }
 
     /// 关闭行为：老配置没有该字段时默认「每次询问」，写回时是 snake_case。

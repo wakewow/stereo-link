@@ -176,6 +176,10 @@ impl State {
                 self.stats = Some(handle.stats());
                 self.engine = Some(handle);
                 tracing::info!("[路由] 已启动：{summary}");
+                // 起步就把手动微调写进去，别等用户再敲一条命令。
+                if !self.cfg.trim.is_neutral() && self.apply_trim_gains() {
+                    tracing::info!("[音量平衡] 已应用手动微调：{}", self.cfg.trim.describe());
+                }
                 Ok(())
             }
             Err(error) => {
@@ -191,6 +195,23 @@ impl State {
             tracing::info!("[路由] 已停止");
         }
         self.stats = None;
+    }
+
+    /// 把手动左右微调（`balance` 命令 / `trim.*` 配置）写进引擎。
+    ///
+    /// serve 没有端点音量回读，所以「自动平衡补偿」这一层在这里不做（那是 GUI 的活）；
+    /// 但手动微调必须在这里也生效 —— 否则无头部署下这条命令就是空转。
+    /// 返回是否真的写进了引擎。
+    fn apply_trim_gains(&self) -> bool {
+        let Some(engine) = self.engine.as_ref() else {
+            return false;
+        };
+        let channels = control::enabled_route_channels(&self.cfg);
+        if channels.is_empty() {
+            return false;
+        }
+        let gains = control::gains_in_route_order(self.cfg.trim.gains_db(), &channels);
+        engine.set_route_gains_db(&gains) > 0
     }
 
     fn start_receivers_from_config(&mut self) {
@@ -297,6 +318,15 @@ impl State {
                 self.handle_routing(control::str_field(request, "action").unwrap_or("status"))
             }
             "effect" => control::effect_command(&mut self.cfg, self.engine.as_ref(), request),
+            // 手动左右音量微调（`balance`）：只用配置 + 立刻写引擎（无头模式没有自动补偿层）。
+            "balance" => {
+                let response =
+                    control::balance_command(&mut self.cfg, self.engine.as_ref(), request);
+                if response.get("ok") == Some(&json!(true)) {
+                    self.apply_trim_gains();
+                }
+                response
+            }
             "receiver" => {
                 let action = control::str_field(request, "action").unwrap_or("list");
                 let kind = control::str_field(request, "kind").unwrap_or("all");
@@ -425,6 +455,10 @@ impl State {
                                 engine.set_effect((&self.cfg.effect).into());
                             }
                         }
+                        // `config set trim.left_db -3` 这种写法也要立刻生效。
+                        if key.starts_with("trim") {
+                            self.apply_trim_gains();
+                        }
                         tracing::info!("[配置] {key} = {value}");
                         control::ok(json!({ "updated": result, "saved": true }))
                     }
@@ -436,6 +470,7 @@ impl State {
                 if let Some(engine) = self.engine.as_ref() {
                     engine.set_effect((&self.cfg.effect).into());
                 }
+                self.apply_trim_gains();
                 control::ok(json!({ "reloaded": true }))
             }
             other => control::err(format!("config 不支持 action={other}")),

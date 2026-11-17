@@ -44,7 +44,7 @@ stereo-link-cli status --json
 `routing`（`running` + `engine`：`running/rate/source/routes[]/captured_frames/level_l/level_r/effect`，其中
 `effect.enabled/preset/amount/bass_boost_db/limiter` 是引擎**实际**生效的音效参数）、
 `receivers`（`any_running/device/items[]`，每项 `kind/label/running/status/error/exe/volume/volume_supported`）、
-`endpoints`（`count/items[]`：`id/name/flow/is_default/mix_format/error`）、`config`（`path/split/capture/cast/theme/effect`，`effect` 是**配置**里的值）、
+`endpoints`（`count/items[]`：`id/name/flow/is_default/mix_format/error`）、`config`（`path/split/capture/cast/theme/trim/balance/effect`，`effect` 是**配置**里的值；`trim` 是左右声道手动微调、`balance` 是声学校准记录，见 [`balance`](#balance左右声道手动微调)）、
 `extra`（`default_output/log_path/receivers_managed` 等）。
 
 没有实例时 `status --json` 输出 `{"running": false, "reason": "..."}`，退出码仍为 0（这是「没有实例」而不是错误）。
@@ -102,6 +102,27 @@ stereo-link-cli effect limiter on|off      # 联动软限幅，默认 on
 - `off` 是处理链完全跳过的 **bit-exact 直通**（不是把参数调小），不改变音频格式、不增加延迟。
 - 三条链都带 -1 dBFS 立体声联动软限幅与 15 ms 干湿淡入。它们是**模仿品牌听感的调音**，
   **不是** Dolby Atmos / Dynaudio / Harman 官方认证或授权算法，不用安装 Dolby Access、不改端点空间音效设置。
+
+### balance（左右声道手动微调）
+
+```powershell
+stereo-link-cli balance                       # 查看微调 / 自动校准 / 生效声道（等价于 balance status）
+stereo-link-cli balance --json
+stereo-link-cli balance set -3 -1.5           # 左 -3 dB、右 -1.5 dB（负 = 更轻，正 = 更响）
+stereo-link-cli balance left -6               # 只改左
+stereo-link-cli balance right 2               # 只改右
+stereo-link-cli balance reset                 # 两侧归零
+```
+
+- 单位 dB，范围 **-24 … +12**；正数是**提升**该侧音量（引擎最后统一夹到 0.0–8.0 线性增益，所以极端值不会削波）。
+- **不依赖声学校准**：没跑过「音量平衡校准」也能直接用，界面上「手动微调」那一行滑块与这条命令是**同一份配置**
+  （`config.json` 的 `trim.left_db` / `trim.right_db`）。
+- 有校准记录（`config.balance` 的锚点）时，自动补偿照旧计算，手动微调**叠加**在上面：
+  最终增益 = 自动补偿 + 手动微调，`balance --json` 的 `trim` 是手动那层、`auto` 是自动那层。
+- 路由在跑时**热写进引擎**：不重启路由、不断音；没在跑就只存配置，开始路由时生效。
+  `balance` 的响应/文本里 `已热写进引擎` 与 `--json` 的 `routing` 反映这一点。
+- `config set trim.left_db -3` / `config set trim.right_db -3` 也能改，改完同样立即生效（GUI 与 `serve` 都监听 `trim` 前缀）。
+- 只配了一侧输出（例如只配右声道）时，增益按**实际启用顺序**下发，不会打错声道。
 
 ### receiver
 
@@ -213,6 +234,8 @@ target\debug\stereo-link-cli.exe config set split.queue_ms 60
 target\debug\stereo-link-cli.exe effect on          # 打开音效（热生效）
 target\debug\stereo-link-cli.exe effect preset dynaudio   # 换调音预设（类杜比 / 丹拿 / 哈曼卡顿）
 target\debug\stereo-link-cli.exe effect amount 1.2
+target\debug\stereo-link-cli.exe balance set -3 -1.5   # 左右声道手动微调（dB，热生效）
+target\debug\stereo-link-cli.exe balance               # 读回手动微调 / 自动校准 / 生效声道
 
 # 4. 收尾
 target\debug\stereo-link-cli.exe quit
